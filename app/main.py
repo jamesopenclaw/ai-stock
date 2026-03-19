@@ -62,10 +62,11 @@ async def health_check():
     return {"status": "healthy"}
 
 
-# 导入并注册路由 (暂不启用，待各模块完成后逐步添加)
-# from app.api.v1 import market, sector, stock, decision, account, task
-# app.include_router(market.router, prefix=settings.api_v1_prefix, tags=["市场环境"])
-# app.include_router(sector.router, prefix=settings.api_v1_prefix, tags=["板块扫描"])
+# 导入并注册路由
+from app.api.v1 import market, sector, stock, decision, account, task
+
+app.include_router(market.router, prefix=settings.api_v1_prefix, tags=["市场环境"])
+app.include_router(sector.router, prefix=settings.api_v1_prefix, tags=["板块扫描"])
 # app.include_router(stock.router, prefix=settings.api_v1_prefix, tags=["个股筛选"])
 # app.include_router(decision.router, prefix=settings.api_v1_prefix, tags=["决策分析"])
 # app.include_router(account.router, prefix=settings.api_v1_prefix, tags=["账户适配"])
