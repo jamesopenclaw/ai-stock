@@ -158,7 +158,7 @@ class SectorScanService:
                 sector_mainline_tag=mainline_tag,
                 sector_continuity_tag=continuity_tag,
                 sector_tradeability_tag=tradeability_tag,
-                sector_continuity_days=continuity_tag.value if continuity_tag == SectorContinuityTag.SUSTAINABLE else 0,
+                sector_continuity_days=3 if continuity_tag == SectorContinuityTag.SUSTAINABLE else 0,
                 sector_comment=comment,
                 sector_news_summary=sector.get("sector_news_summary"),
                 sector_falsification=sector.get("sector_falsification")
