@@ -188,6 +188,54 @@ async def get_decision_summary(
         return ApiResponse(code=500, message=f"获取执行摘要失败: {str(e)}")
 
 
+@router.get("/buy-point", response_model=ApiResponse)
+async def analyze_buy_point(
+    trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
+    limit: int = Query(20, description="返回数量限制", ge=1, le=100),
+) -> ApiResponse:
+    """
+    买点分析
+
+    返回当日可买/观察/不买的候选个股列表
+    """
+    if not trade_date:
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        stock_list = tushare_client.get_stock_list(trade_date.replace("-", ""), limit=limit)
+        stocks = [
+            StockInput(
+                ts_code=s["ts_code"],
+                stock_name=s["stock_name"],
+                sector_name=s.get("sector_name", "未知"),
+                close=s["close"],
+                change_pct=s["change_pct"],
+                turnover_rate=s["turnover_rate"],
+                amount=s["amount"],
+                vol_ratio=s.get("vol_ratio"),
+                high=s["high"],
+                low=s["low"],
+                open=s["open"],
+                pre_close=s["pre_close"],
+            )
+            for s in stock_list
+        ]
+        result = buy_point_service.analyze(trade_date, stocks)
+
+        return ApiResponse(
+            data={
+                "trade_date": result.trade_date,
+                "market_env_tag": result.market_env_tag.value,
+                "available_buy_points": [bp.model_dump() for bp in result.available_buy_points],
+                "observe_buy_points": [bp.model_dump() for bp in result.observe_buy_points],
+                "not_buy_points": [bp.model_dump() for bp in result.not_buy_points],
+                "total_count": result.total_count,
+            }
+        )
+    except Exception as e:
+        return ApiResponse(code=500, message=f"买点分析失败: {str(e)}")
+
+
 @router.post("/analyze", response_model=ApiResponse)
 async def full_decision_analyze(
     trade_date: Optional[str] = Body(None, description="交易日"),

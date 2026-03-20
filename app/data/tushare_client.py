@@ -228,22 +228,64 @@ class TushareClient:
             return self._mock_stock_list()
 
         try:
-            # 获取当日涨跌幅排行
-            df = self.pro.daily_s(trade_date=trade_date, limit=limit)
+            # 使用合法接口获取当日个股日线，再按涨跌幅排序截取
+            df = self.pro.daily(trade_date=trade_date)
             if df.empty:
                 return self._mock_stock_list()
 
+            # 获取基础信息（名称、行业）
+            basic_df = self.pro.stock_basic(exchange="", list_status="L", fields="ts_code,name,industry")
+            basic_map: Dict[str, Dict] = {}
+            if not basic_df.empty:
+                basic_map = {
+                    row.get("ts_code"): {
+                        "name": row.get("name", ""),
+                        "industry": row.get("industry", "未知"),
+                    }
+                    for _, row in basic_df.iterrows()
+                }
+
+            # 获取当日换手率、量比等扩展指标（接口可能因权限不可用，失败时降级）
+            daily_basic_map: Dict[str, Dict] = {}
+            try:
+                daily_basic_df = self.pro.daily_basic(
+                    trade_date=trade_date,
+                    fields="ts_code,turnover_rate,volume_ratio"
+                )
+                if not daily_basic_df.empty:
+                    daily_basic_map = {
+                        row.get("ts_code"): {
+                            "turnover_rate": row.get("turnover_rate", 0),
+                            "volume_ratio": row.get("volume_ratio", 1),
+                        }
+                        for _, row in daily_basic_df.iterrows()
+                    }
+            except Exception as basic_e:
+                logger.warning(f"获取 daily_basic 失败，使用默认值: {basic_e}")
+
+            # 按涨跌幅降序，保留前 N 条
+            df = df.sort_values(by="pct_chg", ascending=False).head(limit)
+
             result = []
             for _, row in df.iterrows():
+                ts_code = row.get("ts_code")
+                stock_meta = basic_map.get(ts_code, {})
+                daily_meta = daily_basic_map.get(ts_code, {})
+                turnover_rate = daily_meta.get("turnover_rate", 0)
+                volume_ratio = daily_meta.get("volume_ratio", 1)
+                if turnover_rate is None or turnover_rate != turnover_rate:
+                    turnover_rate = 0
+                if volume_ratio is None or volume_ratio != volume_ratio:
+                    volume_ratio = 1
                 result.append({
-                    "ts_code": row.get("ts_code"),
-                    "stock_name": row.get("name", ""),
-                    "sector_name": row.get("industry", "未知"),
+                    "ts_code": ts_code,
+                    "stock_name": stock_meta.get("name", ts_code),
+                    "sector_name": stock_meta.get("industry", "未知"),
                     "close": float(row.get("close", 0)),
                     "change_pct": float(row.get("pct_chg", 0)),
-                    "turnover_rate": float(row.get("turnover_rate", 0)),
+                    "turnover_rate": float(turnover_rate),
                     "amount": float(row.get("amount", 0)),
-                    "vol_ratio": float(row.get("vol_ratio", 1)),
+                    "vol_ratio": float(volume_ratio),
                     "high": float(row.get("high", 0)),
                     "low": float(row.get("low", 0)),
                     "open": float(row.get("open", 0)),

@@ -12,7 +12,7 @@ redis==5.0.1
 aioredis==2.0.1
 
 # Data
-tushare==1.4.0
+tushare==1.4.25
 pandas==2.2.0
 numpy==1.26.3
 

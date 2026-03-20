@@ -72,6 +72,14 @@ app.include_router(decision.router, prefix=settings.api_v1_prefix, tags=["决策
 app.include_router(account.router, prefix=settings.api_v1_prefix, tags=["账户适配"])
 app.include_router(task.router, prefix=settings.api_v1_prefix, tags=["任务管理"])
 
+# 兼容前端按业务分组的路径：/api/v1/market/* /api/v1/decision/* 等
+app.include_router(market.router, prefix=f"{settings.api_v1_prefix}/market", tags=["市场环境"])
+app.include_router(sector.router, prefix=f"{settings.api_v1_prefix}/sector", tags=["板块扫描"])
+app.include_router(stock.router, prefix=f"{settings.api_v1_prefix}/stock", tags=["个股筛选"])
+app.include_router(decision.router, prefix=f"{settings.api_v1_prefix}/decision", tags=["决策分析"])
+app.include_router(account.router, prefix=f"{settings.api_v1_prefix}/account", tags=["账户适配"])
+app.include_router(task.router, prefix=f"{settings.api_v1_prefix}/task", tags=["任务管理"])
+
 
 if __name__ == "__main__":
     import uvicorn
