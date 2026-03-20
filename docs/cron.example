@@ -1,0 +1,17 @@
+# 轻舟版交易系统 - 定时任务配置
+
+# 环境变量
+# export PATH=/usr/local/bin:$PATH
+# cd /path/to/ai-stock
+
+# 每日 16:30 同步数据
+30 16 * * 1-5 cd /path/to/ai-stock && /usr/bin/python3 -m app.tasks.main --mode sync --date $(date +\%Y-\%m-\%d) >> /var/log/ai-stock-sync.log 2>&1
+
+# 每日 16:40 执行分析并推送
+40 16 * * 1-5 cd /path/to/ai-stock && /usr/bin/python3 -m app.tasks.main --mode daily --date $(date +\%Y-\%m-\%d) >> /var/log/ai-stock-daily.log 2>&1
+
+# 说明：
+# - 仅在工作日(周一到周五)执行
+# - 16:30 同步数据
+# - 16:40 执行分析并推送到企业微信
+# - 日志文件位于 /var/log/ai-stock-*.log
