@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     cors_origins: str = "http://localhost:3000,http://localhost:8000"
 
+    # 企业微信机器人
+    wecom_webhook_url: str = ""
+    notify_enabled: bool = True
+
     class Config:
         env_file = ".env"
         case_sensitive = False
