@@ -1,5 +1,13 @@
 <template>
   <view class="page">
+    <!-- 日期选择 -->
+    <view class="date-picker">
+      <view class="date-label">选择日期：</view>
+      <picker mode="date" :value="today" @change="onDateChange">
+        <view class="picker-value">{{ today }}</view>
+      </picker>
+    </view>
+
     <view class="card">
       <view class="card-title">市场环境分析</view>
       <view v-if="marketEnv" class="env-content">
@@ -58,6 +66,10 @@
         </view>
       </view>
     </view>
+
+    <view v-if="loading" class="loading">
+      <text>加载中...</text>
+    </view>
   </view>
 </template>
 
@@ -66,6 +78,7 @@ import { ref, onMounted } from 'vue'
 import { marketApi, getToday } from '../../api'
 
 const today = ref(getToday())
+const loading = ref(false)
 const marketEnv = ref(null)
 const indexData = ref([])
 const marketStats = ref(null)
@@ -76,7 +89,13 @@ const getEnvClass = (tag) => {
   return 'tag-danger'
 }
 
+const onDateChange = (e) => {
+  today.value = e.detail.value
+  loadData()
+}
+
 const loadData = async () => {
+  loading.value = true
   try {
     const [envRes, indexRes, statsRes] = await Promise.all([
       marketApi.getEnv(today.value),
@@ -88,6 +107,8 @@ const loadData = async () => {
     marketStats.value = statsRes.data.data
   } catch (e) {
     console.error('加载失败', e)
+  } finally {
+    loading.value = false
   }
 }
 
@@ -98,6 +119,11 @@ onMounted(() => {
 
 <style scoped>
 .page { padding: 10px; }
+
+.date-picker { display: flex; align-items: center; padding: 10px; background: #fff; margin-bottom: 10px; border-radius: 8px; }
+.date-label { margin-right: 10px; color: #666; }
+.picker-value { color: #409eff; font-weight: bold; }
+
 .card { background: #fff; border-radius: 8px; padding: 15px; margin-bottom: 10px; }
 .card-title { font-size: 16px; font-weight: bold; margin-bottom: 10px; }
 
@@ -124,6 +150,8 @@ onMounted(() => {
 .stat-item { text-align: center; }
 .stat-value { font-size: 18px; font-weight: bold; display: block; }
 .stat-label { font-size: 12px; color: #999; }
+
+.loading { text-align: center; padding: 30px; color: #999; }
 .text-red { color: #f56c6c; }
 .text-green { color: #67c23a; }
 </style>

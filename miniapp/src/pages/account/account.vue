@@ -23,6 +23,10 @@
           <text class="info-label">持仓数量</text>
           <text class="info-value">{{ profile.holding_count }}只</text>
         </view>
+        <view class="info-row">
+          <text class="info-label">T+1锁定</text>
+          <text class="info-value">{{ profile.t1_locked_count }}只</text>
+        </view>
       </view>
     </view>
 
@@ -46,22 +50,66 @@
     </view>
 
     <view class="card">
-      <view class="card-title">持仓明细</view>
+      <view class="card-title">持仓明细 ({{ positions.length }}只)</view>
       <view class="position-list">
-        <view v-for="item in positions" :key="item.ts_code" class="position-item">
-          <view class="position-info">
-            <text class="position-name">{{ item.stock_name }}</text>
-            <text class="position-code">{{ item.ts_code }}</text>
+        <view v-for="(item, index) in positions" :key="item.ts_code + index" class="position-item" @click="toggleDetail(item)">
+          <view class="position-header">
+            <view class="position-info">
+              <text class="position-name">{{ item.stock_name }}</text>
+              <text class="position-code">{{ item.ts_code }}</text>
+            </view>
+            <view class="position-right">
+              <text :class="['position-pnl', item.pnl_pct > 0 ? 'text-red' : 'text-green']">
+                {{ item.pnl_pct?.toFixed(2) }}%
+              </text>
+              <text v-if="!item.can_sell_today" class="t1-tag">T+1</text>
+            </view>
           </view>
-          <view class="position-extra">
-            <view>数量: {{ item.holding_qty }}</view>
-            <view>成本: {{ item.cost_price?.toFixed(2) }}</view>
-            <view :class="item.pnl_pct > 0 ? 'text-red' : 'text-green'">
-              {{ item.pnl_pct?.toFixed(2) }}%
+          <!-- 详情展开 -->
+          <view v-if="expandedItem === item.ts_code" class="position-detail">
+            <view class="detail-row">
+              <text class="detail-label">持仓数量</text>
+              <text class="detail-value">{{ item.holding_qty }}股</text>
+            </view>
+            <view class="detail-row">
+              <text class="detail-label">成本价</text>
+              <text class="detail-value">{{ item.cost_price?.toFixed(2) }}</text>
+            </view>
+            <view class="detail-row">
+              <text class="detail-label">现价</text>
+              <text class="detail-value">{{ item.market_price?.toFixed(2) }}</text>
+            </view>
+            <view class="detail-row">
+              <text class="detail-label">持仓市值</text>
+              <text class="detail-value">{{ formatMoney(item.holding_market_value) }}</text>
+            </view>
+            <view class="detail-row">
+              <text class="detail-label">盈亏金额</text>
+              <text :class="['detail-value', item.pnl_pct > 0 ? 'text-red' : 'text-green']">
+                {{ item.pnl_pct > 0 ? '+' : '' }}{{ (item.holding_market_value * item.pnl_pct / 100)?.toFixed(2) }}元
+              </text>
+            </view>
+            <view class="detail-row">
+              <text class="detail-label">买入日期</text>
+              <text class="detail-value">{{ item.buy_date }}</text>
+            </view>
+            <view class="detail-row">
+              <text class="detail-label">可卖状态</text>
+              <text :class="['detail-value', item.can_sell_today ? 'text-green' : 'text-orange']">
+                {{ item.can_sell_today ? '是' : '否(T+1)' }}
+              </text>
+            </view>
+            <view class="detail-row" v-if="item.holding_reason">
+              <text class="detail-label">买入理由</text>
+              <text class="detail-value">{{ item.holding_reason }}</text>
             </view>
           </view>
         </view>
       </view>
+    </view>
+
+    <view v-if="loading" class="loading">
+      <text>加载中...</text>
     </view>
   </view>
 </template>
@@ -70,16 +118,23 @@
 import { ref, onMounted } from 'vue'
 import { accountApi } from '../../api'
 
+const loading = ref(false)
 const profile = ref(null)
 const status = ref(null)
 const positions = ref([])
+const expandedItem = ref(null)
 
 const formatMoney = (value) => {
   if (!value) return '-'
   return (value / 10000).toFixed(2) + '万'
 }
 
+const toggleDetail = (item) => {
+  expandedItem.value = expandedItem.value === item.ts_code ? null : item.ts_code
+}
+
 const loadData = async () => {
+  loading.value = true
   try {
     const [profileRes, statusRes, posRes] = await Promise.all([
       accountApi.profile(),
@@ -91,6 +146,8 @@ const loadData = async () => {
     positions.value = posRes.data.data.positions || []
   } catch (e) {
     console.error('加载失败', e)
+  } finally {
+    loading.value = false
   }
 }
 
@@ -101,6 +158,7 @@ onMounted(() => {
 
 <style scoped>
 .page { padding: 10px; }
+
 .card { background: #fff; border-radius: 8px; padding: 15px; margin-bottom: 10px; }
 .card-title { font-size: 16px; font-weight: bold; margin-bottom: 10px; }
 
@@ -120,11 +178,23 @@ onMounted(() => {
 .status-value { font-weight: bold; }
 
 .position-list { display: flex; flex-direction: column; }
-.position-item { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #f5f5f5; }
+.position-item { padding: 12px 0; border-bottom: 1px solid #f5f5f5; }
+.position-header { display: flex; justify-content: space-between; align-items: center; }
 .position-info { display: flex; flex-direction: column; }
 .position-name { font-weight: bold; }
 .position-code { font-size: 12px; color: #999; }
-.position-extra { text-align: right; font-size: 14px; }
+.position-right { display: flex; align-items: center; gap: 8px; }
+.position-pnl { font-size: 16px; font-weight: bold; }
+.t1-tag { font-size: 10px; padding: 2px 6px; background: #fdf6ec; color: #e6a23c; border-radius: 4px; }
+
+.position-detail { margin-top: 10px; padding: 10px; background: #f9f9f9; border-radius: 8px; }
+.detail-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; }
+.detail-row:last-child { border-bottom: none; }
+.detail-label { font-size: 12px; color: #999; }
+.detail-value { font-size: 14px; color: #333; }
+
+.loading { text-align: center; padding: 30px; color: #999; }
 .text-red { color: #f56c6c; }
 .text-green { color: #67c23a; }
+.text-orange { color: #e6a23c; }
 </style>

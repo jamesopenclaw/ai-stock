@@ -1,5 +1,6 @@
 <template>
   <view class="page">
+    <!-- 下拉刷新 -->
     <view class="header">
       <text class="title">轻舟交易系统</text>
       <text class="date">{{ today }}</text>
@@ -57,6 +58,18 @@
       </view>
     </view>
 
+    <!-- 主线板块 -->
+    <view class="card" v-if="leaderSector">
+      <view class="card-title">主线板块</view>
+      <view class="leader-sector">
+        <text class="sector-name">{{ leaderSector.sector.sector_name }}</text>
+        <text :class="['sector-change', leaderSector.sector.sector_change_pct > 0 ? 'text-red' : 'text-green']">
+          {{ leaderSector.sector.sector_change_pct?.toFixed(2) }}%
+        </text>
+        <text class="sector-tag">{{ leaderSector.sector.sector_mainline_tag }}</text>
+      </view>
+    </view>
+
     <!-- 市场概览 -->
     <view class="card" v-if="marketEnv">
       <view class="card-title">市场环境</view>
@@ -89,13 +102,14 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { decisionApi, marketApi, accountApi, getToday } from '../api'
+import { decisionApi, marketApi, accountApi, sectorApi, getToday } from '../api'
 
 const today = ref(getToday())
 const loading = ref(false)
 const summary = ref(null)
 const marketEnv = ref(null)
 const accountProfile = ref(null)
+const leaderSector = ref(null)
 
 const getActionClass = (action) => {
   if (action?.includes('少') || action?.includes('防守')) return 'text-red'
@@ -117,14 +131,16 @@ const formatMoney = (value) => {
 const loadData = async () => {
   loading.value = true
   try {
-    const [summaryRes, marketRes, accountRes] = await Promise.all([
+    const [summaryRes, marketRes, accountRes, leaderRes] = await Promise.all([
       decisionApi.summary(today.value),
       marketApi.getEnv(today.value),
-      accountApi.profile()
+      accountApi.profile(),
+      sectorApi.leader(today.value)
     ])
     summary.value = summaryRes.data
     marketEnv.value = marketRes.data.data
     accountProfile.value = accountRes.data
+    leaderSector.value = leaderRes.data.data
   } catch (e) {
     console.error('加载失败', e)
   } finally {
@@ -132,158 +148,66 @@ const loadData = async () => {
   }
 }
 
-const goTo = (path) => {
-  // 小程序中切换 tab
-  const pages = getCurrentPages()
-  const currentPage = pages[pages.length - 1]
-  const options = currentPage.options || {}
-  
-  // 简单处理：重新设置 currentPath
-  // 实际项目中可使用 uni.switchTab
+// 下拉刷新
+const onPullDownRefresh = () => {
+  loadData().then(() => {
+    uni.stopPullDownRefresh()
+  })
 }
 
+// 启用下拉刷新
 onMounted(() => {
   loadData()
+  // #ifdef MP-WEIXIN
+  uni.showNavigationBarLoading()
+  onPullDownRefresh().finally(() => {
+    uni.hideNavigationBarLoading()
+  })
+  // #endif
 })
 </script>
 
 <style scoped>
-.page {
-  padding: 10px;
-}
+.page { padding: 10px; }
 
-.header {
-  padding: 15px 0;
-  text-align: center;
-}
+.header { padding: 15px 0; text-align: center; }
+.title { font-size: 20px; font-weight: bold; display: block; }
+.date { font-size: 14px; color: #999; }
 
-.title {
-  font-size: 20px;
-  font-weight: bold;
-  display: block;
-}
+.card { background: #fff; border-radius: 8px; padding: 15px; margin-bottom: 10px; }
+.card-title { font-size: 16px; font-weight: bold; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #eee; }
 
-.date {
-  font-size: 14px;
-  color: #999;
-}
-
-.card {
-  background: #fff;
-  border-radius: 8px;
-  padding: 15px;
-  margin-bottom: 10px;
-}
-
-.card-title {
-  font-size: 16px;
-  font-weight: bold;
-  margin-bottom: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #eee;
-}
-
-.summary-content {
-  display: flex;
-  flex-wrap: wrap;
-}
-
-.summary-item {
-  width: 50%;
-  padding: 8px 0;
-}
-
-.summary-item .label {
-  font-size: 12px;
-  color: #999;
-  display: block;
-}
-
-.summary-item .value {
-  font-size: 16px;
-  font-weight: bold;
-}
-
-.summary-extra {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid #eee;
-  font-size: 14px;
-  color: #666;
-}
+.summary-content { display: flex; flex-wrap: wrap; }
+.summary-item { width: 50%; padding: 8px 0; }
+.summary-item .label { font-size: 12px; color: #999; display: block; }
+.summary-item .value { font-size: 16px; font-weight: bold; }
+.summary-extra { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; font-size: 14px; color: #666; }
 
 .text-green { color: #67c23a; }
 .text-yellow { color: #e6a23c; }
 .text-red { color: #f56c6c; }
 
-.quick-links {
-  display: flex;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
+.quick-links { display: flex; flex-wrap: wrap; margin-bottom: 10px; }
+.link-item { width: 25%; display: flex; flex-direction: column; align-items: center; padding: 15px 0; }
+.link-icon { font-size: 28px; margin-bottom: 5px; }
+.link-text { font-size: 12px; color: #666; }
 
-.link-item {
-  width: 25%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 15px 0;
-}
+.leader-sector { text-align: center; }
+.sector-name { font-size: 20px; font-weight: bold; margin-right: 10px; }
+.sector-change { font-size: 20px; font-weight: bold; margin-right: 10px; }
+.sector-tag { font-size: 12px; padding: 2px 8px; background: #e1f3d8; color: #67c23a; border-radius: 4px; }
 
-.link-icon {
-  font-size: 28px;
-  margin-bottom: 5px;
-}
-
-.link-text {
-  font-size: 12px;
-  color: #666;
-}
-
-.env-tag {
-  text-align: center;
-  margin: 10px 0;
-}
-
-.tag {
-  padding: 5px 20px;
-  border-radius: 15px;
-  font-size: 16px;
-}
-
+.env-tag { text-align: center; margin: 10px 0; }
+.tag { padding: 5px 20px; border-radius: 15px; font-size: 16px; }
 .tag-success { background: #e1f3d8; color: #67c23a; }
 .tag-warning { background: #fdf6ec; color: #e6a23c; }
 .tag-danger { background: #fef0f0; color: #f56c6c; }
+.env-comment { text-align: center; color: #666; font-size: 14px; }
 
-.env-comment {
-  text-align: center;
-  color: #666;
-  font-size: 14px;
-}
+.account-info { display: flex; flex-direction: column; }
+.info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f5f5f5; }
+.info-label { color: #999; }
+.info-value { font-weight: bold; }
 
-.account-info {
-  display: flex;
-  flex-direction: column;
-}
-
-.info-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 8px 0;
-  border-bottom: 1px solid #f5f5f5;
-}
-
-.info-label {
-  color: #999;
-}
-
-.info-value {
-  font-weight: bold;
-}
-
-.loading {
-  text-align: center;
-  padding: 30px;
-  color: #999;
-}
+.loading { text-align: center; padding: 30px; color: #999; }
 </style>
