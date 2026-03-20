@@ -18,6 +18,7 @@ from app.models.schemas import (
     SectorTradeabilityTag,
     StockPoolTag,
     StockStrengthTag,
+    StockCoreTag,
 )
 from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
