@@ -1,0 +1,52 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "轻舟交易系统"
+      }
+    },
+    {
+      "path": "pages/market/market",
+      "style": {
+        "navigationBarTitleText": "市场环境"
+      }
+    },
+    {
+      "path": "pages/sectors/sectors",
+      "style": {
+        "navigationBarTitleText": "板块扫描"
+      }
+    },
+    {
+      "path": "pages/pools/pools",
+      "style": {
+        "navigationBarTitleText": "三池分类"
+      }
+    },
+    {
+      "path": "pages/buy/buy",
+      "style": {
+        "navigationBarTitleText": "买点分析"
+      }
+    },
+    {
+      "path": "pages/sell/sell",
+      "style": {
+        "navigationBarTitleText": "卖点分析"
+      }
+    },
+    {
+      "path": "pages/account/account",
+      "style": {
+        "navigationBarTitleText": "账户管理"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "轻舟交易系统",
+    "navigationBarBackgroundColor": "#F8F8F8",
+    "backgroundColor": "#F8F8F8"
+  }
+}
