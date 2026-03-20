@@ -270,6 +270,56 @@ class BuyPointResponse(BaseModel):
     total_count: int
 
 
+# ========== 卖点相关 ==========
+
+class SellPointType(str, Enum):
+    """卖点类型"""
+    STOP_LOSS = "止损"  # 止损
+    STOP_PROFIT = "止盈"  # 止盈
+    REDUCE_POSITION = "减仓"  # 减仓
+    INVALID_EXIT = "失效退出"  # 失效退出
+
+
+class SellSignalTag(str, Enum):
+    """卖点信号标签"""
+    HOLD = "持有"
+    REDUCE = "减仓"
+    SELL = "卖出"
+    OBSERVE = "观察"
+
+
+class SellPriority(str, Enum):
+    """卖点优先级"""
+    HIGH = "高"
+    MEDIUM = "中"
+    LOW = "低"
+
+
+class SellPointOutput(BaseModel):
+    """卖点分析输出"""
+    ts_code: str
+    stock_name: str
+    # 卖点信号
+    sell_signal_tag: SellSignalTag
+    sell_point_type: SellPointType
+    # 条件
+    sell_trigger_cond: str = Field(..., description="卖点触发条件")
+    sell_reason: str = Field(..., description="卖出/减仓原因")
+    # 优先级
+    sell_priority: SellPriority
+    # 简评
+    sell_comment: str = ""
+
+
+class SellPointResponse(BaseModel):
+    """卖点分析响应"""
+    trade_date: str
+    hold_positions: List[SellPointOutput] = Field(default_factory=list, description="持有观察")
+    reduce_positions: List[SellPointOutput] = Field(default_factory=list, description="建议减仓")
+    sell_positions: List[SellPointOutput] = Field(default_factory=list, description="建议卖出")
+    total_count: int
+
+
 # ========== 账户相关 ==========
 
 class AccountPosition(BaseModel):
@@ -303,6 +353,56 @@ class AccountOutput(BaseModel):
     new_position_allowed: bool = Field(..., description="是否允许新开仓")
     priority_action: str = Field(..., description="当前优先动作")
     account_comment: str = Field(..., description="账户适配说明")
+
+
+class AccountProfile(BaseModel):
+    """账户概况"""
+    total_asset: float
+    available_cash: float
+    total_position_ratio: float
+    holding_count: int
+    today_new_buy_count: int
+    t1_locked_count: int
+    market_value: float
+
+
+# ========== 执行摘要相关 ==========
+
+class DecisionSummary(BaseModel):
+    """执行摘要"""
+    trade_date: str
+    today_action: str = Field(..., description="今天该不该出手")
+    focus: str = Field(..., description="优先看谁")
+    avoid: str = Field(..., description="哪些绝对不碰")
+    # 市场环境
+    market_env_tag: str
+    breakout_allowed: bool
+    # 账户适配
+    account_action_tag: str
+    new_position_allowed: bool
+    priority_action: str
+    # 统计
+    buy_recommend_count: int
+    sell_recommend_count: int
+
+
+class FullDecisionResponse(BaseModel):
+    """完整决策分析响应"""
+    trade_date: str
+    # 市场环境
+    market_env: dict
+    # 板块扫描
+    sector_scan: dict
+    # 三池
+    stock_pools: dict
+    # 买点分析
+    buy_analysis: dict
+    # 卖点分析
+    sell_analysis: dict
+    # 账户适配
+    account_fit: dict
+    # 执行摘要
+    summary: DecisionSummary
 
 
 # ========== 通用响应 ==========
