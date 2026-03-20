@@ -132,6 +132,144 @@ class LeaderSectorResponse(BaseModel):
     sector: SectorOutput
 
 
+# ========== 个股相关 ==========
+
+class StockStrengthTag(str, Enum):
+    """个股强弱标签"""
+    STRONG = "强"
+    MEDIUM = "中"
+    WEAK = "弱"
+
+
+class StockContinuityTag(str, Enum):
+    """个股连续性标签"""
+    SUSTAINABLE = "可持续"
+    OBSERVABLE = "可观察"
+    CAUTION = "末端谨慎"
+
+
+class StockTradeabilityTag(str, Enum):
+    """个股交易性标签"""
+    TRADABLE = "可交易"
+    CAUTION = "谨慎"
+    NOT_RECOMMENDED = "不建议"
+
+
+class StockCoreTag(str, Enum):
+    """个股核心属性标签"""
+    CORE = "核心"
+    FOLLOW = "跟随"
+    TRASH = "杂毛"
+
+
+class StockPoolTag(str, Enum):
+    """个股所属池"""
+    MARKET_WATCH = "市场最强观察池"
+    ACCOUNT_EXECUTABLE = "账户可参与池"
+    HOLDING_PROCESS = "持仓处理池"
+    NOT_IN_POOL = "不入池"
+
+
+class StockInput(BaseModel):
+    """个股输入"""
+    ts_code: str = Field(..., description="股票代码")
+    stock_name: str = Field(..., description="股票简称")
+    sector_name: str = Field(..., description="所属板块")
+    close: float = Field(..., description="收盘价")
+    change_pct: float = Field(..., description="涨跌幅(%)")
+    turnover_rate: float = Field(..., description="换手率(%)")
+    amount: float = Field(..., description="成交额(万元)")
+    vol_ratio: Optional[float] = Field(None, description="量比")
+    high: float = Field(..., description="最高价")
+    low: float = Field(..., description="最低价")
+    open: float = Field(..., description="开盘价")
+    pre_close: float = Field(..., description="前收价")
+    trend_tag: str = Field(default="震荡", description="趋势标签")
+    stage_tag: str = Field(default="震荡", description="阶段位置标签")
+    news_catalyst: Optional[str] = Field(None, description="消息催化")
+    news_risk: Optional[str] = Field(None, description="风险/证伪信息")
+
+
+class StockOutput(BaseModel):
+    """个股筛选输出"""
+    ts_code: str
+    stock_name: str
+    sector_name: str
+    change_pct: float
+    # 评分标签
+    stock_strength_tag: StockStrengthTag
+    stock_continuity_tag: StockContinuityTag
+    stock_tradeability_tag: StockTradeabilityTag
+    stock_core_tag: StockCoreTag
+    stock_pool_tag: StockPoolTag
+    # 证伪条件
+    stock_falsification_cond: str = ""
+    # 简评
+    stock_comment: str = ""
+
+
+# ========== 三池相关 ==========
+
+class StockPoolsOutput(BaseModel):
+    """三池输出"""
+    trade_date: str
+    market_watch_pool: List[StockOutput] = Field(default_factory=list, description="市场最强观察池")
+    account_executable_pool: List[StockOutput] = Field(default_factory=list, description="账户可参与池")
+    holding_process_pool: List[StockOutput] = Field(default_factory=list, description="持仓处理池")
+    total_count: int
+
+
+# ========== 买点相关 ==========
+
+class BuyPointType(str, Enum):
+    """买点类型"""
+    BREAKTHROUGH = "突破"  # 突破
+    RETRACE_SUPPORT = "回踩承接"  # 回踩承接
+    REPAIR_STRENGTHEN = "修复转强"  # 修复转强
+    LOW_SUCK = "低吸"  # 低吸（待确认）
+
+
+class BuySignalTag(str, Enum):
+    """买点信号标签"""
+    CAN_BUY = "可买"
+    OBSERVE = "观察"
+    NOT_BUY = "不买"
+
+
+class BuyPointOutput(BaseModel):
+    """买点分析输出"""
+    ts_code: str
+    stock_name: str
+    # 买点信号
+    buy_signal_tag: BuySignalTag
+    buy_point_type: BuyPointType
+    # 条件
+    buy_trigger_cond: str = Field(..., description="触发条件")
+    buy_confirm_cond: str = Field(..., description="确认条件")
+    buy_invalid_cond: str = Field(..., description="失效条件")
+    # 风险评估
+    buy_risk_level: RiskLevel
+    buy_account_fit: str = Field(..., description="适合/一般/不适合")
+    # 简评
+    buy_comment: str = ""
+
+
+class BuyPointRequest(BaseModel):
+    """买点分析请求"""
+    trade_date: str = Field(..., description="交易日")
+    ts_codes: Optional[List[str]] = Field(None, description="股票代码列表，为空则分析全部")
+
+
+class BuyPointResponse(BaseModel):
+    """买点分析响应"""
+    trade_date: str
+    market_env_tag: MarketEnvTag
+    available_buy_points: List[BuyPointOutput] = Field(default_factory=list, description="可买候选")
+    observe_buy_points: List[BuyPointOutput] = Field(default_factory=list, description="观察候选")
+    not_buy_points: List[BuyPointOutput] = Field(default_factory=list, description="不建议买")
+    total_count: int
+
+
 # ========== 账户相关 ==========
 
 class AccountPosition(BaseModel):

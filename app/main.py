@@ -67,8 +67,8 @@ from app.api.v1 import market, sector, stock, decision, account, task
 
 app.include_router(market.router, prefix=settings.api_v1_prefix, tags=["市场环境"])
 app.include_router(sector.router, prefix=settings.api_v1_prefix, tags=["板块扫描"])
-# app.include_router(stock.router, prefix=settings.api_v1_prefix, tags=["个股筛选"])
-# app.include_router(decision.router, prefix=settings.api_v1_prefix, tags=["决策分析"])
+app.include_router(stock.router, prefix=settings.api_v1_prefix, tags=["个股筛选"])
+app.include_router(decision.router, prefix=settings.api_v1_prefix, tags=["决策分析"])
 # app.include_router(account.router, prefix=settings.api_v1_prefix, tags=["账户适配"])
 # app.include_router(task.router, prefix=settings.api_v1_prefix, tags=["任务管理"])
 

@@ -213,5 +213,116 @@ class TushareClient:
         ]
 
 
+    def get_stock_list(self, trade_date: str, limit: int = 100) -> List[Dict]:
+        """
+        获取当日个股行情列表
+
+        Args:
+            trade_date: 交易日，格式 YYYYMMDD
+            limit: 返回数量限制
+
+        Returns:
+            个股行情列表
+        """
+        if not self.token:
+            return self._mock_stock_list()
+
+        try:
+            # 获取当日涨跌幅排行
+            df = self.pro.daily_s(trade_date=trade_date, limit=limit)
+            if df.empty:
+                return self._mock_stock_list()
+
+            result = []
+            for _, row in df.iterrows():
+                result.append({
+                    "ts_code": row.get("ts_code"),
+                    "stock_name": row.get("name", ""),
+                    "sector_name": row.get("industry", "未知"),
+                    "close": float(row.get("close", 0)),
+                    "change_pct": float(row.get("pct_chg", 0)),
+                    "turnover_rate": float(row.get("turnover_rate", 0)),
+                    "amount": float(row.get("amount", 0)),
+                    "vol_ratio": float(row.get("vol_ratio", 1)),
+                    "high": float(row.get("high", 0)),
+                    "low": float(row.get("low", 0)),
+                    "open": float(row.get("open", 0)),
+                    "pre_close": float(row.get("pre_close", 0)),
+                })
+
+            return result
+        except Exception as e:
+            logger.error(f"获取个股列表失败: {e}")
+            return self._mock_stock_list()
+
+    def get_stock_detail(self, ts_code: str, trade_date: str) -> Dict:
+        """
+        获取个股详情
+
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日
+
+        Returns:
+            个股详情
+        """
+        if not self.token:
+            return self._mock_stock_detail(ts_code)
+
+        try:
+            df = self.pro.daily(ts_code=ts_code, start_date=trade_date, end_date=trade_date)
+            if df.empty:
+                return self._mock_stock_detail(ts_code)
+
+            row = df.iloc[0]
+
+            # 获取所属板块
+            stock_info = self.pro.stock_basic(ts_code=ts_code)
+            industry = stock_info.iloc[0].get("industry", "未知") if not stock_info.empty else "未知"
+
+            return {
+                "ts_code": ts_code,
+                "stock_name": row.get("name", ts_code),
+                "sector_name": industry,
+                "close": float(row.get("close", 0)),
+                "change_pct": float(row.get("pct_chg", 0)),
+                "turnover_rate": float(row.get("vol", 0)) / 10000,  # 简化
+                "amount": float(row.get("amount", 0)),
+                "vol_ratio": 1.5,  # 简化
+                "high": float(row.get("high", 0)),
+                "low": float(row.get("low", 0)),
+                "open": float(row.get("open", 0)),
+                "pre_close": float(row.get("pre_close", 0)),
+            }
+        except Exception as e:
+            logger.error(f"获取个股详情失败: {e}")
+            return self._mock_stock_detail(ts_code)
+
+    # ========== Mock 数据 ==========
+
+    def _mock_stock_list(self) -> List[Dict]:
+        """模拟个股列表"""
+        return [
+            {"ts_code": "000001.SZ", "stock_name": "平安银行", "sector_name": "银行", "close": 12.5, "change_pct": 3.5, "turnover_rate": 8.5, "amount": 350000, "vol_ratio": 1.8, "high": 12.8, "low": 12.1, "open": 12.2, "pre_close": 12.1},
+            {"ts_code": "000002.SZ", "stock_name": "万 科A", "sector_name": "房地产", "close": 8.2, "change_pct": 5.2, "turnover_rate": 15.0, "amount": 520000, "vol_ratio": 2.5, "high": 8.5, "low": 7.9, "open": 7.9, "pre_close": 7.8},
+            {"ts_code": "600519.SH", "stock_name": "贵州茅台", "sector_name": "白酒", "close": 1850.0, "change_pct": 1.2, "turnover_rate": 0.8, "amount": 450000, "vol_ratio": 1.2, "high": 1860.0, "low": 1820.0, "open": 1825.0, "pre_close": 1828.0},
+            {"ts_code": "300750.SZ", "stock_name": "宁德时代", "sector_name": "新能源汽车", "close": 185.0, "change_pct": 4.5, "turnover_rate": 12.0, "amount": 680000, "vol_ratio": 2.2, "high": 188.0, "low": 178.0, "open": 178.0, "pre_close": 177.0},
+            {"ts_code": "002594.SZ", "stock_name": "比亚迪", "sector_name": "新能源汽车", "close": 265.0, "change_pct": 3.8, "turnover_rate": 6.5, "amount": 420000, "vol_ratio": 1.6, "high": 268.0, "low": 258.0, "open": 258.0, "pre_close": 255.0},
+            {"ts_code": "000858.SZ", "stock_name": "五粮液", "sector_name": "白酒", "close": 168.0, "change_pct": 2.1, "turnover_rate": 3.5, "amount": 280000, "vol_ratio": 1.3, "high": 170.0, "low": 165.0, "open": 165.0, "pre_close": 164.5},
+            {"ts_code": "600900.SH", "stock_name": "长江电力", "sector_name": "电力", "close": 23.5, "change_pct": 0.5, "turnover_rate": 1.2, "amount": 150000, "vol_ratio": 1.0, "high": 23.8, "low": 23.2, "open": 23.3, "pre_close": 23.4},
+            {"ts_code": "601318.SH", "stock_name": "中国平安", "sector_name": "保险", "close": 48.5, "change_pct": 1.8, "turnover_rate": 2.5, "amount": 320000, "vol_ratio": 1.4, "high": 49.0, "low": 47.8, "open": 47.8, "pre_close": 47.6},
+            {"ts_code": "000333.SZ", "stock_name": "美的集团", "sector_name": "家电", "close": 62.0, "change_pct": 2.5, "turnover_rate": 4.0, "amount": 250000, "vol_ratio": 1.5, "high": 63.0, "low": 61.0, "open": 61.0, "pre_close": 60.5},
+            {"ts_code": "002475.SZ", "stock_name": "立讯精密", "sector_name": "电子", "close": 35.0, "change_pct": 6.5, "turnover_rate": 18.0, "amount": 580000, "vol_ratio": 3.0, "high": 36.0, "low": 33.5, "open": 33.5, "pre_close": 32.8},
+        ]
+
+    def _mock_stock_detail(self, ts_code: str) -> Dict:
+        """模拟个股详情"""
+        stocks = self._mock_stock_list()
+        for s in stocks:
+            if s["ts_code"] == ts_code:
+                return s
+        return stocks[0]
+
+
 # 全局客户端实例
 tushare_client = TushareClient()
