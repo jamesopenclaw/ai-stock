@@ -347,6 +347,7 @@ class TushareClient:
         return [
             {"ts_code": "000001.SZ", "stock_name": "平安银行", "sector_name": "银行", "close": 12.5, "change_pct": 3.5, "turnover_rate": 8.5, "amount": 350000, "vol_ratio": 1.8, "high": 12.8, "low": 12.1, "open": 12.2, "pre_close": 12.1},
             {"ts_code": "000002.SZ", "stock_name": "万 科A", "sector_name": "房地产", "close": 8.2, "change_pct": 5.2, "turnover_rate": 15.0, "amount": 520000, "vol_ratio": 2.5, "high": 8.5, "low": 7.9, "open": 7.9, "pre_close": 7.8},
+            {"ts_code": "600036.SH", "stock_name": "招商银行", "sector_name": "银行", "close": 35.0, "change_pct": 2.0, "turnover_rate": 3.5, "amount": 280000, "vol_ratio": 1.5, "high": 35.5, "low": 34.2, "open": 34.3, "pre_close": 34.3},
             {"ts_code": "600519.SH", "stock_name": "贵州茅台", "sector_name": "白酒", "close": 1850.0, "change_pct": 1.2, "turnover_rate": 0.8, "amount": 450000, "vol_ratio": 1.2, "high": 1860.0, "low": 1820.0, "open": 1825.0, "pre_close": 1828.0},
             {"ts_code": "300750.SZ", "stock_name": "宁德时代", "sector_name": "新能源汽车", "close": 185.0, "change_pct": 4.5, "turnover_rate": 12.0, "amount": 680000, "vol_ratio": 2.2, "high": 188.0, "low": 178.0, "open": 178.0, "pre_close": 177.0},
             {"ts_code": "002594.SZ", "stock_name": "比亚迪", "sector_name": "新能源汽车", "close": 265.0, "change_pct": 3.8, "turnover_rate": 6.5, "amount": 420000, "vol_ratio": 1.6, "high": 268.0, "low": 258.0, "open": 258.0, "pre_close": 255.0},
@@ -363,7 +364,21 @@ class TushareClient:
         for s in stocks:
             if s["ts_code"] == ts_code:
                 return s
-        return stocks[0]
+        # 未找到时返回包含代码的默认数据
+        return {
+            "ts_code": ts_code,
+            "stock_name": ts_code,
+            "sector_name": "未知",
+            "close": 0.0,
+            "change_pct": 0.0,
+            "turnover_rate": 0.0,
+            "amount": 0,
+            "vol_ratio": 1.0,
+            "high": 0.0,
+            "low": 0.0,
+            "open": 0.0,
+            "pre_close": 0.0,
+        }
 
 
 # 全局客户端实例
