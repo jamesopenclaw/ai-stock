@@ -21,59 +21,52 @@ from app.services.stock_filter import stock_filter_service
 from app.services.buy_point import buy_point_service
 from app.data.tushare_client import tushare_client
 from app.models.schemas import StockInput
+from app.models.holding import Holding
+from app.core.database import async_session_factory
+from sqlalchemy import select
 
 router = APIRouter()
 
 
-# 模拟账户数据（实际从账户系统获取）
-MOCK_ACCOUNT = AccountInput(
-    total_asset=1000000,
-    available_cash=400000,
-    total_position_ratio=0.6,
-    holding_count=4,
-    today_new_buy_count=1,
-    t1_locked_positions=[]
-)
+async def get_holdings_from_db() -> list:
+    """从数据库获取持仓"""
+    from app.data.tushare_client import tushare_client
+    
+    async with async_session_factory() as session:
+        result = await session.execute(select(Holding))
+        holdings = result.scalars().all()
+        holdings_list = [h.to_dict() for h in holdings]
+        
+        # 刷新现价
+        for h in holdings_list:
+            try:
+                detail = tushare_client.get_stock_detail(h["ts_code"], datetime.now().strftime("%Y%m%d"))
+                if detail and detail.get("close"):
+                    h["market_price"] = detail.get("close")
+                    if h.get("cost_price"):
+                        h["pnl_pct"] = round((h["market_price"] - h["cost_price"]) / h["cost_price"] * 100, 2)
+                    if h.get("holding_qty"):
+                        h["holding_market_value"] = h["holding_qty"] * h["market_price"]
+            except:
+                pass
+        
+        return holdings_list
 
-# 模拟持仓（实际从账户系统获取）
-MOCK_HOLDINGS = [
-    {
-        "ts_code": "000001.SZ",
-        "stock_name": "平安银行",
-        "holding_qty": 10000,
-        "cost_price": 12.0,
-        "market_price": 12.5,
-        "pnl_pct": 4.17,
-        "holding_market_value": 125000,
-        "buy_date": "2026-03-18",
-        "can_sell_today": True,
-        "holding_reason": "银行板块反弹"
-    },
-    {
-        "ts_code": "600519.SH",
-        "stock_name": "贵州茅台",
-        "holding_qty": 100,
-        "cost_price": 1800.0,
-        "market_price": 1850.0,
-        "pnl_pct": 2.78,
-        "holding_market_value": 185000,
-        "buy_date": "2026-03-17",
-        "can_sell_today": True,
-        "holding_reason": "白酒龙头"
-    },
-    {
-        "ts_code": "300750.SZ",
-        "stock_name": "宁德时代",
-        "holding_qty": 500,
-        "cost_price": 190.0,
-        "market_price": 185.0,
-        "pnl_pct": -2.63,
-        "holding_market_value": 92500,
-        "buy_date": "2026-03-19",
-        "can_sell_today": False,
-        "holding_reason": "新能源反弹"
-    },
-]
+
+def refresh_holdings_price(holdings: list):
+    """刷新持仓现价（内存中）"""
+    from app.data.tushare_client import tushare_client
+    for h in holdings:
+        try:
+            detail = tushare_client.get_stock_detail(h["ts_code"], datetime.now().strftime("%Y%m%d"))
+            if detail and detail.get("close"):
+                h["market_price"] = detail.get("close")
+                if h.get("cost_price"):
+                    h["pnl_pct"] = round((h["market_price"] - h["cost_price"]) / h["cost_price"] * 100, 2)
+                if h.get("holding_qty"):
+                    h["holding_market_value"] = h["holding_qty"] * h["market_price"]
+        except:
+            pass
 
 
 @router.get("/sell-point", response_model=ApiResponse)
@@ -92,9 +85,9 @@ async def analyze_sell_point(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        # 获取持仓（模拟，实际从账户系统获取）
-        from app.models.schemas import AccountPosition
-        holdings = [AccountPosition(**h) for h in MOCK_HOLDINGS]
+        # 从数据库获取持仓
+        holdings_list = await get_holdings_from_db()
+        holdings = [AccountPosition(**h) for h in holdings_list]
 
         # 卖点分析
         result = sell_point_service.analyze(trade_date, holdings)
@@ -119,8 +112,20 @@ async def get_account_profile(
     获取账户概况
     """
     try:
-        holdings = [AccountPosition(**h) for h in MOCK_HOLDINGS]
-        profile = account_adapter_service.get_profile(MOCK_ACCOUNT, holdings)
+        # 从数据库获取持仓
+        holdings_list = await get_holdings_from_db()
+        holdings = [AccountPosition(**h) for h in holdings_list]
+        
+        # 获取账户信息（从 settings 或数据库）
+        from app.core.config import settings
+        account = AccountInput(
+            total_asset=settings.qingzhou_total_asset,
+            available_cash=settings.qingzhou_available_cash,
+            total_position_ratio=settings.qingzhou_total_position_ratio,
+            holding_count=len(holdings),
+            today_new_buy_count=0
+        )
+        profile = account_adapter_service.get_profile(account, holdings)
 
         return ApiResponse(
             data=profile.model_dump()
@@ -137,14 +142,14 @@ async def get_positions(
     获取持仓明细
     """
     try:
-        from app.models.schemas import AccountPosition
-        holdings = [AccountPosition(**h) for h in MOCK_HOLDINGS]
-
+        # 从数据库获取持仓
+        holdings_list = await get_holdings_from_db()
+        
         return ApiResponse(
             data={
                 "trade_date": trade_date or datetime.now().strftime("%Y-%m-%d"),
-                "positions": [h.model_dump() for h in holdings],
-                "total": len(holdings)
+                "positions": holdings_list,
+                "total": len(holdings_list)
             }
         )
     except Exception as e:
@@ -170,9 +175,20 @@ async def get_decision_summary(
         # 获取市场环境
         market_env = market_env_service.get_current_env(trade_date)
 
-        # 获取账户适配
-        holdings = [AccountPosition(**h) for h in MOCK_HOLDINGS]
-        account_output = account_adapter_service.adapt(trade_date, MOCK_ACCOUNT, holdings)
+        # 从数据库获取持仓
+        holdings_list = await get_holdings_from_db()
+        holdings = [AccountPosition(**h) for h in holdings_list]
+        
+        # 获取账户信息
+        from app.core.config import settings
+        account = AccountInput(
+            total_asset=settings.qingzhou_total_asset,
+            available_cash=settings.qingzhou_available_cash,
+            total_position_ratio=settings.qingzhou_total_position_ratio,
+            holding_count=len(holdings),
+            today_new_buy_count=0
+        )
+        account_output = account_adapter_service.adapt(trade_date, account, holdings)
 
         # 生成摘要
         summary = _generate_summary(
@@ -275,17 +291,30 @@ async def full_decision_analyze(
             )
             for s in stock_list
         ]
-        stock_pools = stock_filter_service.classify_pools(trade_date, stocks, MOCK_HOLDINGS)
+        # 从数据库获取持仓
+        holdings_list = await get_holdings_from_db()
+        holdings = [AccountPosition(**h) for h in holdings_list]
+        
+        # 获取账户信息
+        from app.core.config import settings
+        account = AccountInput(
+            total_asset=settings.qingzhou_total_asset,
+            available_cash=settings.qingzhou_available_cash,
+            total_position_ratio=settings.qingzhou_total_position_ratio,
+            holding_count=len(holdings),
+            today_new_buy_count=0
+        )
+        
+        stock_pools = stock_filter_service.classify_pools(trade_date, stocks, holdings_list)
 
         # 4. 买点分析
         buy_analysis = buy_point_service.analyze(trade_date, stocks)
 
         # 5. 卖点分析
-        holdings = [AccountPosition(**h) for h in MOCK_HOLDINGS]
         sell_analysis = sell_point_service.analyze(trade_date, holdings)
 
         # 6. 账户适配
-        account_fit = account_adapter_service.adapt(trade_date, MOCK_ACCOUNT, holdings)
+        account_fit = account_adapter_service.adapt(trade_date, account, holdings)
 
         # 7. 执行摘要
         summary = _generate_summary(trade_date, market_env, account_fit, holdings)

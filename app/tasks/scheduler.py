@@ -13,8 +13,11 @@ from app.services.sell_point import sell_point_service
 from app.services.account_adapter import account_adapter_service
 from app.services.notify import notify_service
 from app.data.tushare_client import tushare_client
-from app.models.schemas import AccountInput, AccountPosition
+from app.models.schemas import AccountInput, AccountPosition, StockInput
+from app.models.holding import Holding
 from app.core.config import settings
+from app.core.database import async_session_factory
+from sqlalchemy import select
 
 
 class TaskScheduler:
@@ -22,6 +25,34 @@ class TaskScheduler:
 
     def __init__(self):
         self.logger = logger
+
+    async def get_holdings_from_db(self) -> list:
+        """从数据库获取持仓"""
+        async with async_session_factory() as session:
+            result = await session.execute(select(Holding))
+            holdings = result.scalars().all()
+            holdings_list = [h.to_dict() for h in holdings]
+            
+            # 刷新现价
+            for h in holdings_list:
+                try:
+                    detail = tushare_client.get_stock_detail(
+                        h["ts_code"], 
+                        datetime.now().strftime("%Y%m%d")
+                    )
+                    if detail and detail.get("close"):
+                        h["market_price"] = detail.get("close")
+                        if h.get("cost_price"):
+                            h["pnl_pct"] = round(
+                                (h["market_price"] - h["cost_price"]) / h["cost_price"] * 100, 
+                                2
+                            )
+                        if h.get("holding_qty"):
+                            h["holding_market_value"] = h["holding_qty"] * h["market_price"]
+                except:
+                    pass
+            
+            return holdings_list
 
     async def run_daily_analysis(self, trade_date: str = None):
         """
@@ -111,12 +142,12 @@ class TaskScheduler:
             for s in stock_list
         ]
 
-        # 模拟持仓（实际从账户系统获取）
-        from app.api.v1.decision import MOCK_HOLDINGS
-        holdings = [AccountPosition(**h) for h in MOCK_HOLDINGS]
+        # 从数据库获取持仓
+        holdings_list = await self.get_holdings_from_db()
+        holdings = [AccountPosition(**h) for h in holdings_list]
 
         self.logger.info("执行三池分类...")
-        stock_pools = stock_filter_service.classify_pools(trade_date, stocks, [h.model_dump() for h in holdings])
+        stock_pools = stock_filter_service.classify_pools(trade_date, stocks, holdings_list)
         pools_dict = {
             "market_watch_pool": [s.model_dump() for s in stock_pools.market_watch_pool[:10]],
             "account_executable_pool": [s.model_dump() for s in stock_pools.account_executable_pool[:10]],
