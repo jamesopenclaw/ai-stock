@@ -33,7 +33,7 @@ ENV/
 *.swo
 
 # Environment
-.env
+# .env
 .env.local
 
 # Logs
