@@ -37,5 +37,31 @@
     "buy_date": "2026-03-19",
     "can_sell_today": true,
     "holding_reason": "新能源反弹"
+  },
+  {
+    "id": "1774063293581",
+    "ts_code": "000002.SZ",
+    "stock_name": "万 科A",
+    "holding_qty": 5000,
+    "cost_price": 8.5,
+    "market_price": 8.2,
+    "pnl_pct": -3.53,
+    "holding_market_value": 41000.0,
+    "buy_date": "2026-03-10",
+    "can_sell_today": true,
+    "holding_reason": "测试新增"
+  },
+  {
+    "id": "621fbbd5-8bc7-4a6d-a57f-6ee9e2123c60",
+    "ts_code": "600000.SH",
+    "stock_name": "平安银行",
+    "holding_qty": 3000,
+    "cost_price": 10.0,
+    "market_price": 12.5,
+    "pnl_pct": 25.0,
+    "holding_market_value": 37500.0,
+    "buy_date": "2026-03-01",
+    "can_sell_today": true,
+    "holding_reason": "测试持久化"
   }
 ]

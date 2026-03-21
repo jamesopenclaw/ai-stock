@@ -324,6 +324,7 @@ class SellPointResponse(BaseModel):
 
 class AccountPosition(BaseModel):
     """持仓明细"""
+    id: Optional[str] = None
     ts_code: str
     stock_name: str
     holding_qty: int

@@ -5,8 +5,8 @@ from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
+import uuid
 import json
-import os
 from pathlib import Path
 
 from app.models.schemas import (
@@ -21,69 +21,6 @@ from app.data.tushare_client import tushare_client
 
 router = APIRouter()
 
-# 持仓数据存储文件
-HOLDINGS_FILE = Path(__file__).parent.parent.parent.parent / "data" / "holdings.json"
-HOLDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-
-def load_holdings() -> List[dict]:
-    """加载持仓数据"""
-    if HOLDINGS_FILE.exists():
-        try:
-            with open(HOLDINGS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            pass
-    # 返回默认数据
-    return [
-        {
-            "id": "1",
-            "ts_code": "000001.SZ",
-            "stock_name": "平安银行",
-            "holding_qty": 10000,
-            "cost_price": 12.0,
-            "market_price": 12.5,
-            "pnl_pct": 4.17,
-            "holding_market_value": 125000,
-            "buy_date": "2026-03-18",
-            "can_sell_today": True,
-            "holding_reason": "银行板块反弹"
-        },
-        {
-            "id": "2",
-            "ts_code": "600519.SH",
-            "stock_name": "贵州茅台",
-            "holding_qty": 100,
-            "cost_price": 1800.0,
-            "market_price": 1850.0,
-            "pnl_pct": 2.78,
-            "holding_market_value": 185000,
-            "buy_date": "2026-03-17",
-            "can_sell_today": True,
-            "holding_reason": "白酒龙头"
-        },
-        {
-            "id": "3",
-            "ts_code": "300750.SZ",
-            "stock_name": "宁德时代",
-            "holding_qty": 500,
-            "cost_price": 190.0,
-            "market_price": 185.0,
-            "pnl_pct": -2.63,
-            "holding_market_value": 92500,
-            "buy_date": "2026-03-19",
-            "can_sell_today": False,
-            "holding_reason": "新能源反弹"
-        },
-    ]
-
-
-def save_holdings(holdings: List[dict]):
-    """保存持仓数据"""
-    with open(HOLDINGS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(holdings, f, ensure_ascii=False, indent=2)
-
-
 # 模拟账户数据
 MOCK_ACCOUNT = AccountInput(
     total_asset=1000000,
@@ -93,6 +30,76 @@ MOCK_ACCOUNT = AccountInput(
     today_new_buy_count=1,
     t1_locked_positions=[]
 )
+
+# 持仓数据存储文件（备用）
+HOLDINGS_FILE = Path(__file__).parent.parent.parent.parent / "data" / "holdings.json"
+HOLDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+# 数据库可用标志
+DB_AVAILABLE = False
+
+try:
+    from app.models.holding import Holding
+    from app.core.database import async_session_factory
+    
+    async def get_holdings_from_db() -> List[dict]:
+        """从数据库获取持仓"""
+        async with async_session_factory() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(Holding))
+            holdings = result.scalars().all()
+            return [h.to_dict() for h in holdings]
+    
+    async def save_holding_to_db(holding_data: dict) -> dict:
+        """保存持仓到数据库"""
+        async with async_session_factory() as session:
+            holding = Holding(**holding_data)
+            session.add(holding)
+            await session.commit()
+            return holding.to_dict()
+    
+    async def delete_holding_from_db(holding_id: str):
+        """从数据库删除持仓"""
+        async with async_session_factory() as session:
+            from sqlalchemy import delete
+            await session.execute(delete(Holding).where(Holding.id == holding_id))
+            await session.commit()
+    
+    async def update_holding_in_db(holding_id: str, **kwargs):
+        """更新持仓"""
+        async with async_session_factory() as session:
+            from sqlalchemy import update
+            await session.execute(update(Holding).where(Holding.id == holding_id).values(**kwargs))
+            await session.commit()
+    
+    async def create_tables():
+        """创建数据库表"""
+        from app.core.database import engine, Base
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    
+    DB_AVAILABLE = True
+except Exception as e:
+    print(f"数据库不可用，将使用文件存储: {e}")
+
+
+def load_holdings_from_file() -> List[dict]:
+    """从文件加载持仓"""
+    if HOLDINGS_FILE.exists():
+        try:
+            with open(HOLDINGS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data:
+                    return data
+        except Exception as e:
+            print(f"加载文件失败: {e}")
+    return []
+
+
+def save_holdings_to_file(holdings: List[dict]):
+    """保存持仓到文件"""
+    with open(HOLDINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(holdings, f, ensure_ascii=False, indent=2)
 
 
 class AddPositionRequest(BaseModel):
@@ -104,30 +111,55 @@ class AddPositionRequest(BaseModel):
     holding_reason: Optional[str] = Body(None, description="买入理由")
 
 
-def refresh_holdings_prices():
+async def refresh_holdings_prices():
     """刷新持仓现价和盈亏"""
-    holdings = load_holdings()
+    if DB_AVAILABLE:
+        try:
+            holdings = await get_holdings_from_db()
+        except Exception as e:
+            print(f"数据库获取失败，使用文件: {e}")
+            holdings = load_holdings_from_file()
+    else:
+        holdings = load_holdings_from_file()
+    
+    if not holdings:
+        return []
+    
     trade_date = datetime.now().strftime("%Y%m%d")
+    price_updated = False
     
     for h in holdings:
         try:
-            # 从 Tushare 获取现价
             detail = tushare_client.get_stock_detail(h["ts_code"], trade_date)
-            if detail:
-                h["market_price"] = detail.get("close", h.get("cost_price", 0))
-                # 计算盈亏
+            if detail and detail.get("close"):
+                h["market_price"] = detail.get("close")
                 if h.get("cost_price") and h.get("market_price"):
                     h["pnl_pct"] = round((h["market_price"] - h["cost_price"]) / h["cost_price"] * 100, 2)
-                # 计算市值
                 h["holding_market_value"] = h["holding_qty"] * h["market_price"]
-                # T+1 判断
                 buy_date = datetime.strptime(h["buy_date"], "%Y-%m-%d")
                 today = datetime.now()
                 h["can_sell_today"] = (today - buy_date).days > 0
+                price_updated = True
+                
+                # 更新数据库/文件
+                if DB_AVAILABLE:
+                    try:
+                        await update_holding_in_db(
+                            h["id"],
+                            market_price=h["market_price"],
+                            pnl_pct=h["pnl_pct"],
+                            holding_market_value=h["holding_market_value"],
+                            can_sell_today=h["can_sell_today"]
+                        )
+                    except Exception as e:
+                        print(f"数据库更新失败: {e}")
         except Exception as e:
             print(f"刷新价格失败: {h['ts_code']}, {e}")
     
-    save_holdings(holdings)
+    # 如果数据库不可用，保存到文件
+    if not DB_AVAILABLE and price_updated:
+        save_holdings_to_file(holdings)
+    
     return holdings
 
 
@@ -135,8 +167,7 @@ def refresh_holdings_prices():
 async def get_profile() -> ApiResponse:
     """获取账户概况"""
     try:
-        # 刷新最新价格
-        holdings = refresh_holdings_prices()
+        holdings = await refresh_holdings_prices()
         holdings_obj = [AccountPosition(**h) for h in holdings]
         profile = account_adapter_service.get_profile(MOCK_ACCOUNT, holdings_obj)
 
@@ -151,8 +182,7 @@ async def get_profile() -> ApiResponse:
 async def get_positions() -> ApiResponse:
     """获取持仓明细"""
     try:
-        # 刷新最新价格
-        holdings = refresh_holdings_prices()
+        holdings = await refresh_holdings_prices()
 
         return ApiResponse(
             data={
@@ -168,37 +198,23 @@ async def get_positions() -> ApiResponse:
 async def add_position(request: AddPositionRequest) -> ApiResponse:
     """新增持仓"""
     try:
-        # 标准化股票代码
         ts_code = request.ts_code.upper().strip()
         if not ts_code.endswith(('.SH', '.SZ')):
-            # 自动补齐后缀
-            if ts_code.startswith('6'):
-                ts_code += '.SH'
-            else:
-                ts_code += '.SZ'
+            ts_code += '.SH' if ts_code.startswith('6') else '.SZ'
 
-        # 从 Tushare 获取股票名称
         trade_date = datetime.now().strftime("%Y%m%d")
         detail = tushare_client.get_stock_detail(ts_code, trade_date)
         stock_name = detail.get("stock_name", ts_code) if detail else ts_code
-
-        # 获取现价
         market_price = detail.get("close", request.cost_price) if detail else request.cost_price
 
-        # 生成 ID
-        holdings = load_holdings()
-        new_id = str(int(datetime.now().timestamp() * 1000))
-
-        # 计算市值和盈亏
+        new_id = str(uuid.uuid4())
         holding_market_value = request.holding_qty * market_price
         pnl_pct = round((market_price - request.cost_price) / request.cost_price * 100, 2) if request.cost_price else 0
 
-        # T+1 判断
         buy_date = datetime.strptime(request.buy_date, "%Y-%m-%d")
         today = datetime.now()
         can_sell_today = (today - buy_date).days > 0
 
-        # 新增持仓
         new_holding = {
             "id": new_id,
             "ts_code": ts_code,
@@ -213,8 +229,19 @@ async def add_position(request: AddPositionRequest) -> ApiResponse:
             "holding_reason": request.holding_reason or ""
         }
 
-        holdings.append(new_holding)
-        save_holdings(holdings)
+        if DB_AVAILABLE:
+            try:
+                await save_holding_to_db(new_holding)
+            except Exception as e:
+                print(f"数据库保存失败: {e}")
+                # 回退到文件
+                holdings = load_holdings_from_file()
+                holdings.append(new_holding)
+                save_holdings_to_file(holdings)
+        else:
+            holdings = load_holdings_from_file()
+            holdings.append(new_holding)
+            save_holdings_to_file(holdings)
 
         return ApiResponse(
             data={
@@ -230,16 +257,18 @@ async def add_position(request: AddPositionRequest) -> ApiResponse:
 async def delete_position(position_id: str) -> ApiResponse:
     """删除持仓"""
     try:
-        holdings = load_holdings()
-        
-        # 查找并删除
-        original_len = len(holdings)
-        holdings = [h for h in holdings if str(h.get("id")) != position_id]
-        
-        if len(holdings) == original_len:
-            return ApiResponse(code=404, message="持仓不存在")
-        
-        save_holdings(holdings)
+        if DB_AVAILABLE:
+            try:
+                await delete_holding_from_db(position_id)
+            except Exception as e:
+                print(f"数据库删除失败: {e}")
+                holdings = load_holdings_from_file()
+                holdings = [h for h in holdings if h.get("id") != position_id]
+                save_holdings_to_file(holdings)
+        else:
+            holdings = load_holdings_from_file()
+            holdings = [h for h in holdings if h.get("id") != position_id]
+            save_holdings_to_file(holdings)
 
         return ApiResponse(
             data={"message": "持仓删除成功"}
@@ -257,14 +286,15 @@ async def update_position(
 ) -> ApiResponse:
     """更新持仓"""
     try:
-        holdings = load_holdings()
+        if DB_AVAILABLE:
+            holdings = await get_holdings_from_db()
+        else:
+            holdings = load_holdings_from_file()
         
-        # 查找
         found = False
         for h in holdings:
-            if str(h.get("id")) == position_id:
+            if h.get("id") == position_id:
                 found = True
-                # 更新字段
                 if holding_qty is not None:
                     h["holding_qty"] = holding_qty
                 if cost_price is not None:
@@ -272,7 +302,6 @@ async def update_position(
                 if holding_reason is not None:
                     h["holding_reason"] = holding_reason
                 
-                # 重新计算
                 if h.get("market_price") and h.get("cost_price"):
                     h["pnl_pct"] = round((h["market_price"] - h["cost_price"]) / h["cost_price"] * 100, 2)
                 if h.get("holding_qty") and h.get("market_price"):
@@ -282,7 +311,13 @@ async def update_position(
         if not found:
             return ApiResponse(code=404, message="持仓不存在")
         
-        save_holdings(holdings)
+        if DB_AVAILABLE:
+            try:
+                await update_holding_in_db(position_id, holding_qty=holding_qty, cost_price=cost_price, holding_reason=holding_reason)
+            except Exception as e:
+                save_holdings_to_file(holdings)
+        else:
+            save_holdings_to_file(holdings)
 
         return ApiResponse(
             data={"message": "持仓更新成功"}
@@ -299,7 +334,7 @@ async def adapt_account(
     """账户适配分析"""
     try:
         account = account or MOCK_ACCOUNT
-        holdings = refresh_holdings_prices()
+        holdings = await refresh_holdings_prices()
         holdings_obj = [AccountPosition(**h) for h in holdings]
 
         result = account_adapter_service.adapt(trade_date, account, holdings_obj)
@@ -315,10 +350,10 @@ async def adapt_account(
 async def get_account_status() -> ApiResponse:
     """获取账户状态快速检查"""
     try:
-        holdings = refresh_holdings_prices()
+        holdings = await refresh_holdings_prices()
         holdings_obj = [AccountPosition(**h) for h in holdings]
         profile = account_adapter_service.get_profile(MOCK_ACCOUNT, holdings_obj)
-        result = account_adapter_service.adapt("2026-03-20", MOCK_ACCOUNT, holdings_obj)
+        result = account_adapter_service.adapt("2026-03-21", MOCK_ACCOUNT, holdings_obj)
 
         return ApiResponse(
             data={
