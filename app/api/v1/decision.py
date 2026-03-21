@@ -105,57 +105,6 @@ async def analyze_sell_point(
         return ApiResponse(code=500, message=f"卖点分析失败: {str(e)}")
 
 
-@router.get("/account/profile", response_model=ApiResponse)
-async def get_account_profile(
-) -> ApiResponse:
-    """
-    获取账户概况
-    """
-    try:
-        # 从数据库获取持仓
-        holdings_list = await get_holdings_from_db()
-        holdings = [AccountPosition(**h) for h in holdings_list]
-        
-        # 获取账户信息（从 settings 或数据库）
-        from app.core.config import settings
-        account = AccountInput(
-            total_asset=settings.qingzhou_total_asset,
-            available_cash=settings.qingzhou_available_cash,
-            total_position_ratio=settings.qingzhou_total_position_ratio,
-            holding_count=len(holdings),
-            today_new_buy_count=0
-        )
-        profile = account_adapter_service.get_profile(account, holdings)
-
-        return ApiResponse(
-            data=profile.model_dump()
-        )
-    except Exception as e:
-        return ApiResponse(code=500, message=f"获取账户概况失败: {str(e)}")
-
-
-@router.get("/account/positions", response_model=ApiResponse)
-async def get_positions(
-    trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天")
-) -> ApiResponse:
-    """
-    获取持仓明细
-    """
-    try:
-        # 从数据库获取持仓
-        holdings_list = await get_holdings_from_db()
-        
-        return ApiResponse(
-            data={
-                "trade_date": trade_date or datetime.now().strftime("%Y-%m-%d"),
-                "positions": holdings_list,
-                "total": len(holdings_list)
-            }
-        )
-    except Exception as e:
-        return ApiResponse(code=500, message=f"获取持仓明细失败: {str(e)}")
-
-
 @router.get("/summary", response_model=ApiResponse)
 async def get_decision_summary(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天")
