@@ -1,0 +1,41 @@
+[
+  {
+    "id": "1",
+    "ts_code": "000001.SZ",
+    "stock_name": "平安银行",
+    "holding_qty": 10000,
+    "cost_price": 12.0,
+    "market_price": 12.5,
+    "pnl_pct": 4.17,
+    "holding_market_value": 125000.0,
+    "buy_date": "2026-03-18",
+    "can_sell_today": true,
+    "holding_reason": "银行板块反弹"
+  },
+  {
+    "id": "2",
+    "ts_code": "600519.SH",
+    "stock_name": "贵州茅台",
+    "holding_qty": 100,
+    "cost_price": 1800.0,
+    "market_price": 1850.0,
+    "pnl_pct": 2.78,
+    "holding_market_value": 185000.0,
+    "buy_date": "2026-03-17",
+    "can_sell_today": true,
+    "holding_reason": "白酒龙头"
+  },
+  {
+    "id": "3",
+    "ts_code": "300750.SZ",
+    "stock_name": "宁德时代",
+    "holding_qty": 500,
+    "cost_price": 190.0,
+    "market_price": 185.0,
+    "pnl_pct": -2.63,
+    "holding_market_value": 92500.0,
+    "buy_date": "2026-03-19",
+    "can_sell_today": true,
+    "holding_reason": "新能源反弹"
+  }
+]
