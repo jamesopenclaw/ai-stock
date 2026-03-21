@@ -133,8 +133,12 @@ async def get_stock_detail(
     """
     获取个股详情
     """
-    if not trade_date:
+    # 处理 trade_date，确保是字符串
+    if trade_date is None or not isinstance(trade_date, str):
         trade_date = datetime.now().strftime("%Y-%m-%d")
+    
+    # 确保是字符串
+    trade_date = str(trade_date)
 
     try:
         detail = tushare_client.get_stock_detail(ts_code, trade_date.replace("-", ""))
