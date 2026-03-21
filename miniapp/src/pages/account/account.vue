@@ -50,9 +50,13 @@
     </view>
 
     <view class="card">
-      <view class="card-title">持仓明细 ({{ positions.length }}只)</view>
+      <view class="card-header">
+        <text class="card-title">持仓明细 ({{ positions.length }}只)</text>
+        <view class="add-btn" @click="showAddModal = true">+ 新增持仓</view>
+      </view>
+      
       <view class="position-list">
-        <view v-for="(item, index) in positions" :key="item.ts_code + index" class="position-item" @click="toggleDetail(item)">
+        <view v-for="(item, index) in positions" :key="item.id || index" class="position-item" @click="toggleDetail(item)">
           <view class="position-header">
             <view class="position-info">
               <text class="position-name">{{ item.stock_name }}</text>
@@ -66,7 +70,7 @@
             </view>
           </view>
           <!-- 详情展开 -->
-          <view v-if="expandedItem === item.ts_code" class="position-detail">
+          <view v-if="expandedItem === item.id" class="position-detail">
             <view class="detail-row">
               <text class="detail-label">持仓数量</text>
               <text class="detail-value">{{ item.holding_qty }}股</text>
@@ -103,6 +107,52 @@
               <text class="detail-label">买入理由</text>
               <text class="detail-value">{{ item.holding_reason }}</text>
             </view>
+            <!-- 删除按钮 -->
+            <view class="delete-btn" @click.stop="deletePosition(item.id)">
+              删除持仓
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 新增持仓弹窗 -->
+    <view v-if="showAddModal" class="modal-mask" @click="showAddModal = false">
+      <view class="modal-content" @click.stop>
+        <view class="modal-header">
+          <text class="modal-title">新增持仓</text>
+          <text class="modal-close" @click="showAddModal = false">×</text>
+        </view>
+        <view class="modal-body">
+          <view class="form-item">
+            <text class="form-label">股票代码 *</text>
+            <input class="form-input" v-model="newPosition.ts_code" placeholder="如: 000001" @blur="fetchStockName" />
+          </view>
+          <view class="form-item">
+            <text class="form-label">股票名称</text>
+            <text class="form-value">{{ newPosition.stock_name || '输入代码后自动获取' }}</text>
+          </view>
+          <view class="form-item">
+            <text class="form-label">持仓数量 *</text>
+            <input class="form-input" v-model="newPosition.holding_qty" type="number" placeholder="如: 1000" />
+          </view>
+          <view class="form-item">
+            <text class="form-label">成本价 *</text>
+            <input class="form-input" v-model="newPosition.cost_price" type="digit" placeholder="如: 12.50" />
+          </view>
+          <view class="form-item">
+            <text class="form-label">买入日期 *</text>
+            <picker mode="date" :value="newPosition.buy_date" @change="onDateChange">
+              <view class="picker-value">{{ newPosition.buy_date || '选择日期' }}</view>
+            </picker>
+          </view>
+          <view class="form-item">
+            <text class="form-label">买入理由</text>
+            <input class="form-input" v-model="newPosition.holding_reason" placeholder="可选" />
+          </view>
+          <view class="form-actions">
+            <view class="btn-cancel" @click="showAddModal = false">取消</view>
+            <view class="btn-confirm" @click="addPosition">确定</view>
           </view>
         </view>
       </view>
@@ -123,6 +173,15 @@ const profile = ref(null)
 const status = ref(null)
 const positions = ref([])
 const expandedItem = ref(null)
+const showAddModal = ref(false)
+const newPosition = ref({
+  ts_code: '',
+  stock_name: '',
+  holding_qty: '',
+  cost_price: '',
+  buy_date: '',
+  holding_reason: ''
+})
 
 const formatMoney = (value) => {
   if (!value) return '-'
@@ -130,7 +189,100 @@ const formatMoney = (value) => {
 }
 
 const toggleDetail = (item) => {
-  expandedItem.value = expandedItem.value === item.ts_code ? null : item.ts_code
+  expandedItem.value = expandedItem.value === item.id ? null : item.id
+}
+
+const fetchStockName = async () => {
+  if (!newPosition.value.ts_code) return
+  try {
+    const tsCode = newPosition.value.ts_code.trim()
+    const res = await uni.request({
+      url: 'http://localhost:8000/api/v1/stock/detail/' + tsCode,
+      method: 'GET'
+    })
+    if (res.data && res.data.data && res.data.data.stock) {
+      newPosition.value.stock_name = res.data.data.stock.stock_name
+    }
+  } catch (e) {
+    console.log('获取股票名称失败', e)
+  }
+}
+
+const onDateChange = (e) => {
+  newPosition.value.buy_date = e.detail.value
+}
+
+const addPosition = async () => {
+  if (!newPosition.value.ts_code || !newPosition.value.holding_qty || !newPosition.value.cost_price || !newPosition.value.buy_date) {
+    uni.showToast({ title: '请填写完整信息', icon: 'none' })
+    return
+  }
+  
+  loading.value = true
+  try {
+    const res = await uni.request({
+      url: 'http://localhost:8000/api/v1/account/positions',
+      method: 'POST',
+      data: {
+        ts_code: newPosition.value.ts_code,
+        holding_qty: parseInt(newPosition.value.holding_qty),
+        cost_price: parseFloat(newPosition.value.cost_price),
+        buy_date: newPosition.value.buy_date,
+        holding_reason: newPosition.value.holding_reason
+      }
+    })
+    
+    if (res.data.code === 200) {
+      uni.showToast({ title: '添加成功', icon: 'success' })
+      showAddModal.value = false
+      // 重置表单
+      newPosition.value = {
+        ts_code: '',
+        stock_name: '',
+        holding_qty: '',
+        cost_price: '',
+        buy_date: '',
+        holding_reason: ''
+      }
+      // 刷新数据
+      loadData()
+    } else {
+      uni.showToast({ title: res.data.message || '添加失败', icon: 'none' })
+    }
+  } catch (e) {
+    uni.showToast({ title: '添加失败', icon: 'none' })
+  } finally {
+    loading.value = false
+  }
+}
+
+const deletePosition = async (id) => {
+  uni.showModal({
+    title: '确认删除',
+    content: '确定要删除这条持仓记录吗？',
+    success: async (res) => {
+      if (res.confirm) {
+        loading.value = true
+        try {
+          const res = await uni.request({
+            url: 'http://localhost:8000/api/v1/account/positions/' + id,
+            method: 'DELETE'
+          })
+          
+          if (res.data.code === 200) {
+            uni.showToast({ title: '删除成功', icon: 'success' })
+            loadData()
+          } else {
+            uni.showToast({ title: '删除失败', icon: 'none' })
+          }
+        } catch (e) {
+          uni.showToast({ title: '删除失败', icon: 'none' })
+        } finally {
+          loading.value = false
+        }
+      }
+    }
+  })
 }
 
 const loadData = async () => {
@@ -160,7 +312,10 @@ onMounted(() => {
 .page { padding: 10px; }
 
 .card { background: #fff; border-radius: 8px; padding: 15px; margin-bottom: 10px; }
-.card-title { font-size: 16px; font-weight: bold; margin-bottom: 10px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.card-title { font-size: 16px; font-weight: bold; }
+
+.add-btn { color: #409eff; font-size: 14px; }
 
 .account-info { display: flex; flex-direction: column; }
 .info-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f5f5f5; }
@@ -192,6 +347,27 @@ onMounted(() => {
 .detail-row:last-child { border-bottom: none; }
 .detail-label { font-size: 12px; color: #999; }
 .detail-value { font-size: 14px; color: #333; }
+
+.delete-btn { margin-top: 10px; padding: 8px; text-align: center; color: #f56c6c; border: 1px solid #f56c6c; border-radius: 4px; font-size: 14px; }
+
+/* 弹窗样式 */
+.modal-mask { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 100; display: flex; align-items: center; justify-content: center; }
+.modal-content { background: #fff; border-radius: 8px; width: 85%; max-height: 80%; overflow: auto; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid #eee; }
+.modal-title { font-size: 18px; font-weight: bold; }
+.modal-close { font-size: 24px; color: #999; }
+.modal-body { padding: 15px; }
+
+.form-item { margin-bottom: 15px; }
+.form-label { display: block; font-size: 14px; color: #666; margin-bottom: 5px; }
+.form-input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+.form-value { font-size: 14px; color: #999; }
+.picker-value { padding: 10px; border: 1px solid #ddd; border-radius: 4px; color: #333; }
+
+.form-actions { display: flex; gap: 10px; margin-top: 20px; }
+.btn-cancel, .btn-confirm { flex: 1; padding: 12px; text-align: center; border-radius: 4px; font-size: 14px; }
+.btn-cancel { background: #f5f5f5; color: #666; }
+.btn-confirm { background: #409eff; color: #fff; }
 
 .loading { text-align: center; padding: 30px; color: #999; }
 .text-red { color: #f56c6c; }
