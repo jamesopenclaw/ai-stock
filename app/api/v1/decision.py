@@ -7,6 +7,7 @@ from datetime import datetime
 
 from app.models.schemas import (
     AccountInput,
+    AccountPosition,
     SellPointResponse,
     FullDecisionResponse,
     DecisionSummary,
