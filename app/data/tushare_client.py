@@ -312,19 +312,24 @@ class TushareClient:
             return self._mock_stock_detail(ts_code)
 
         try:
+            # 获取股票基本信息（名称和行业）
+            stock_info = self.pro.stock_basic(ts_code=ts_code)
+            stock_name = ts_code
+            industry = "未知"
+            if not stock_info.empty:
+                stock_name = stock_info.iloc[0].get("name", ts_code)
+                industry = stock_info.iloc[0].get("industry", "未知")
+
+            # 获取日线数据
             df = self.pro.daily(ts_code=ts_code, start_date=trade_date, end_date=trade_date)
             if df.empty:
                 return self._mock_stock_detail(ts_code)
 
             row = df.iloc[0]
 
-            # 获取所属板块
-            stock_info = self.pro.stock_basic(ts_code=ts_code)
-            industry = stock_info.iloc[0].get("industry", "未知") if not stock_info.empty else "未知"
-
             return {
                 "ts_code": ts_code,
-                "stock_name": row.get("name", ts_code),
+                "stock_name": stock_name,
                 "sector_name": industry,
                 "close": float(row.get("close", 0)),
                 "change_pct": float(row.get("pct_chg", 0)),
