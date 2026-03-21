@@ -38,6 +38,17 @@ app.add_middleware(
 async def startup_event():
     """启动事件"""
     logger.info(f"{settings.app_name} v{settings.app_version} 启动中...")
+    
+    # 初始化数据库表
+    try:
+        from app.core.database import engine
+        from app.core.database import Base
+        from app.models.holding import Holding
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("数据库表初始化完成")
+    except Exception as e:
+        logger.warning(f"数据库初始化失败: {e}")
 
 
 @app.on_event("shutdown")

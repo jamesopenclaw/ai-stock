@@ -48,7 +48,7 @@ async def get_holdings_from_db() -> List[dict]:
     """从数据库获取持仓"""
     async with async_session_factory() as session:
         from sqlalchemy import select
-        result = await session.execute(select(Holding)
+        result = await session.execute(select(Holding))
         holdings = result.scalars().all()
         return [h.to_dict() for h in holdings]
 
@@ -68,7 +68,7 @@ async def delete_holding_from_db(holding_id: str):
     """从数据库删除持仓"""
     async with async_session_factory() as session:
         from sqlalchemy import delete, select
-        result = await session.execute(select(Holding).where(Holding.id == holding_id)
+        result = await session.execute(select(Holding).where(Holding.id == holding_id))
         holding = result.scalar_one_or_none()
         if holding:
             await session.delete(holding)
@@ -94,9 +94,7 @@ class AddPositionRequest(BaseModel):
     holding_reason: Optional[str] = Body(None, description="买入理由")
 
 
-# 启动时初始化数据库
-import asyncio
-asyncio.get_event_loop().run_until_complete(init_db())
+# 数据库初始化（在应用启动时调用）
 
 
 async def refresh_holdings_prices():
