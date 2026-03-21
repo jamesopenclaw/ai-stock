@@ -365,11 +365,30 @@ class TushareClient:
 
     def _mock_stock_detail(self, ts_code: str) -> Dict:
         """模拟个股详情"""
-        stocks = self._mock_stock_list()
-        for s in stocks:
-            if s["ts_code"] == ts_code:
-                return s
-        # 未找到时返回包含代码的默认数据
+        # 先尝试从 Tushare 获取
+        try:
+            stock_info = self.pro.stock_basic(ts_code=ts_code)
+            if not stock_info.empty:
+                stock_name = stock_info.iloc[0].get("name", ts_code)
+                industry = stock_info.iloc[0].get("industry", "未知")
+                return {
+                    "ts_code": ts_code,
+                    "stock_name": stock_name,
+                    "sector_name": industry,
+                    "close": 0.0,
+                    "change_pct": 0.0,
+                    "turnover_rate": 0.0,
+                    "amount": 0,
+                    "vol_ratio": 1.0,
+                    "high": 0.0,
+                    "low": 0.0,
+                    "open": 0.0,
+                    "pre_close": 0.0,
+                }
+        except:
+            pass
+        
+        # Tushare 不可用时，返回包含代码的默认数据（不再返回其他股票的数据）
         return {
             "ts_code": ts_code,
             "stock_name": ts_code,
