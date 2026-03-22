@@ -3,61 +3,410 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>卖点分析</span>
+          <div class="card-header-title">
+            <span>卖点分析</span>
+            <span v-if="displayDate" class="header-date">{{ displayDate }}</span>
+          </div>
           <el-button @click="loadData" :loading="loading">刷新</el-button>
         </div>
       </template>
-      
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="建议卖出" name="sell">
-          <el-table :data="sellData.sell_positions" style="width: 100%">
-            <el-table-column prop="ts_code" label="代码" width="100" />
-            <el-table-column prop="stock_name" label="名称" width="100" />
-            <el-table-column prop="sell_point_type" label="卖点类型" width="100" />
-            <el-table-column prop="sell_trigger_cond" label="触发条件" />
-            <el-table-column prop="sell_reason" label="原因" />
-            <el-table-column prop="sell_priority" label="优先级" width="80" />
-          </el-table>
-        </el-tab-pane>
-        
-        <el-tab-pane label="建议减仓" name="reduce">
-          <el-table :data="sellData.reduce_positions" style="width: 100%">
-            <el-table-column prop="ts_code" label="代码" width="100" />
-            <el-table-column prop="stock_name" label="名称" width="100" />
-            <el-table-column prop="sell_point_type" label="类型" width="100" />
-            <el-table-column prop="sell_trigger_cond" label="触发条件" />
-            <el-table-column prop="sell_reason" label="原因" />
-          </el-table>
-        </el-tab-pane>
-        
-        <el-tab-pane label="持有观察" name="hold">
-          <el-table :data="sellData.hold_positions" style="width: 100%">
-            <el-table-column prop="ts_code" label="代码" width="100" />
-            <el-table-column prop="stock_name" label="名称" width="100" />
-            <el-table-column prop="sell_point_type" label="类型" width="100" />
-            <el-table-column prop="sell_comment" label="说明" />
-          </el-table>
-        </el-tab-pane>
-      </el-tabs>
+
+      <el-skeleton v-if="loading" :rows="8" animated />
+      <template v-else>
+        <div class="decision-overview">
+          <div class="overview-copy">
+            <div class="overview-title">{{ sellHeadline }}</div>
+            <div class="overview-desc">{{ sellGuidance }}</div>
+          </div>
+          <div class="overview-stats">
+            <div class="stat-card stat-sell">
+              <span class="stat-label">建议卖出</span>
+              <strong class="stat-value">{{ sellData.sell_positions?.length || 0 }}</strong>
+              <span class="stat-tip">优先处理</span>
+            </div>
+            <div class="stat-card stat-reduce">
+              <span class="stat-label">建议减仓</span>
+              <strong class="stat-value">{{ sellData.reduce_positions?.length || 0 }}</strong>
+              <span class="stat-tip">先降风险</span>
+            </div>
+            <div class="stat-card stat-hold">
+              <span class="stat-label">持有观察</span>
+              <strong class="stat-value">{{ sellData.hold_positions?.length || 0 }}</strong>
+              <span class="stat-tip">继续跟踪</span>
+            </div>
+          </div>
+          <div class="overview-rules">
+            <div v-for="rule in sellChecklist" :key="rule" class="rule-chip">{{ rule }}</div>
+          </div>
+          <div v-if="topActions.length" class="top-actions">
+            <div class="top-actions-title">今天先处理</div>
+            <div class="top-actions-list">
+              <div v-for="item in topActions" :key="item.ts_code" class="top-action-item">
+                <span class="top-action-rank">{{ item.rank }}</span>
+                <div class="top-action-main">
+                  <strong>{{ item.orderLabel }}{{ item.stock_name }}</strong>
+                  <span class="top-action-meta">{{ item.sell_signal_tag }} / {{ item.sell_priority }}优先 / {{ formatSignedPct(item.pnl_pct) }}</span>
+                </div>
+                <div class="top-action-trigger">
+                  <span class="top-action-trigger-label">动手条件</span>
+                  <span class="top-action-reason">{{ topActionReason(item) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <el-tabs v-model="activeTab">
+          <el-tab-pane name="sell">
+            <template #label>
+              <span>建议卖出 <em class="tab-count">{{ sellData.sell_positions?.length || 0 }}</em></span>
+            </template>
+            <el-empty v-if="!sellData.sell_positions?.length" description="暂无卖出建议" />
+            <div v-else class="signal-grid">
+              <article v-for="point in sellData.sell_positions" :key="point.ts_code" class="signal-card signal-card-sell">
+                <div class="signal-card-header">
+                  <div>
+                    <div class="signal-stock">{{ point.stock_name }}</div>
+                    <div class="signal-code">{{ point.ts_code }}</div>
+                  </div>
+                  <div class="signal-badges">
+                    <el-tag size="small" type="danger">{{ point.sell_point_type }}</el-tag>
+                    <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
+                  </div>
+                </div>
+
+                <div class="signal-intent signal-intent-sell">
+                  {{ sellActionLine(point) }}
+                </div>
+
+                <div class="quote-strip">
+                  <div class="metric-card">
+                    <span class="metric-label">现价 / 成本</span>
+                    <strong class="metric-value">{{ formatPrice(point.market_price) }} / {{ formatPrice(point.cost_price) }}</strong>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">浮盈亏</span>
+                    <strong :class="['metric-value', pnlClass(point.pnl_pct)]">{{ formatSignedPct(point.pnl_pct) }}</strong>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">持仓 / 天数</span>
+                    <strong class="metric-value">{{ formatQty(point.holding_qty) }} / {{ formatDays(point.holding_days) }}</strong>
+                  </div>
+                </div>
+
+                <div class="condition-section">
+                  <div class="section-kicker">执行清单</div>
+                  <div class="condition-panel-grid condition-panel-grid-watch">
+                    <section class="condition-panel condition-panel-trigger">
+                      <div class="panel-head">
+                        <span class="panel-step">1</span>
+                        <div>
+                          <div class="panel-title">动作</div>
+                          <div class="panel-subtitle">这是系统建议你优先做的事</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="condition-title">{{ point.sell_reason }}</div>
+                      </div>
+                    </section>
+
+                    <section class="condition-panel condition-panel-invalid">
+                      <div class="panel-head">
+                        <span class="panel-step">2</span>
+                        <div>
+                          <div class="panel-title">执行条件</div>
+                          <div class="panel-subtitle">满足这个条件时就动手</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="condition-title">{{ point.sell_trigger_cond }}</div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+
+                <div class="signal-footer">
+                  <span>{{ point.sell_comment || '-' }}</span>
+                  <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                </div>
+              </article>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane name="reduce">
+            <template #label>
+              <span>建议减仓 <em class="tab-count">{{ sellData.reduce_positions?.length || 0 }}</em></span>
+            </template>
+            <el-empty v-if="!sellData.reduce_positions?.length" description="暂无减仓建议" />
+            <div v-else class="signal-grid">
+              <article v-for="point in sellData.reduce_positions" :key="point.ts_code" class="signal-card signal-card-reduce">
+                <div class="signal-card-header">
+                  <div>
+                    <div class="signal-stock">{{ point.stock_name }}</div>
+                    <div class="signal-code">{{ point.ts_code }}</div>
+                  </div>
+                  <div class="signal-badges">
+                    <el-tag size="small" type="warning">{{ point.sell_point_type }}</el-tag>
+                    <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
+                  </div>
+                </div>
+
+                <div class="signal-intent signal-intent-reduce">
+                  {{ reduceActionLine(point) }}
+                </div>
+
+                <div class="quote-strip">
+                  <div class="metric-card">
+                    <span class="metric-label">现价 / 成本</span>
+                    <strong class="metric-value">{{ formatPrice(point.market_price) }} / {{ formatPrice(point.cost_price) }}</strong>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">浮盈亏</span>
+                    <strong :class="['metric-value', pnlClass(point.pnl_pct)]">{{ formatSignedPct(point.pnl_pct) }}</strong>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">持仓 / 天数</span>
+                    <strong class="metric-value">{{ formatQty(point.holding_qty) }} / {{ formatDays(point.holding_days) }}</strong>
+                  </div>
+                </div>
+
+                <div class="condition-section">
+                  <div class="section-kicker">观察重点</div>
+                  <div class="condition-panel-grid condition-panel-grid-watch">
+                    <section class="condition-panel condition-panel-trigger">
+                      <div class="panel-head">
+                        <span class="panel-step">1</span>
+                        <div>
+                          <div class="panel-title">先做</div>
+                          <div class="panel-subtitle">先把风险收下来</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="condition-title">{{ point.sell_reason }}</div>
+                      </div>
+                    </section>
+
+                    <section class="condition-panel condition-panel-confirm">
+                      <div class="panel-head">
+                        <span class="panel-step">2</span>
+                        <div>
+                          <div class="panel-title">执行条件</div>
+                          <div class="panel-subtitle">这个条件到了就减仓</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="condition-title">{{ point.sell_trigger_cond }}</div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+
+                <div class="signal-footer">
+                  <span>{{ point.sell_comment || '-' }}</span>
+                  <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                </div>
+              </article>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane name="hold">
+            <template #label>
+              <span>持有观察 <em class="tab-count">{{ sellData.hold_positions?.length || 0 }}</em></span>
+            </template>
+            <el-empty v-if="!sellData.hold_positions?.length" description="暂无持有观察项" />
+            <div v-else class="signal-grid">
+              <article v-for="point in sellData.hold_positions" :key="point.ts_code" class="signal-card signal-card-hold">
+                <div class="signal-card-header">
+                  <div>
+                    <div class="signal-stock">{{ point.stock_name }}</div>
+                    <div class="signal-code">{{ point.ts_code }}</div>
+                  </div>
+                  <div class="signal-badges">
+                    <el-tag size="small" type="success">{{ point.sell_signal_tag }}</el-tag>
+                    <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
+                  </div>
+                </div>
+
+                <div class="signal-intent signal-intent-hold">
+                  {{ holdActionLine(point) }}
+                </div>
+
+                <div class="quote-strip">
+                  <div class="metric-card">
+                    <span class="metric-label">现价 / 成本</span>
+                    <strong class="metric-value">{{ formatPrice(point.market_price) }} / {{ formatPrice(point.cost_price) }}</strong>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">浮盈亏</span>
+                    <strong :class="['metric-value', pnlClass(point.pnl_pct)]">{{ formatSignedPct(point.pnl_pct) }}</strong>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">持仓 / 天数</span>
+                    <strong class="metric-value">{{ formatQty(point.holding_qty) }} / {{ formatDays(point.holding_days) }}</strong>
+                  </div>
+                </div>
+
+                <div class="condition-section">
+                  <div class="section-kicker">观察重点</div>
+                  <div class="condition-panel-grid condition-panel-grid-watch">
+                    <section class="condition-panel condition-panel-confirm">
+                      <div class="panel-head">
+                        <span class="panel-step">1</span>
+                        <div>
+                          <div class="panel-title">说明</div>
+                          <div class="panel-subtitle">当前先不用急着处理</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="condition-title">{{ point.sell_comment || point.sell_reason }}</div>
+                      </div>
+                    </section>
+
+                    <section class="condition-panel condition-panel-trigger">
+                      <div class="panel-head">
+                        <span class="panel-step">2</span>
+                        <div>
+                          <div class="panel-title">后续处理</div>
+                          <div class="panel-subtitle">继续跟踪这个条件</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="condition-title">{{ point.sell_trigger_cond }}</div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+
+                <div class="signal-footer">
+                  <span>{{ point.sell_reason || '-' }}</span>
+                  <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                </div>
+              </article>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </template>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
 
 const loading = ref(false)
 const activeTab = ref('sell')
+const displayDate = ref('')
 const sellData = ref({ sell_positions: [], reduce_positions: [], hold_positions: [] })
+
+const sellHeadline = computed(() => {
+  if (sellData.value.sell_positions?.length) return '先处理明确该卖的持仓，再考虑减仓和继续持有的部分'
+  if (sellData.value.reduce_positions?.length) return '当前以降风险为主，先把该减的仓位收回来'
+  return '当前没有强制离场压力，以持有观察为主'
+})
+
+const sellGuidance = computed(() => {
+  if (sellData.value.sell_positions?.length) return '卖出区是优先级最高的动作，先看原因，再按执行条件动手，不要和减仓票混在一起处理。'
+  if (sellData.value.reduce_positions?.length) return '减仓区适合先做仓位调整，不代表整笔持仓逻辑完全结束。'
+  return '持有观察区代表暂时不急着动，但你仍然需要盯住后续处理条件。'
+})
+
+const sellChecklist = computed(() => {
+  if (sellData.value.sell_positions?.length) {
+    return ['先清高优先级', '理由失效先走', '别把减仓票当卖出票处理']
+  }
+  if (sellData.value.reduce_positions?.length) {
+    return ['先把风险降下来', '反弹无力就执行', '减仓后再看结构是否修复']
+  }
+  return ['当前先观察', '留意后续处理条件', '不要因为无动作就忽视风险']
+})
+
+const topActions = computed(() => {
+  const ordered = [
+    ...(sellData.value.sell_positions || []),
+    ...(sellData.value.reduce_positions || []),
+    ...(sellData.value.hold_positions || []),
+  ]
+  return ordered.slice(0, 3).map((item, index) => ({
+    ...item,
+    rank: index + 1,
+    orderLabel: orderLabel(index, item.sell_signal_tag),
+  }))
+})
+
+const getLocalDate = () => {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+const priorityTagType = (p) => {
+  if (p === '高') return 'danger'
+  if (p === '中') return 'warning'
+  return 'info'
+}
+
+const pnlClass = (value) => {
+  if (value === null || value === undefined) return ''
+  if (Number(value) > 0) return 'text-red'
+  if (Number(value) < 0) return 'text-green'
+  return 'text-neutral'
+}
+
+const formatPrice = (value) => {
+  if (value === null || value === undefined) return '-'
+  return Number(value).toFixed(2)
+}
+
+const formatSignedPct = (value) => {
+  if (value === null || value === undefined) return '-'
+  const num = Number(value)
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}%`
+}
+
+const formatQty = (value) => {
+  if (value === null || value === undefined) return '-'
+  return `${value}股`
+}
+
+const formatDays = (value) => {
+  if (value === null || value === undefined) return '-'
+  return `${value}天`
+}
+
+const sellActionLine = (point) => `优先处理：${point.sell_reason}。`
+const reduceActionLine = (point) => `先降风险：${point.sell_reason}。`
+const holdActionLine = (point) => `继续跟踪：${point.sell_comment || point.sell_reason}。`
+const topActionReason = (point) => shortTriggerText(point.sell_trigger_cond || point.sell_reason || '-')
+
+const shortTriggerText = (text) => {
+  if (!text) return '-'
+  return String(text)
+    .replace(/^次日/, '下个交易时段')
+    .replace(/^日内/, '盘中')
+    .replace(/^收盘前/, '尾盘')
+}
+
+const orderLabel = (index, signal) => {
+  const prefix = index === 0 ? '先' : index === 1 ? '再' : '最后'
+  if (signal === '卖出') return `${prefix}卖出 `
+  if (signal === '减仓') return `${prefix}减仓 `
+  return `${prefix}观察 `
+}
 
 const loadData = async () => {
   loading.value = true
   try {
-    const tradeDate = new Date().toISOString().split('T')[0]
+    const tradeDate = getLocalDate()
+    displayDate.value = tradeDate
     const res = await decisionApi.sellPoint(tradeDate)
     sellData.value = res.data.data
+    if (sellData.value.sell_positions?.length) activeTab.value = 'sell'
+    else if (sellData.value.reduce_positions?.length) activeTab.value = 'reduce'
+    else activeTab.value = 'hold'
   } catch (error) {
     ElMessage.error('加载失败')
   } finally {
@@ -66,10 +415,419 @@ const loadData = async () => {
 }
 
 onMounted(() => {
+  displayDate.value = getLocalDate()
   loadData()
 })
 </script>
 
 <style scoped>
-.card-header { display: flex; justify-content: space-between; align-items: center; }
+.sell-view {
+  min-height: 100%;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.card-header-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header-date {
+  font-size: 13px;
+  color: var(--color-text-sec);
+  letter-spacing: 0.02em;
+  font-weight: 400;
+}
+
+.decision-overview {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 24px;
+  padding: 20px;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 122, 127, 0.1), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.overview-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.overview-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.overview-desc {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.overview-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.overview-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.top-actions {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.top-actions-title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
+}
+
+.top-actions-list {
+  display: grid;
+  gap: 8px;
+}
+
+.top-action-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) minmax(240px, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.top-action-rank {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #ff7a7f, #d84d58);
+}
+
+.top-action-main {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+}
+
+.top-action-meta {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.top-action-trigger {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  align-content: center;
+}
+
+.top-action-trigger-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
+}
+
+.top-action-reason {
+  color: var(--color-text-pri);
+  font-size: 14px;
+  line-height: 1.6;
+  font-weight: 500;
+}
+
+.rule-chip {
+  padding: 8px 12px;
+  border-radius: 999px;
+  color: var(--color-text-sec);
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stat-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.stat-value {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.stat-tip {
+  color: var(--color-text-sec);
+  font-size: 13px;
+}
+
+.stat-sell .stat-value {
+  color: #ff7a7f;
+}
+
+.stat-reduce .stat-value {
+  color: #f3c24d;
+}
+
+.stat-hold .stat-value {
+  color: #44d19f;
+}
+
+.tab-count {
+  font-style: normal;
+  color: var(--color-text-sec);
+  margin-left: 4px;
+}
+
+.signal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.signal-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.signal-card-sell {
+  box-shadow: inset 0 1px 0 rgba(255, 122, 127, 0.16);
+}
+
+.signal-card-reduce {
+  box-shadow: inset 0 1px 0 rgba(243, 194, 77, 0.16);
+}
+
+.signal-card-hold {
+  box-shadow: inset 0 1px 0 rgba(68, 209, 159, 0.16);
+}
+
+.signal-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.signal-stock {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.signal-code {
+  font-size: 13px;
+  color: var(--color-text-sec);
+}
+
+.signal-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.signal-intent {
+  padding: 12px 14px;
+  border-radius: 14px;
+  line-height: 1.6;
+}
+
+.signal-intent-sell {
+  background: rgba(255, 122, 127, 0.08);
+  border: 1px solid rgba(255, 122, 127, 0.14);
+}
+
+.signal-intent-reduce {
+  background: rgba(243, 194, 77, 0.08);
+  border: 1px solid rgba(243, 194, 77, 0.16);
+}
+
+.signal-intent-hold {
+  background: rgba(68, 209, 159, 0.08);
+  border: 1px solid rgba(68, 209, 159, 0.14);
+}
+
+.quote-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metric-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(9, 14, 23, 0.35);
+}
+
+.metric-label {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.metric-value {
+  font-size: 1.15rem;
+}
+
+.condition-section {
+  display: grid;
+  gap: 10px;
+}
+
+.section-kicker {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
+}
+
+.condition-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.condition-panel-grid-watch {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.condition-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  min-width: 0;
+}
+
+.condition-panel-trigger {
+  background: linear-gradient(180deg, rgba(92, 122, 255, 0.06), rgba(255, 255, 255, 0.02));
+}
+
+.condition-panel-confirm {
+  background: linear-gradient(180deg, rgba(68, 209, 159, 0.06), rgba(255, 255, 255, 0.02));
+}
+
+.condition-panel-invalid {
+  background: linear-gradient(180deg, rgba(255, 122, 127, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.panel-head {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.panel-step {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+  flex-shrink: 0;
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.panel-subtitle {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+
+.panel-body {
+  min-width: 0;
+}
+
+.condition-title {
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+.signal-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  color: var(--color-text-sec);
+  font-size: 13px;
+}
+
+.footer-flag {
+  white-space: nowrap;
+  color: #8ab4ff;
+}
+
+@media (max-width: 900px) {
+  .overview-stats,
+  .quote-strip,
+  .condition-panel-grid,
+  .condition-panel-grid-watch {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-rules {
+    flex-direction: column;
+  }
+
+  .top-action-item {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .signal-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 </style>

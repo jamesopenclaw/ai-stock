@@ -21,6 +21,7 @@ class AccountAdapterService:
     POSITION_HIGH = 0.8   # 高仓位
     POSITION_MEDIUM = 0.6  # 中仓位
     POSITION_LOW = 0.4    # 低仓位
+    AVAILABLE_CASH_MIN = 5000  # 最低可用资金
 
     # 持仓数量阈值
     HOLDING_COUNT_HIGH = 5  # 持仓过多
@@ -36,7 +37,8 @@ class AccountAdapterService:
         self,
         trade_date: str,
         account: AccountInput,
-        holdings: List[AccountPosition] = None
+        holdings: List[AccountPosition] = None,
+        market_env=None,
     ) -> AccountOutput:
         """
         账户适配分析
@@ -52,7 +54,7 @@ class AccountAdapterService:
         holdings = holdings or []
 
         # 获取市场环境
-        market_env = self.market_env_service.get_current_env(trade_date)
+        market_env = market_env or self.market_env_service.get_current_env(trade_date)
 
         # 计算各项指标
         position_ratio = account.total_position_ratio

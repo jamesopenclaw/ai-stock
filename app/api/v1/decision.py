@@ -17,48 +17,28 @@ from app.services.sell_point import sell_point_service
 from app.services.account_adapter import account_adapter_service
 from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
-from app.services.stock_filter import stock_filter_service
+from app.services.stock_filter import stock_filter_service, merge_holdings_into_candidate_stocks
 from app.services.buy_point import buy_point_service
 from app.data.tushare_client import tushare_client
 from app.models.schemas import StockInput
-from app.models.holding import Holding
-from app.core.database import async_session_factory
-from sqlalchemy import select
+from app.services.decision_context import decision_context_service
+from app.services.review_snapshot import review_snapshot_service
 
 router = APIRouter()
 
 
-async def get_holdings_from_db() -> list:
-    """从数据库获取持仓"""
-    from app.data.tushare_client import tushare_client
-    
-    async with async_session_factory() as session:
-        result = await session.execute(select(Holding))
-        holdings = result.scalars().all()
-        holdings_list = [h.to_dict() for h in holdings]
-        
-        # 刷新现价
-        for h in holdings_list:
-            try:
-                detail = tushare_client.get_stock_detail(h["ts_code"], datetime.now().strftime("%Y%m%d"))
-                if detail and detail.get("close"):
-                    h["market_price"] = detail.get("close")
-                    if h.get("cost_price"):
-                        h["pnl_pct"] = round((h["market_price"] - h["cost_price"]) / h["cost_price"] * 100, 2)
-                    if h.get("holding_qty"):
-                        h["holding_market_value"] = h["holding_qty"] * h["market_price"]
-            except:
-                pass
-        
-        return holdings_list
+async def get_holdings_from_db(trade_date: Optional[str] = None) -> list:
+    """兼容旧调用，委托给共享上下文服务。"""
+    return await decision_context_service.get_holdings_from_db(trade_date)
 
 
-def refresh_holdings_price(holdings: list):
+def refresh_holdings_price(holdings: list, trade_date: Optional[str] = None):
     """刷新持仓现价（内存中）"""
     from app.data.tushare_client import tushare_client
+    compact_date = (trade_date or datetime.now().strftime("%Y-%m-%d")).replace("-", "")
     for h in holdings:
         try:
-            detail = tushare_client.get_stock_detail(h["ts_code"], datetime.now().strftime("%Y%m%d"))
+            detail = tushare_client.get_stock_detail(h["ts_code"], compact_date)
             if detail and detail.get("close"):
                 h["market_price"] = detail.get("close")
                 if h.get("cost_price"):
@@ -67,6 +47,25 @@ def refresh_holdings_price(holdings: list):
                     h["holding_market_value"] = h["holding_qty"] * h["market_price"]
         except:
             pass
+
+
+async def build_account_input_from_holdings(holdings: list, trade_date: Optional[str] = None) -> AccountInput:
+    """兼容旧调用，委托给共享上下文服务。"""
+    return await decision_context_service.build_account_input_from_holdings(holdings, trade_date)
+
+
+def build_risk_alerts(market_env, account: AccountInput, buy_analysis, holdings) -> list:
+    """构建 PRD 9.2 风控提醒。"""
+    alerts = []
+    if market_env.market_env_tag.value == "防守" and account.today_new_buy_count >= 2:
+        alerts.append("市场防守期仍频繁开仓，建议降频")
+    if market_env.market_env_tag.value == "防守" and len(buy_analysis.available_buy_points) > 0:
+        alerts.append("弱市仍出现可买信号，请提高买点门槛")
+    if account.today_new_buy_count >= 3:
+        alerts.append("当日开仓次数偏高，注意节奏风险")
+    if any(h.pnl_pct < -3 for h in holdings) and account.total_position_ratio >= 0.5:
+        alerts.append("弱票未充分处理前不宜继续加新仓")
+    return alerts
 
 
 @router.get("/sell-point", response_model=ApiResponse)
@@ -85,12 +84,19 @@ async def analyze_sell_point(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        # 从数据库获取持仓
-        holdings_list = await get_holdings_from_db()
-        holdings = [AccountPosition(**h) for h in holdings_list]
+        context = await decision_context_service.build_context(
+            trade_date,
+            top_gainers=100,
+            include_holdings=False,
+        )
 
         # 卖点分析
-        result = sell_point_service.analyze(trade_date, holdings)
+        result = sell_point_service.analyze(
+            trade_date,
+            context.holdings,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+        )
 
         return ApiResponse(
             data={
@@ -121,34 +127,53 @@ async def get_decision_summary(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        # 获取市场环境
-        market_env = market_env_service.get_current_env(trade_date)
-
-        # 从数据库获取持仓
-        holdings_list = await get_holdings_from_db()
-        holdings = [AccountPosition(**h) for h in holdings_list]
-        
-        # 获取账户信息
-        from app.core.config import settings
-        account = AccountInput(
-            total_asset=settings.qingzhou_total_asset,
-            available_cash=settings.qingzhou_available_cash,
-            total_position_ratio=settings.qingzhou_total_position_ratio,
-            holding_count=len(holdings),
-            today_new_buy_count=0
+        context = await decision_context_service.build_context(
+            trade_date,
+            top_gainers=100,
+            include_holdings=False,
         )
-        account_output = account_adapter_service.adapt(trade_date, account, holdings)
+        scored_stocks = stock_filter_service.filter_with_context(
+            trade_date,
+            context.stocks,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+        )
+        account_output = account_adapter_service.adapt(
+            trade_date,
+            context.account,
+            context.holdings,
+            market_env=context.market_env,
+        )
+        stock_pools = stock_filter_service.classify_pools(
+            trade_date,
+            context.stocks,
+            context.holdings_list,
+            context.account,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            scored_stocks=scored_stocks,
+        )
+        buy_analysis = buy_point_service.analyze(
+            trade_date,
+            context.stocks,
+            context.account,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            scored_stocks=scored_stocks,
+            stock_pools=stock_pools,
+        )
+        risk_alerts = build_risk_alerts(context.market_env, context.account, buy_analysis, context.holdings)
 
         # 生成摘要
         summary = _generate_summary(
             trade_date,
-            market_env,
+            context.market_env,
             account_output,
-            holdings
+            context.holdings
         )
 
         return ApiResponse(
-            data=summary.model_dump()
+            data={**summary.model_dump(), "risk_alerts": risk_alerts}
         )
     except Exception as e:
         return ApiResponse(code=500, message=f"获取执行摘要失败: {str(e)}")
@@ -168,25 +193,35 @@ async def analyze_buy_point(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        stock_list = tushare_client.get_stock_list(trade_date.replace("-", ""), limit=limit)
-        stocks = [
-            StockInput(
-                ts_code=s["ts_code"],
-                stock_name=s["stock_name"],
-                sector_name=s.get("sector_name", "未知"),
-                close=s["close"],
-                change_pct=s["change_pct"],
-                turnover_rate=s["turnover_rate"],
-                amount=s["amount"],
-                vol_ratio=s.get("vol_ratio"),
-                high=s["high"],
-                low=s["low"],
-                open=s["open"],
-                pre_close=s["pre_close"],
-            )
-            for s in stock_list
-        ]
-        result = buy_point_service.analyze(trade_date, stocks)
+        context = await decision_context_service.build_context(
+            trade_date,
+            top_gainers=max(100, min(limit, 200)),
+            include_holdings=False,
+        )
+        scored_stocks = stock_filter_service.filter_with_context(
+            trade_date,
+            context.stocks,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+        )
+        stock_pools = stock_filter_service.classify_pools(
+            trade_date,
+            context.stocks,
+            context.holdings_list,
+            context.account,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            scored_stocks=scored_stocks,
+        )
+        result = buy_point_service.analyze(
+            trade_date,
+            context.stocks,
+            context.account,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            scored_stocks=scored_stocks,
+            stock_pools=stock_pools,
+        )
 
         return ApiResponse(
             data={
@@ -215,71 +250,81 @@ async def full_decision_analyze(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        # 1. 市场环境
-        market_env = market_env_service.get_current_env(trade_date)
-
-        # 2. 板块扫描
-        sector_scan = sector_scan_service.scan(trade_date)
-
-        # 3. 个股筛选/三池
-        stock_list = tushare_client.get_stock_list(trade_date.replace("-", ""), limit=50)
-        stocks = [
-            StockInput(
-                ts_code=s["ts_code"],
-                stock_name=s["stock_name"],
-                sector_name=s.get("sector_name", "未知"),
-                close=s["close"],
-                change_pct=s["change_pct"],
-                turnover_rate=s["turnover_rate"],
-                amount=s["amount"],
-                vol_ratio=s.get("vol_ratio"),
-                high=s["high"],
-                low=s["low"],
-                open=s["open"],
-                pre_close=s["pre_close"],
-            )
-            for s in stock_list
-        ]
-        # 从数据库获取持仓
-        holdings_list = await get_holdings_from_db()
-        holdings = [AccountPosition(**h) for h in holdings_list]
-        
-        # 获取账户信息
-        from app.core.config import settings
-        account = AccountInput(
-            total_asset=settings.qingzhou_total_asset,
-            available_cash=settings.qingzhou_available_cash,
-            total_position_ratio=settings.qingzhou_total_position_ratio,
-            holding_count=len(holdings),
-            today_new_buy_count=0
+        context = await decision_context_service.build_context(
+            trade_date,
+            top_gainers=200,
+            include_holdings=True,
         )
-        
-        stock_pools = stock_filter_service.classify_pools(trade_date, stocks, holdings_list)
+        scored_stocks = stock_filter_service.filter_with_context(
+            trade_date,
+            context.stocks,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+        )
+
+        stock_pools = stock_filter_service.classify_pools(
+            trade_date,
+            context.stocks,
+            context.holdings_list,
+            context.account,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            scored_stocks=scored_stocks,
+        )
 
         # 4. 买点分析
-        buy_analysis = buy_point_service.analyze(trade_date, stocks)
+        buy_analysis = buy_point_service.analyze(
+            trade_date,
+            context.stocks,
+            context.account,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            scored_stocks=scored_stocks,
+            stock_pools=stock_pools,
+        )
 
         # 5. 卖点分析
-        sell_analysis = sell_point_service.analyze(trade_date, holdings)
+        sell_analysis = sell_point_service.analyze(
+            trade_date,
+            context.holdings,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+        )
+        stock_pools = stock_filter_service.attach_sell_analysis(stock_pools, sell_analysis)
 
         # 6. 账户适配
-        account_fit = account_adapter_service.adapt(trade_date, account, holdings)
+        account_fit = account_adapter_service.adapt(
+            trade_date,
+            context.account,
+            context.holdings,
+            market_env=context.market_env,
+        )
 
         # 7. 执行摘要
-        summary = _generate_summary(trade_date, market_env, account_fit, holdings)
+        summary = _generate_summary(trade_date, context.market_env, account_fit, context.holdings)
+        risk_alerts = build_risk_alerts(context.market_env, context.account, buy_analysis, context.holdings)
+        snapshot_count = await review_snapshot_service.save_analysis_snapshot(
+            trade_date,
+            stock_pools,
+            buy_analysis,
+        )
 
         return ApiResponse(
             data={
                 "trade_date": trade_date,
                 "market_env": {
-                    "market_env_tag": market_env.market_env_tag.value,
-                    "breakout_allowed": market_env.breakout_allowed,
-                    "risk_level": market_env.risk_level.value,
-                    "market_comment": market_env.market_comment
+                    "market_env_tag": context.market_env.market_env_tag.value,
+                    "breakout_allowed": context.market_env.breakout_allowed,
+                    "risk_level": context.market_env.risk_level.value,
+                    "market_comment": context.market_env.market_comment
                 },
                 "sector_scan": {
-                    "mainline_count": len(sector_scan.mainline_sectors),
-                    "sub_mainline_count": len(sector_scan.sub_mainline_sectors),
+                    "mainline_sectors": [s.model_dump() for s in context.sector_scan.mainline_sectors[:5]],
+                    "sub_mainline_sectors": [s.model_dump() for s in context.sector_scan.sub_mainline_sectors[:5]],
+                    "follow_sectors": [s.model_dump() for s in context.sector_scan.follow_sectors[:10]],
+                    "trash_sectors": [s.model_dump() for s in context.sector_scan.trash_sectors[:10]],
+                    "mainline_count": len(context.sector_scan.mainline_sectors),
+                    "sub_mainline_count": len(context.sector_scan.sub_mainline_sectors),
                 },
                 "stock_pools": {
                     "market_watch_count": len(stock_pools.market_watch_pool),
@@ -296,11 +341,25 @@ async def full_decision_analyze(
                     "sell_count": len(sell_analysis.sell_positions),
                 },
                 "account_fit": account_fit.model_dump(),
-                "summary": summary.model_dump()
+                "summary": summary.model_dump(),
+                "risk_alerts": risk_alerts,
+                "review_snapshot_count": snapshot_count,
             }
         )
     except Exception as e:
         return ApiResponse(code=500, message=f"完整决策分析失败: {str(e)}")
+
+
+@router.get("/review-stats", response_model=ApiResponse)
+async def get_review_stats(
+    limit_days: int = Query(10, description="最近交易日数量", ge=1, le=30),
+) -> ApiResponse:
+    """获取最近若干交易日的分层复盘统计。"""
+    try:
+        data = await review_snapshot_service.get_review_stats(limit_days=limit_days)
+        return ApiResponse(data=data)
+    except Exception as e:
+        return ApiResponse(code=500, message=f"获取复盘统计失败: {str(e)}")
 
 
 def _generate_summary(

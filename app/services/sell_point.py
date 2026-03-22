@@ -2,7 +2,6 @@
 卖点分析服务
 """
 from typing import List, Dict
-from loguru import logger
 
 from app.models.schemas import (
     AccountPosition,
@@ -13,9 +12,11 @@ from app.models.schemas import (
     SellPriority,
     MarketEnvTag,
     SectorMainlineTag,
+    SectorTradeabilityTag,
 )
 from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
+from app.data.tushare_client import tushare_client
 
 
 class SellPointService:
@@ -39,7 +40,9 @@ class SellPointService:
     def analyze(
         self,
         trade_date: str,
-        holdings: List[AccountPosition]
+        holdings: List[AccountPosition],
+        market_env=None,
+        sector_scan=None,
     ) -> SellPointResponse:
         """
         卖点分析
@@ -52,8 +55,8 @@ class SellPointService:
             卖点分析结果
         """
         # 获取市场环境和板块
-        market_env = self.market_env_service.get_current_env(trade_date)
-        sector_scan = self.sector_scan_service.scan(trade_date)
+        market_env = market_env or self.market_env_service.get_current_env(trade_date)
+        sector_scan = sector_scan or self.sector_scan_service.scan(trade_date, limit_output=False)
 
         # 构建板块映射
         sector_map = self._build_sector_map(sector_scan)
@@ -64,14 +67,21 @@ class SellPointService:
         sell = []     # 建议卖出
 
         for position in holdings:
+            sector_name = self._resolve_position_sector(position.ts_code, trade_date)
             sell_point = self._analyze_position(position, market_env, sector_map)
+            # 叠加板块共振判断：若个股所属板块不在主线/次主线，提升离场优先级
+            self._apply_sector_resonance_adjustment(sell_point, position, sector_name, sector_map, market_env)
 
-            if sell_point.sell_signal_tag == SellSignalTag.HOLD:
+            if sell_point.sell_signal_tag in [SellSignalTag.HOLD, SellSignalTag.OBSERVE]:
                 hold.append(sell_point)
             elif sell_point.sell_signal_tag == SellSignalTag.REDUCE:
                 reduce_pos.append(sell_point)
             else:
                 sell.append(sell_point)
+
+        sell = self._sort_sell_points(sell)
+        reduce_pos = self._sort_sell_points(reduce_pos)
+        hold = self._sort_sell_points(hold)
 
         return SellPointResponse(
             trade_date=trade_date,
@@ -85,10 +95,14 @@ class SellPointService:
         """构建板块映射"""
         sector_map = {}
 
-        for s in sector_scan.mainline_sectors:
-            sector_map[s.sector_name] = s
-        for s in sector_scan.sub_mainline_sectors:
-            sector_map[s.sector_name] = s
+        for group in [
+            sector_scan.mainline_sectors,
+            sector_scan.sub_mainline_sectors,
+            sector_scan.follow_sectors,
+            sector_scan.trash_sectors,
+        ]:
+            for s in group:
+                sector_map[s.sector_name] = s
 
         return sector_map
 
@@ -120,6 +134,12 @@ class SellPointService:
         return SellPointOutput(
             ts_code=position.ts_code,
             stock_name=position.stock_name,
+            market_price=position.market_price,
+            cost_price=position.cost_price,
+            pnl_pct=position.pnl_pct,
+            holding_qty=position.holding_qty,
+            holding_days=position.holding_days,
+            can_sell_today=position.can_sell_today,
             sell_signal_tag=signal_tag,
             sell_point_type=sell_type,
             sell_trigger_cond=trigger,
@@ -127,6 +147,131 @@ class SellPointService:
             sell_priority=priority,
             sell_comment=comment
         )
+
+    def _resolve_position_sector(self, ts_code: str, trade_date: str) -> str:
+        """获取持仓所属板块名称。"""
+        try:
+            detail = tushare_client.get_stock_detail(ts_code, trade_date.replace("-", ""))
+            return detail.get("sector_name", "")
+        except Exception:
+            return ""
+
+    def _sort_sell_points(self, points: List[SellPointOutput]) -> List[SellPointOutput]:
+        """按优先级和盈亏幅度排序，便于页面直接展示处理顺序。"""
+        priority_order = {
+            SellPriority.HIGH: 0,
+            SellPriority.MEDIUM: 1,
+            SellPriority.LOW: 2,
+        }
+
+        def sort_key(point: SellPointOutput):
+            pnl = point.pnl_pct if point.pnl_pct is not None else 0.0
+            severity = abs(pnl)
+            return (
+                priority_order.get(point.sell_priority, 99),
+                -severity,
+                point.ts_code,
+            )
+
+        return sorted(points, key=sort_key)
+
+    def _apply_sector_resonance_adjustment(
+        self,
+        sell_point: SellPointOutput,
+        position: AccountPosition,
+        sector_name: str,
+        sector_map: Dict,
+        market_env
+    ) -> None:
+        """根据板块共振与原始持仓理由修正卖点建议。"""
+        if not position.can_sell_today:
+            return
+
+        reason_text = position.holding_reason or ""
+        reason_invalid = any(tag in reason_text for tag in ["失效", "证伪", "逻辑坏了", "不成立"])
+        sector = sector_map.get(sector_name) if sector_name else None
+        sector_known = sector is not None
+        sector_supportive = bool(
+            sector
+            and sector.sector_mainline_tag in {
+                SectorMainlineTag.MAINLINE,
+                SectorMainlineTag.SUB_MAINLINE,
+                SectorMainlineTag.FOLLOW,
+            }
+            and sector.sector_tradeability_tag != SectorTradeabilityTag.NOT_RECOMMENDED
+        )
+        sector_weak = bool(
+            sector
+            and (
+                sector.sector_mainline_tag == SectorMainlineTag.TRASH
+                or sector.sector_tradeability_tag == SectorTradeabilityTag.NOT_RECOMMENDED
+            )
+        )
+
+        # 原买入逻辑失效时优先退出，这是最强约束。
+        if reason_invalid:
+            sell_point.sell_signal_tag = SellSignalTag.SELL
+            sell_point.sell_point_type = SellPointType.INVALID_EXIT
+            sell_point.sell_priority = SellPriority.HIGH
+            sell_point.sell_reason = "原买入理由已经失效，优先退出"
+            sell_point.sell_trigger_cond = "下一次反弹不能转强时卖出"
+            sell_point.sell_comment = "这类票不再适合继续拿"
+            return
+
+        # 已经明确触发止损/止盈卖出的，不再被板块规则覆盖。
+        if sell_point.sell_signal_tag == SellSignalTag.SELL:
+            return
+
+        # 防守环境下，板块转弱以“先减仓”为默认动作，不再一刀切全卖。
+        if market_env.market_env_tag == MarketEnvTag.DEFENSE:
+            if sector_weak:
+                if position.pnl_pct <= self.STOP_LOSS_PCT_STRICT:
+                    sell_point.sell_signal_tag = SellSignalTag.SELL
+                    sell_point.sell_point_type = SellPointType.STOP_LOSS
+                    sell_point.sell_priority = SellPriority.HIGH
+                    sell_point.sell_reason = "市场偏弱，板块也没有支撑，亏损已接近止损线"
+                    sell_point.sell_trigger_cond = "反弹无力时先退出"
+                    sell_point.sell_comment = "弱市里不要硬扛弱板块"
+                else:
+                    sell_point.sell_signal_tag = SellSignalTag.REDUCE
+                    sell_point.sell_point_type = SellPointType.REDUCE_POSITION
+                    sell_point.sell_priority = SellPriority.MEDIUM
+                    if position.pnl_pct > 0:
+                        sell_point.sell_reason = "市场偏弱，这只票所在板块也不强，先落一部分利润"
+                        sell_point.sell_trigger_cond = "冲高不能放量续强时减仓"
+                        sell_point.sell_comment = "先把仓位降下来，等更清晰的信号"
+                    else:
+                        sell_point.sell_reason = "市场偏弱，这只票所在板块也不强，先降仓控制回撤"
+                        sell_point.sell_trigger_cond = "反弹无力或跌破日内支撑时减仓"
+                        sell_point.sell_comment = "先降风险，不必一口气清仓"
+                return
+
+            if not sector_known and sell_point.sell_signal_tag == SellSignalTag.HOLD:
+                sell_point.sell_signal_tag = SellSignalTag.REDUCE if position.pnl_pct > 0 else SellSignalTag.HOLD
+                sell_point.sell_point_type = SellPointType.REDUCE_POSITION if position.pnl_pct > 0 else SellPointType.INVALID_EXIT
+                sell_point.sell_priority = SellPriority.MEDIUM if position.pnl_pct > 0 else SellPriority.LOW
+                sell_point.sell_reason = (
+                    "当前没找到明确板块共振，先收缩仓位等待确认"
+                    if position.pnl_pct > 0
+                    else "当前没找到明确板块共振，先观察，不急着加仓"
+                )
+                sell_point.sell_trigger_cond = (
+                    "冲高无量时先减一部分"
+                    if position.pnl_pct > 0
+                    else "若继续走弱再处理"
+                )
+                sell_point.sell_comment = "板块线索不清时，动作先保守一些"
+                return
+
+        # 中性环境下，板块转弱则先降仓；仅缺少映射则保持观察。
+        if market_env.market_env_tag == MarketEnvTag.NEUTRAL and sector_weak:
+            if sell_point.sell_signal_tag == SellSignalTag.HOLD:
+                sell_point.sell_signal_tag = SellSignalTag.REDUCE
+                sell_point.sell_point_type = SellPointType.REDUCE_POSITION
+                sell_point.sell_priority = SellPriority.MEDIUM
+                sell_point.sell_reason = "板块走弱了，先降一点仓位更稳妥"
+                sell_point.sell_trigger_cond = "日内反弹无量时减仓"
+                sell_point.sell_comment = "先降风险敞口，等板块重新转强"
 
     def _determine_sell(
         self,
@@ -151,12 +296,12 @@ class SellPointService:
         if market_env.market_env_tag == MarketEnvTag.DEFENSE:
             if pnl_pct < 0:
                 return (
-                    SellPointType.INVALID_EXIT,
-                    SellSignalTag.SELL,
-                    SellPriority.HIGH,
-                    "市场转弱，亏损持仓应优先处理",
-                    "次日开盘卖出",
-                    "市场防守，亏损票优先离场"
+                    SellPointType.REDUCE_POSITION,
+                    SellSignalTag.REDUCE,
+                    SellPriority.MEDIUM,
+                    f"市场偏弱，当前亏损{abs(pnl_pct):.1f}%，先减仓控制风险",
+                    "反弹无力时先减一部分",
+                    "弱市先降仓，不必急着一次卖完"
                 )
 
         # 3. 止盈判断
@@ -169,7 +314,7 @@ class SellPointService:
                     SellPriority.HIGH,
                     f"盈利{pnl_pct:.1f}%，市场转弱应止盈",
                     "收盘前卖出",
-                    f"保护盈利，市场转弱"
+                    "保护盈利，市场转弱"
                 )
             elif market_env.market_env_tag == MarketEnvTag.NEUTRAL:
                 return (

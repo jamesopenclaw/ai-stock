@@ -16,6 +16,14 @@
           <text class="info-value">{{ formatMoney(profile.market_value) }}</text>
         </view>
         <view class="info-row">
+          <text class="info-label">账户总盈亏</text>
+          <text :class="['info-value', pnlClass(profile.total_pnl_amount)]">{{ formatPnl(profile.total_pnl_amount) }}</text>
+        </view>
+        <view class="info-row">
+          <text class="info-label">当日盈亏</text>
+          <text :class="['info-value', pnlClass(profile.today_pnl_amount)]">{{ formatPnl(profile.today_pnl_amount) }}</text>
+        </view>
+        <view class="info-row">
           <text class="info-label">仓位</text>
           <text class="info-value">{{ (profile.total_position_ratio * 100).toFixed(1) }}%</text>
         </view>
@@ -84,14 +92,20 @@
               <text class="detail-value">{{ item.market_price?.toFixed(2) }}</text>
             </view>
             <view class="detail-row">
+              <text class="detail-label">持股天数</text>
+              <text class="detail-value">{{ item.holding_days ?? 0 }}天</text>
+            </view>
+            <view class="detail-row">
               <text class="detail-label">持仓市值</text>
               <text class="detail-value">{{ formatMoney(item.holding_market_value) }}</text>
             </view>
             <view class="detail-row">
               <text class="detail-label">盈亏金额</text>
-              <text :class="['detail-value', item.pnl_pct > 0 ? 'text-red' : 'text-green']">
-                {{ item.pnl_pct > 0 ? '+' : '' }}{{ (item.holding_market_value * item.pnl_pct / 100)?.toFixed(2) }}元
-              </text>
+              <text :class="['detail-value', pnlClass(item.pnl_amount)]">{{ formatPnl(item.pnl_amount) }}</text>
+            </view>
+            <view class="detail-row">
+              <text class="detail-label">当日盈亏</text>
+              <text :class="['detail-value', pnlClass(item.today_pnl_amount)]">{{ formatPnl(item.today_pnl_amount) }}</text>
             </view>
             <view class="detail-row">
               <text class="detail-label">买入日期</text>
@@ -107,9 +121,9 @@
               <text class="detail-label">买入理由</text>
               <text class="detail-value">{{ item.holding_reason }}</text>
             </view>
-            <!-- 删除按钮 -->
-            <view class="delete-btn" @click.stop="deletePosition(item.id)">
-              删除持仓
+            <view class="action-row">
+              <view class="edit-btn" @click.stop="openEditModal(item)">编辑</view>
+              <view class="delete-btn" @click.stop="deletePosition(item.id)">删除持仓</view>
             </view>
           </view>
         </view>
@@ -158,6 +172,42 @@
       </view>
     </view>
 
+    <!-- 编辑持仓 -->
+    <view v-if="showEditModal" class="modal-mask" @click="showEditModal = false">
+      <view class="modal-content" @click.stop>
+        <view class="modal-header">
+          <text class="modal-title">编辑持仓</text>
+          <text class="modal-close" @click="showEditModal = false">×</text>
+        </view>
+        <view class="modal-body">
+          <view class="form-item">
+            <text class="form-label">股票代码</text>
+            <text class="form-value">{{ editPosition.ts_code }}</text>
+          </view>
+          <view class="form-item">
+            <text class="form-label">股票名称</text>
+            <text class="form-value">{{ editPosition.stock_name }}</text>
+          </view>
+          <view class="form-item">
+            <text class="form-label">持仓数量 *</text>
+            <input class="form-input" v-model="editPosition.holding_qty" type="number" placeholder="股数" />
+          </view>
+          <view class="form-item">
+            <text class="form-label">成本价 *</text>
+            <input class="form-input" v-model="editPosition.cost_price" type="digit" placeholder="元" />
+          </view>
+          <view class="form-item">
+            <text class="form-label">买入理由</text>
+            <input class="form-input" v-model="editPosition.holding_reason" placeholder="可选" />
+          </view>
+          <view class="form-actions">
+            <view class="btn-cancel" @click="showEditModal = false">取消</view>
+            <view class="btn-confirm" @click="saveEditPosition">保存</view>
+          </view>
+        </view>
+      </view>
+    </view>
+
     <view v-if="loading" class="loading">
       <text>加载中...</text>
     </view>
@@ -174,6 +224,14 @@ const status = ref(null)
 const positions = ref([])
 const expandedItem = ref(null)
 const showAddModal = ref(false)
+const showEditModal = ref(false)
+const editPosition = ref({
+  ts_code: '',
+  stock_name: '',
+  holding_qty: '',
+  cost_price: '',
+  holding_reason: ''
+})
 const newPosition = ref({
   ts_code: '',
   stock_name: '',
@@ -188,8 +246,62 @@ const formatMoney = (value) => {
   return (value / 10000).toFixed(2) + '万'
 }
 
+const formatPnl = (n) => {
+  if (n == null || Number.isNaN(Number(n))) return '—'
+  const num = Number(n)
+  const sign = num > 0 ? '+' : ''
+  return sign + num.toFixed(2) + '元'
+}
+
+const pnlClass = (n) => {
+  if (n == null || Number.isNaN(Number(n))) return ''
+  const num = Number(n)
+  if (num > 0) return 'text-red'
+  if (num < 0) return 'text-green'
+  return ''
+}
+
 const toggleDetail = (item) => {
   expandedItem.value = expandedItem.value === item.id ? null : item.id
+}
+
+const openEditModal = (item) => {
+  editPosition.value = {
+    ts_code: item.ts_code,
+    stock_name: item.stock_name || '',
+    holding_qty: String(item.holding_qty ?? ''),
+    cost_price: String(item.cost_price ?? ''),
+    holding_reason: item.holding_reason || ''
+  }
+  showEditModal.value = true
+}
+
+const saveEditPosition = async () => {
+  const qty = parseInt(editPosition.value.holding_qty, 10)
+  const cost = parseFloat(editPosition.value.cost_price)
+  if (!editPosition.value.ts_code || !qty || qty < 1 || !cost || cost <= 0) {
+    uni.showToast({ title: '请填写有效数量与成本', icon: 'none' })
+    return
+  }
+  loading.value = true
+  try {
+    const res = await accountApi.updatePosition(editPosition.value.ts_code, {
+      holding_qty: qty,
+      cost_price: cost,
+      holding_reason: editPosition.value.holding_reason ?? ''
+    })
+    if (res.code === 200) {
+      uni.showToast({ title: '保存成功', icon: 'success' })
+      showEditModal.value = false
+      loadData()
+    } else {
+      uni.showToast({ title: res.message || '保存失败', icon: 'none' })
+    }
+  } catch (e) {
+    uni.showToast({ title: '保存失败', icon: 'none' })
+  } finally {
+    loading.value = false
+  }
 }
 
 const fetchStockName = async () => {
@@ -348,7 +460,9 @@ onMounted(() => {
 .detail-label { font-size: 12px; color: #999; }
 .detail-value { font-size: 14px; color: #333; }
 
-.delete-btn { margin-top: 10px; padding: 8px; text-align: center; color: #f56c6c; border: 1px solid #f56c6c; border-radius: 4px; font-size: 14px; }
+.action-row { display: flex; gap: 10px; margin-top: 10px; }
+.edit-btn { flex: 1; padding: 8px; text-align: center; color: #409eff; border: 1px solid #409eff; border-radius: 4px; font-size: 14px; }
+.delete-btn { flex: 1; padding: 8px; text-align: center; color: #f56c6c; border: 1px solid #f56c6c; border-radius: 4px; font-size: 14px; }
 
 /* 弹窗样式 */
 .modal-mask { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 100; display: flex; align-items: center; justify-content: center; }

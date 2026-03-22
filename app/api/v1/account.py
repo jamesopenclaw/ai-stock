@@ -2,7 +2,7 @@
 账户管理 API - PostgreSQL 存储
 """
 from fastapi import APIRouter, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 import uuid
@@ -15,22 +15,39 @@ from app.models.schemas import (
     ApiResponse
 )
 from app.services.account_adapter import account_adapter_service
-from app.data.tushare_client import tushare_client
+from app.data.tushare_client import tushare_client, normalize_ts_code
 from app.models.holding import Holding
 from app.core.database import async_session_factory
-from sqlalchemy import select, delete
+from app.services.account_config_service import (
+    get_total_asset,
+    get_config as get_account_config_from_db,
+    update_total_asset as update_account_total_asset,
+)
+from sqlalchemy import select
+from loguru import logger
 
 router = APIRouter()
 
-# 模拟账户数据
-MOCK_ACCOUNT = AccountInput(
-    total_asset=1000000,
-    available_cash=400000,
-    total_position_ratio=0.6,
-    holding_count=4,
-    today_new_buy_count=1,
-    t1_locked_positions=[]
-)
+
+async def build_account_input(holdings: List[dict]) -> AccountInput:
+    """根据实际持仓动态构建账户信息（总资产来自数据库配置）"""
+    market_value = sum(
+        h.get("holding_market_value") or (h.get("holding_qty", 0) * h.get("market_price", 0))
+        for h in holdings
+    )
+    total_asset = await get_total_asset()
+    available_cash = max(total_asset - market_value, 0)
+    total_position_ratio = market_value / total_asset if total_asset > 0 else 0
+    holding_count = len(holdings)
+
+    return AccountInput(
+        total_asset=total_asset,
+        available_cash=available_cash,
+        total_position_ratio=round(total_position_ratio, 4),
+        holding_count=holding_count,
+        today_new_buy_count=0,
+        t1_locked_positions=[]
+    )
 
 
 class AddPositionRequest(BaseModel):
@@ -49,12 +66,9 @@ class UpdatePositionRequest(BaseModel):
     holding_reason: Optional[str] = None
 
 
-def normalize_ts_code(ts_code: str) -> str:
-    """标准化股票代码"""
-    ts_code = ts_code.upper().strip()
-    if not ts_code.endswith(('.SH', '.SZ')):
-        ts_code += '.SH' if ts_code.startswith('6') else '.SZ'
-    return ts_code
+class AccountConfigUpdateRequest(BaseModel):
+    """账户配置更新"""
+    total_asset: float = Field(..., gt=0, description="总资产(元)")
 
 
 async def get_stock_name(ts_code: str) -> str:
@@ -111,19 +125,114 @@ async def update_holding_in_db(ts_code: str, **kwargs) -> Optional[dict]:
         return None
 
 
+def _safe_float(val, default: float = 0.0) -> float:
+    try:
+        if val is None:
+            return default
+        v = float(val)
+        if v != v:  # NaN
+            return default
+        return v
+    except (TypeError, ValueError):
+        return default
+
+
 def refresh_holdings_price(holdings: List[dict]):
-    """刷新持仓现价（内存中）"""
+    """批量刷新持仓现价、昨收（用 bak_daily，支持交易日回退）"""
+    if not holdings:
+        return
+    try:
+        today = datetime.now().strftime("%Y%m%d")
+        effective_date = tushare_client._resolve_trade_date(today)
+        try:
+            df = tushare_client.pro.bak_daily(
+                trade_date=effective_date,
+                fields="ts_code,close,pre_close"
+            )
+        except Exception as e:
+            logger.warning(f"bak_daily 含 pre_close 失败，回退为仅 close: {e}")
+            df = tushare_client.pro.bak_daily(
+                trade_date=effective_date,
+                fields="ts_code,close"
+            )
+        if df is None or df.empty:
+            logger.warning(f"bak_daily 返回空，无法刷新持仓现价（{effective_date}）")
+            return
+        has_pre_close = "pre_close" in df.columns
+        price_map = {}
+        pre_close_map = {}
+        for _, row in df.iterrows():
+            tc = row.get("ts_code")
+            if not tc:
+                continue
+            close = _safe_float(row.get("close"), 0.0)
+            if close > 0:
+                price_map[tc] = close
+            pre = row.get("pre_close") if has_pre_close else None
+            pre_v = _safe_float(pre, 0.0)
+            if pre_v > 0:
+                pre_close_map[tc] = pre_v
+        for h in holdings:
+            tc = h.get("ts_code")
+            price = price_map.get(tc)
+            if price:
+                h["market_price"] = price
+                # 昨收：无则与现价相同，当日盈亏为 0
+                pre_close = pre_close_map.get(tc) or price
+                h["pre_close"] = pre_close
+                cost = h.get("cost_price") or 0
+                qty = h.get("holding_qty") or 0
+                if cost > 0:
+                    h["pnl_pct"] = round((price - cost) / cost * 100, 2)
+                if qty > 0:
+                    h["holding_market_value"] = round(qty * price, 2)
+    except Exception as e:
+        logger.error(f"刷新持仓现价失败: {e}")
+
+
+def enrich_holdings(holdings: List[dict]):
+    """补充持股天数、浮盈金额、当日盈亏金额（依赖 refresh_holdings_price 已写入 market_price / pre_close）"""
+    today = datetime.now().date()
     for h in holdings:
         try:
-            detail = tushare_client.get_stock_detail(h["ts_code"], datetime.now().strftime("%Y%m%d"))
-            if detail and detail.get("close"):
-                h["market_price"] = detail.get("close")
-                if h.get("cost_price"):
-                    h["pnl_pct"] = round((h["market_price"] - h["cost_price"]) / h["cost_price"] * 100, 2)
-                if h.get("holding_qty"):
-                    h["holding_market_value"] = h["holding_qty"] * h["market_price"]
-        except:
-            pass
+            buy = datetime.strptime(str(h.get("buy_date", "")), "%Y-%m-%d").date()
+            h["holding_days"] = max(0, (today - buy).days)
+        except Exception:
+            h["holding_days"] = 0
+
+        qty = int(h.get("holding_qty") or 0)
+        cost = _safe_float(h.get("cost_price"), 0.0)
+        price = _safe_float(h.get("market_price"), 0.0)
+        pre_close = h.get("pre_close")
+        if pre_close is None:
+            pre_close = price
+        else:
+            pre_close = _safe_float(pre_close, price)
+
+        h["pnl_amount"] = round((price - cost) * qty, 2)
+        h["today_pnl_amount"] = round((price - pre_close) * qty, 2)
+
+
+@router.get("/config", response_model=ApiResponse)
+async def get_account_config() -> ApiResponse:
+    """获取账户配置（总资产等）"""
+    try:
+        data = await get_account_config_from_db()
+        return ApiResponse(data=data)
+    except Exception as e:
+        return ApiResponse(code=500, message=f"获取账户配置失败：{str(e)}")
+
+
+@router.put("/config", response_model=ApiResponse)
+async def put_account_config(request: AccountConfigUpdateRequest) -> ApiResponse:
+    """更新账户配置"""
+    try:
+        data = await update_account_total_asset(request.total_asset)
+        return ApiResponse(data=data)
+    except ValueError as e:
+        return ApiResponse(code=400, message=str(e))
+    except Exception as e:
+        return ApiResponse(code=500, message=f"更新账户配置失败：{str(e)}")
 
 
 @router.get("/profile", response_model=ApiResponse)
@@ -132,8 +241,18 @@ async def get_profile() -> ApiResponse:
     try:
         holdings = await get_holdings_from_db()
         refresh_holdings_price(holdings)
+        enrich_holdings(holdings)
+        account = await build_account_input(holdings)
         holdings_obj = [AccountPosition(**h) for h in holdings]
-        profile = account_adapter_service.get_profile(MOCK_ACCOUNT, holdings_obj)
+        profile = account_adapter_service.get_profile(account, holdings_obj)
+        total_pnl = sum(_safe_float(h.get("pnl_amount"), 0.0) for h in holdings)
+        today_pnl = sum(_safe_float(h.get("today_pnl_amount"), 0.0) for h in holdings)
+        profile = profile.model_copy(
+            update={
+                "total_pnl_amount": round(total_pnl, 2),
+                "today_pnl_amount": round(today_pnl, 2),
+            }
+        )
         return ApiResponse(data=profile.model_dump())
     except Exception as e:
         return ApiResponse(code=500, message=f"获取账户概况失败：{str(e)}")
@@ -145,6 +264,7 @@ async def get_positions() -> ApiResponse:
     try:
         holdings = await get_holdings_from_db()
         refresh_holdings_price(holdings)
+        enrich_holdings(holdings)
         return ApiResponse(data={"positions": holdings, "total": len(holdings)})
     except Exception as e:
         return ApiResponse(code=500, message=f"获取持仓明细失败：{str(e)}")
@@ -159,13 +279,26 @@ async def add_position(request: AddPositionRequest) -> ApiResponse:
         
         # 获取股票名称
         stock_name = await get_stock_name(ts_code)
-        
-        # 获取现价
+
+        # 获取现价（用 bak_daily + 交易日回退，避免周末返回空）
+        market_price = request.cost_price
         try:
-            detail = tushare_client.get_stock_detail(ts_code, datetime.now().strftime("%Y%m%d"))
-            market_price = detail.get("close", request.cost_price)
-        except:
-            market_price = request.cost_price
+            effective_date = tushare_client._resolve_trade_date(datetime.now().strftime("%Y%m%d"))
+            df = tushare_client.pro.bak_daily(
+                trade_date=effective_date,
+                fields="ts_code,close,name"
+            )
+            if df is not None and not df.empty:
+                row = df[df["ts_code"] == ts_code]
+                if not row.empty:
+                    price = float(row.iloc[0].get("close", 0) or 0)
+                    if price > 0:
+                        market_price = price
+                    name = row.iloc[0].get("name", "")
+                    if name:
+                        stock_name = name
+        except Exception as e:
+            logger.warning(f"获取 {ts_code} 现价失败，使用成本价: {e}")
         
         # 计算市值和盈亏
         holding_market_value = request.holding_qty * market_price
@@ -201,14 +334,21 @@ async def add_position(request: AddPositionRequest) -> ApiResponse:
 
 @router.put("/positions/{ts_code}", response_model=ApiResponse)
 async def update_position(ts_code: str, request: UpdatePositionRequest) -> ApiResponse:
-    """修改持仓"""
+    """修改持仓（数量、成本价、买入理由等）"""
     try:
         ts_code = normalize_ts_code(ts_code)
-        
+
+        payload = request.model_dump(exclude_unset=True)
+        if not payload:
+            return ApiResponse(code=400, message="请至少修改一项")
+
         # 更新数据库
-        updated = await update_holding_in_db(ts_code, **request.model_dump(exclude_unset=True))
-        
+        updated = await update_holding_in_db(ts_code, **payload)
+
         if updated:
+            # 与 GET 持仓一致：按当日行情刷新现价、盈亏、市值
+            refresh_holdings_price([updated])
+            enrich_holdings([updated])
             return ApiResponse(data={"message": "持仓更新成功", "position": updated})
         else:
             return ApiResponse(code=404, message="持仓不存在")
@@ -216,19 +356,19 @@ async def update_position(ts_code: str, request: UpdatePositionRequest) -> ApiRe
         return ApiResponse(code=500, message=f"更新持仓失败：{str(e)}")
 
 
-@router.delete("/positions/{ts_code}", response_model=ApiResponse)
-async def delete_position(ts_code: str) -> ApiResponse:
-    """删除持仓"""
+@router.delete("/positions/{position_id}", response_model=ApiResponse)
+async def delete_position(position_id: str) -> ApiResponse:
+    """删除持仓（按 id）"""
     try:
-        ts_code = normalize_ts_code(ts_code)
-        
-        # 从数据库删除
-        deleted = await delete_holding_from_db(ts_code)
-        
-        if deleted:
-            return ApiResponse(data={"message": "持仓删除成功"})
-        else:
-            return ApiResponse(code=404, message="持仓不存在")
+        async with async_session_factory() as session:
+            result = await session.execute(select(Holding).where(Holding.id == position_id))
+            holding = result.scalar_one_or_none()
+            if holding:
+                await session.delete(holding)
+                await session.commit()
+                return ApiResponse(data={"message": "持仓删除成功"})
+            else:
+                return ApiResponse(code=404, message="持仓不存在")
     except Exception as e:
         return ApiResponse(code=500, message=f"删除持仓失败：{str(e)}")
 
@@ -240,9 +380,10 @@ async def adapt_account(
 ) -> ApiResponse:
     """账户适配分析"""
     try:
-        account = account or MOCK_ACCOUNT
         holdings = await get_holdings_from_db()
         refresh_holdings_price(holdings)
+        enrich_holdings(holdings)
+        account = account or await build_account_input(holdings)
         holdings_obj = [AccountPosition(**h) for h in holdings]
         result = account_adapter_service.adapt(trade_date, account, holdings_obj)
         return ApiResponse(data=result.model_dump())
@@ -256,10 +397,13 @@ async def get_account_status() -> ApiResponse:
     try:
         holdings = await get_holdings_from_db()
         refresh_holdings_price(holdings)
+        enrich_holdings(holdings)
+        account = await build_account_input(holdings)
         holdings_obj = [AccountPosition(**h) for h in holdings]
-        profile = account_adapter_service.get_profile(MOCK_ACCOUNT, holdings_obj)
-        result = account_adapter_service.adapt("2026-03-21", MOCK_ACCOUNT, holdings_obj)
-        
+        profile = account_adapter_service.get_profile(account, holdings_obj)
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+        result = account_adapter_service.adapt(trade_date, account, holdings_obj)
+
         return ApiResponse(data={
             "can_trade": result.new_position_allowed,
             "action": result.account_action_tag,

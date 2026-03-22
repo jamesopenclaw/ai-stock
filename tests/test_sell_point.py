@@ -21,6 +21,8 @@ from app.models.schemas import (
     SellPointType,
     SellPriority,
     MarketEnvTag,
+    SectorMainlineTag,
+    SectorTradeabilityTag,
 )
 from app.services.sell_point import SellPointService
 
@@ -139,6 +141,75 @@ class TestSellPoint:
         
         assert sell_point.sell_signal_tag in [SellSignalTag.SELL, SellSignalTag.REDUCE, SellSignalTag.HOLD]
 
+    def test_sell_point_contains_position_context(self, service, profitable_position):
+        """
+        测试：卖点输出应包含现价、成本和持仓上下文
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+
+        sell_point = service._analyze_position(profitable_position, MockMarketEnv(), {})
+
+        assert sell_point.market_price == 1800.0
+        assert sell_point.cost_price == 1500.0
+        assert sell_point.pnl_pct == 20.0
+        assert sell_point.holding_qty == 100
+        assert sell_point.can_sell_today is True
+
+    def test_analyze_sorts_by_priority_and_severity(self, service):
+        """
+        测试：同组卖点应按优先级和盈亏幅度排序
+        """
+        positions = [
+            AccountPosition(
+                ts_code="A.SZ",
+                stock_name="A",
+                holding_qty=100,
+                cost_price=10.0,
+                market_price=9.2,
+                pnl_pct=-8.0,
+                holding_market_value=920,
+                buy_date="2026-03-10",
+                can_sell_today=True,
+                holding_reason="",
+            ),
+            AccountPosition(
+                ts_code="B.SZ",
+                stock_name="B",
+                holding_qty=100,
+                cost_price=10.0,
+                market_price=9.6,
+                pnl_pct=-4.0,
+                holding_market_value=960,
+                buy_date="2026-03-10",
+                can_sell_today=True,
+                holding_reason="",
+            ),
+        ]
+
+        class NeutralEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+
+        sector_scan = type(
+            "SectorScan",
+            (),
+            {
+                "mainline_sectors": [],
+                "sub_mainline_sectors": [],
+                "follow_sectors": [],
+                "trash_sectors": [],
+            },
+        )()
+
+        result = service.analyze(
+            "2026-03-20",
+            positions,
+            market_env=NeutralEnv(),
+            sector_scan=sector_scan,
+        )
+
+        assert result.sell_positions[0].ts_code == "A.SZ"
+
     # ========== 减仓测试 ==========
 
     def test_reduce_for_moderate_profit(self, service):
@@ -243,6 +314,82 @@ class TestSellPoint:
         # 防守环境下卖出压力更大
         # 至少信号不应该比进攻环境更乐观
         assert sell_point_defense.sell_signal_tag in [SellSignalTag.SELL, SellSignalTag.REDUCE]
+
+    def test_defense_weak_sector_prefers_reduce_for_small_drawdown(self, service):
+        """
+        测试：弱市且板块转弱时，小幅盈亏应先减仓而不是一刀切卖出
+        """
+        position = AccountPosition(
+            ts_code="002463.SZ",
+            stock_name="沪电股份",
+            holding_qty=200,
+            cost_price=86.45,
+            market_price=84.30,
+            pnl_pct=-2.49,
+            holding_market_value=16860,
+            buy_date="2026-03-18",
+            can_sell_today=True,
+            holding_reason="板块主升跟随",
+        )
+
+        class DefenseEnv:
+            market_env_tag = MarketEnvTag.DEFENSE
+
+        class WeakSector:
+            sector_mainline_tag = SectorMainlineTag.TRASH
+            sector_tradeability_tag = SectorTradeabilityTag.NOT_RECOMMENDED
+
+        sell_point = service._analyze_position(position, DefenseEnv(), {"元器件": WeakSector()})
+        service._apply_sector_resonance_adjustment(
+            sell_point,
+            position,
+            "元器件",
+            {"元器件": WeakSector()},
+            DefenseEnv(),
+        )
+
+        assert sell_point.sell_signal_tag == SellSignalTag.REDUCE
+        assert "先降仓" in sell_point.sell_reason or "先降" in sell_point.sell_comment
+
+    def test_observe_signal_stays_in_hold_bucket(self, service):
+        """
+        测试：观察信号应归入持有观察，而不是落到卖出列表
+        """
+        position = AccountPosition(
+            ts_code="000001.SZ",
+            stock_name="平安银行",
+            holding_qty=100,
+            cost_price=12.0,
+            market_price=13.2,
+            pnl_pct=10.0,
+            holding_market_value=1320,
+            buy_date="2026-03-20",
+            can_sell_today=False,
+            holding_reason="今日新开仓",
+        )
+
+        class NeutralEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+
+        response = service.analyze(
+            "2026-03-20",
+            [position],
+            market_env=NeutralEnv(),
+            sector_scan=type(
+                "SectorScan",
+                (),
+                {
+                    "mainline_sectors": [],
+                    "sub_mainline_sectors": [],
+                    "follow_sectors": [],
+                    "trash_sectors": [],
+                },
+            )(),
+        )
+
+        assert len(response.hold_positions) == 1
+        assert len(response.sell_positions) == 0
+        assert response.hold_positions[0].sell_signal_tag == SellSignalTag.OBSERVE
 
 
 class TestSellPointPRDRequirements:

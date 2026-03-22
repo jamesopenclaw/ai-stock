@@ -52,14 +52,14 @@ class TestSectorScan:
         ai_sector = next(s for s in scored if s.sector_name == "人工智能")
         assert ai_sector.sector_mainline_tag == SectorMainlineTag.MAINLINE, \
             f"涨幅5.5%应为主线，实际: {ai_sector.sector_mainline_tag}"
-        assert ai_sector.sector_tradeability_tag == SectorTradeabilityTag.TRADABLE, \
-            f"主线板块应可交易，实际: {ai_sector.sector_tradeability_tag}"
+        assert ai_sector.sector_tradeability_tag == SectorTradeabilityTag.CAUTION, \
+            f"连续性未知时应先谨慎，实际: {ai_sector.sector_tradeability_tag}"
 
     def test_mainline_sector_with_high_score(self, service):
         """
         测试：高强度主线板块
         
-        验证点：强度评分 >= 80，应识别为主线并标记"可持续"
+        验证点：强度评分高但缺少连续性历史时，不应直接标记"可持续"
         """
         sectors = [
             {"sector_name": "算力", "sector_change_pct": 6.0},
@@ -71,7 +71,7 @@ class TestSectorScan:
         # 算力板块
         suanli = next(s for s in scored if s.sector_name == "算力")
         assert suanli.sector_mainline_tag == SectorMainlineTag.MAINLINE
-        assert suanli.sector_continuity_tag == SectorContinuityTag.SUSTAINABLE
+        assert suanli.sector_continuity_tag == SectorContinuityTag.OBSERVABLE
 
     def test_sub_mainline_recognition(self, service):
         """
@@ -119,6 +119,80 @@ class TestSectorScan:
         
         # 跟风板块应谨慎
         assert follow_a.sector_tradeability_tag == SectorTradeabilityTag.CAUTION
+
+    def test_industry_only_mode_uses_relaxed_thresholds(self, service):
+        """
+        测试：题材缺失时按行业口径放宽阈值
+        """
+        sectors = [
+            {"sector_name": "火力发电", "sector_change_pct": 1.15},
+            {"sector_name": "水力发电", "sector_change_pct": 0.88},
+            {"sector_name": "公路", "sector_change_pct": 0.33},
+        ]
+
+        scored = service._score_sectors(sectors, data_mode="industry_only")
+
+        thermal = next(s for s in scored if s.sector_name == "火力发电")
+        hydro = next(s for s in scored if s.sector_name == "水力发电")
+
+        assert thermal.sector_mainline_tag == SectorMainlineTag.MAINLINE
+        assert hydro.sector_mainline_tag == SectorMainlineTag.SUB_MAINLINE
+
+    def test_sector_source_type_preserved(self, service):
+        """
+        测试：混合口径评分后应保留板块来源类型
+        """
+        sectors = [
+            {"sector_name": "算力题材", "sector_change_pct": 2.2, "sector_source_type": "concept"},
+            {"sector_name": "电力设备", "sector_change_pct": 1.1, "sector_source_type": "industry"},
+        ]
+
+        scored = service._score_sectors(sectors)
+        concept = next(s for s in scored if s.sector_name == "算力题材")
+        industry = next(s for s in scored if s.sector_name == "电力设备")
+
+        assert concept.sector_source_type == "concept"
+        assert industry.sector_source_type == "industry"
+
+    def test_mixed_sources_use_independent_rank_bonus(self, service):
+        """
+        测试：题材与行业应各自使用组内排名，而不是共享同一排名分
+        """
+        sectors = [
+            {"sector_name": "题材第一", "sector_change_pct": -0.5, "sector_source_type": "concept"},
+            {"sector_name": "行业第一", "sector_change_pct": -0.5, "sector_source_type": "industry"},
+            {"sector_name": "题材第二", "sector_change_pct": -0.7, "sector_source_type": "concept"},
+            {"sector_name": "行业第二", "sector_change_pct": -0.7, "sector_source_type": "industry"},
+        ]
+
+        scored = service._score_sectors(sectors)
+        concept_first = next(s for s in scored if s.sector_name == "题材第一")
+        industry_first = next(s for s in scored if s.sector_name == "行业第一")
+
+        assert concept_first.sector_continuity_tag == SectorContinuityTag.OBSERVABLE
+        assert industry_first.sector_continuity_tag == SectorContinuityTag.OBSERVABLE
+
+    def test_sector_reason_tags_explain_classification(self, service):
+        """
+        测试：板块输出应包含结构化解释标签
+        """
+        sectors = [
+            {
+                "sector_name": "算力题材",
+                "sector_change_pct": 2.2,
+                "sector_source_type": "concept",
+                "stock_count": 9,
+                "sector_turnover": 220,
+            },
+        ]
+
+        scored = service._score_sectors(sectors)
+        sector = scored[0]
+
+        assert sector.sector_score > 0
+        assert "题材口径" in sector.sector_reason_tags
+        assert "连续性待确认" in sector.sector_reason_tags
+        assert "需确认" in sector.sector_reason_tags
 
     def test_trash_sector_filtering(self, service):
         """
@@ -179,7 +253,7 @@ class TestSectorScan:
 
     def test_tradable_tag_for_mainline_sustainable(self, service):
         """
-        测试：主线+可持续 = 可交易
+        测试：主线但连续性未知时，先降级为谨慎
         """
         sectors = [
             {"sector_name": "主线持续", "sector_change_pct": 4.0},
@@ -188,7 +262,7 @@ class TestSectorScan:
         scored = service._score_sectors(sectors)
         sector = scored[0]
 
-        assert sector.sector_tradeability_tag == SectorTradeabilityTag.TRADABLE
+        assert sector.sector_tradeability_tag == SectorTradeabilityTag.CAUTION
 
     def test_caution_tag_for_follow_high_change(self, service):
         """
@@ -297,7 +371,7 @@ class TestSectorScan:
 
     def test_continuity_tag_for_high_strength(self, service):
         """
-        测试：高强度板块标记为可持续
+        测试：高强度但连续性未知的板块标记为可观察
         """
         sectors = [
             {"sector_name": "高强度板块", "sector_change_pct": 5.0},
@@ -306,7 +380,22 @@ class TestSectorScan:
         scored = service._score_sectors(sectors)
         sector = scored[0]
 
-        assert sector.sector_continuity_tag == SectorContinuityTag.SUSTAINABLE
+        assert sector.sector_continuity_tag == SectorContinuityTag.OBSERVABLE
+
+    def test_ranking_bonus_uses_sorted_change_pct(self, service):
+        """
+        测试：排名加分应基于最终涨幅排序，而不是原始输入顺序
+        """
+        sectors = [
+            {"sector_name": "低涨幅", "sector_change_pct": 0.3},
+            {"sector_name": "高涨幅", "sector_change_pct": 3.0},
+            {"sector_name": "中涨幅", "sector_change_pct": 1.2},
+        ]
+
+        scored = service._score_sectors(sectors)
+
+        assert scored[0].sector_name == "高涨幅"
+        assert scored[0].sector_strength_rank == 1
 
     def test_continuity_tag_for_low_strength(self, service):
         """
@@ -327,6 +416,55 @@ class TestSectorScan:
             SectorContinuityTag.OBSERVABLE, 
             SectorContinuityTag.CAUTION
         ]
+
+    def test_concept_continuity_uses_concept_history(self, service, monkeypatch):
+        """
+        测试：题材连续性应独立使用题材历史，而不是行业历史
+        """
+        def mock_recent_dates(_trade_date, count=5):
+            return ["20260320", "20260319", "20260318"][:count]
+
+        def mock_concept_rows(trade_date):
+            mapping = {
+                "20260320": [{"sector_name": "算力题材", "sector_change_pct": 2.1}],
+                "20260319": [{"sector_name": "算力题材", "sector_change_pct": 1.4}],
+                "20260318": [{"sector_name": "算力题材", "sector_change_pct": 0.8}],
+            }
+            return mapping.get(trade_date, [])
+
+        monkeypatch.setattr(service, "_get_recent_effective_trade_dates", mock_recent_dates)
+        monkeypatch.setattr(service.client, "get_concept_sectors_from_limitup", mock_concept_rows)
+        monkeypatch.setattr(service.client, "get_sector_data", lambda _trade_date: [])
+
+        sectors = [
+            {"sector_name": "算力题材", "sector_change_pct": 2.2, "sector_source_type": "concept"},
+        ]
+
+        scored = service._score_sectors(sectors, trade_date="2026-03-20")
+        sector = scored[0]
+
+        assert sector.sector_continuity_days == 3
+        assert sector.sector_continuity_tag == SectorContinuityTag.SUSTAINABLE
+        assert sector.sector_tradeability_tag == SectorTradeabilityTag.TRADABLE
+
+    def test_recent_effective_trade_dates_are_unique(self, service, monkeypatch):
+        """
+        测试：非交易日回退时，连续性回看不应重复统计同一个交易日
+        """
+        mapping = {
+            "20260323": "20260323",
+            "20260322": "20260321",
+            "20260321": "20260321",
+            "20260320": "20260320",
+            "20260319": "20260319",
+            "20260318": "20260318",
+        }
+
+        monkeypatch.setattr(service.client, "_resolve_trade_date", lambda d: mapping.get(d, d))
+
+        dates = service._get_recent_effective_trade_dates("2026-03-23", count=4)
+
+        assert dates == ["20260323", "20260321", "20260320", "20260319"]
 
 
 class TestSectorScanAPI:
@@ -367,6 +505,9 @@ class TestSectorScanAPI:
         
         response = SectorScanResponse(
             trade_date="2026-03-19",
+            resolved_trade_date="2026-03-19",
+            sector_data_mode="hybrid",
+            threshold_profile="strict",
             mainline_sectors=mainline[:5],
             sub_mainline_sectors=sub_mainline[:5],
             follow_sectors=follow[:10],
@@ -376,6 +517,8 @@ class TestSectorScanAPI:
         
         # 验证响应结构
         assert response.trade_date == "2026-03-19"
+        assert response.resolved_trade_date == "2026-03-19"
+        assert response.sector_data_mode == "hybrid"
         assert isinstance(response.mainline_sectors, list)
         assert isinstance(response.sub_mainline_sectors, list)
         assert isinstance(response.follow_sectors, list)
@@ -414,11 +557,14 @@ class TestSectorScanAPI:
         
         response = LeaderSectorResponse(
             trade_date="2026-03-19",
+            resolved_trade_date="2026-03-19",
+            sector_data_mode="hybrid",
             sector=leader
         )
-        
+
         # 验证响应结构
         assert response.trade_date == "2026-03-19"
+        assert response.resolved_trade_date == "2026-03-19"
         assert response.sector is not None
         assert response.sector.sector_mainline_tag == SectorMainlineTag.MAINLINE
 

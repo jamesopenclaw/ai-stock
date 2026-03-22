@@ -2,16 +2,18 @@
 个股筛选 API
 """
 from fastapi import APIRouter, Query
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 
 from app.models.schemas import (
     StockInput,
-    StockOutput,
-    StockPoolsOutput,
     ApiResponse
 )
-from app.services.stock_filter import stock_filter_service
+from app.services.stock_filter import (
+    stock_filter_service,
+)
+from app.services.decision_context import decision_context_service
+from app.services.sell_point import sell_point_service
 from app.data.tushare_client import tushare_client
 
 router = APIRouter()
@@ -31,30 +33,19 @@ async def filter_stocks(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        # 获取个股数据
-        stock_list = tushare_client.get_stock_list(trade_date.replace("-", ""), limit=limit)
-
-        # 转换为输入模型
-        stocks = [
-            StockInput(
-                ts_code=s["ts_code"],
-                stock_name=s["stock_name"],
-                sector_name=s.get("sector_name", "未知"),
-                close=s["close"],
-                change_pct=s["change_pct"],
-                turnover_rate=s["turnover_rate"],
-                amount=s["amount"],
-                vol_ratio=s.get("vol_ratio"),
-                high=s["high"],
-                low=s["low"],
-                open=s["open"],
-                pre_close=s["pre_close"],
-            )
-            for s in stock_list
-        ]
+        context = await decision_context_service.build_context(
+            trade_date,
+            top_gainers=max(100, min(limit, 200)),
+            include_holdings=False,
+        )
 
         # 筛选
-        result = stock_filter_service.filter(trade_date, stocks)
+        result = stock_filter_service.filter_with_context(
+            trade_date,
+            context.stocks,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+        )
 
         return ApiResponse(
             data={
@@ -84,33 +75,35 @@ async def get_stock_pools(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        # 获取个股数据
-        stock_list = tushare_client.get_stock_list(trade_date.replace("-", ""), limit=limit)
-
-        # 转换为输入模型
-        stocks = [
-            StockInput(
-                ts_code=s["ts_code"],
-                stock_name=s["stock_name"],
-                sector_name=s.get("sector_name", "未知"),
-                close=s["close"],
-                change_pct=s["change_pct"],
-                turnover_rate=s["turnover_rate"],
-                amount=s["amount"],
-                vol_ratio=s.get("vol_ratio"),
-                high=s["high"],
-                low=s["low"],
-                open=s["open"],
-                pre_close=s["pre_close"],
-            )
-            for s in stock_list
-        ]
-
-        # 模拟持仓（实际从账户系统获取）
-        holdings = []
+        context = await decision_context_service.build_context(
+            trade_date,
+            top_gainers=max(100, min(limit, 300)),
+            include_holdings=True,
+        )
+        scored_stocks = stock_filter_service.filter_with_context(
+            trade_date,
+            context.stocks,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+        )
 
         # 三池分类
-        result = stock_filter_service.classify_pools(trade_date, stocks, holdings)
+        result = stock_filter_service.classify_pools(
+            trade_date,
+            context.stocks,
+            context.holdings_list,
+            context.account,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            scored_stocks=scored_stocks,
+        )
+        sell_analysis = sell_point_service.analyze(
+            trade_date,
+            context.holdings,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+        )
+        result = stock_filter_service.attach_sell_analysis(result, sell_analysis)
 
         return ApiResponse(
             data={
@@ -136,7 +129,7 @@ async def get_stock_detail(
     # 处理 trade_date，确保是字符串
     if trade_date is None or not isinstance(trade_date, str):
         trade_date = datetime.now().strftime("%Y-%m-%d")
-    
+
     # 确保是字符串
     trade_date = str(trade_date)
 

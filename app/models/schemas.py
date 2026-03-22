@@ -100,12 +100,17 @@ class SectorInput(BaseModel):
 class SectorOutput(BaseModel):
     """板块扫描输出"""
     sector_name: str
+    sector_source_type: str = Field("industry", description="板块来源类型")
     sector_change_pct: float
+    sector_score: float = Field(0.0, description="板块综合评分")
     sector_strength_rank: int
     sector_mainline_tag: SectorMainlineTag
     sector_continuity_tag: SectorContinuityTag
     sector_tradeability_tag: SectorTradeabilityTag
     sector_continuity_days: int = Field(0, description="连续活跃天数")
+    sector_turnover: Optional[float] = Field(None, description="板块成交额(亿元)")
+    sector_stock_count: Optional[int] = Field(None, description="板块成分股数量")
+    sector_reason_tags: List[str] = Field(default_factory=list, description="板块判定原因")
     sector_comment: str = ""
     sector_news_summary: Optional[str] = None
     sector_falsification: Optional[str] = None
@@ -119,6 +124,9 @@ class SectorScanRequest(BaseModel):
 class SectorScanResponse(BaseModel):
     """板块扫描响应"""
     trade_date: str
+    resolved_trade_date: Optional[str] = Field(None, description="实际使用的交易日")
+    sector_data_mode: Optional[str] = Field(None, description="板块数据口径")
+    threshold_profile: Optional[str] = Field(None, description="阈值档位")
     mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="主线板块")
     sub_mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="次主线板块")
     follow_sectors: List[SectorOutput] = Field(default_factory=list, description="跟风板块")
@@ -129,6 +137,8 @@ class SectorScanResponse(BaseModel):
 class LeaderSectorResponse(BaseModel):
     """主线板块响应"""
     trade_date: str
+    resolved_trade_date: Optional[str] = Field(None, description="实际使用的交易日")
+    sector_data_mode: Optional[str] = Field(None, description="板块数据口径")
     sector: SectorOutput
 
 
@@ -188,6 +198,7 @@ class StockInput(BaseModel):
     stage_tag: str = Field(default="震荡", description="阶段位置标签")
     news_catalyst: Optional[str] = Field(None, description="消息催化")
     news_risk: Optional[str] = Field(None, description="风险/证伪信息")
+    candidate_source_tag: str = Field(default="", description="候选来源标签")
 
 
 class StockOutput(BaseModel):
@@ -196,6 +207,16 @@ class StockOutput(BaseModel):
     stock_name: str
     sector_name: str
     change_pct: float
+    close: float = 0.0
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    pre_close: float = 0.0
+    vol_ratio: Optional[float] = None
+    turnover_rate: float = 0.0
+    stock_score: float = Field(0.0, description="综合评分")
+    candidate_source_tag: str = Field(default="", description="候选来源标签")
+    candidate_bucket_tag: str = Field(default="", description="候选分层标签")
     # 评分标签
     stock_strength_tag: StockStrengthTag
     stock_continuity_tag: StockContinuityTag
@@ -206,6 +227,25 @@ class StockOutput(BaseModel):
     stock_falsification_cond: str = ""
     # 简评
     stock_comment: str = ""
+    # 持仓上下文（仅持仓处理池使用）
+    holding_qty: Optional[int] = None
+    cost_price: Optional[float] = None
+    holding_market_value: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    buy_date: Optional[str] = None
+    can_sell_today: Optional[bool] = None
+    holding_reason: Optional[str] = None
+    holding_days: Optional[int] = None
+    # 持仓处理建议（由卖点分析回填）
+    sell_signal_tag: Optional[str] = None
+    sell_point_type: Optional[str] = None
+    sell_trigger_cond: Optional[str] = None
+    sell_reason: Optional[str] = None
+    sell_priority: Optional[str] = None
+    sell_comment: Optional[str] = None
+    # 账户可参与池补充说明
+    pool_entry_reason: Optional[str] = None
+    position_hint: Optional[str] = None
 
 
 # ========== 三池相关 ==========
@@ -240,6 +280,8 @@ class BuyPointOutput(BaseModel):
     """买点分析输出"""
     ts_code: str
     stock_name: str
+    candidate_source_tag: str = Field(default="", description="候选来源标签")
+    candidate_bucket_tag: str = Field(default="", description="候选分层标签")
     # 买点信号
     buy_signal_tag: BuySignalTag
     buy_point_type: BuyPointType
@@ -247,6 +289,14 @@ class BuyPointOutput(BaseModel):
     buy_trigger_cond: str = Field(..., description="触发条件")
     buy_confirm_cond: str = Field(..., description="确认条件")
     buy_invalid_cond: str = Field(..., description="失效条件")
+    buy_current_price: Optional[float] = Field(None, description="最新可用价格")
+    buy_current_change_pct: Optional[float] = Field(None, description="最新涨跌幅")
+    buy_trigger_price: Optional[float] = Field(None, description="触发价格")
+    buy_invalid_price: Optional[float] = Field(None, description="失效价格")
+    buy_trigger_gap_pct: Optional[float] = Field(None, description="距触发价百分比")
+    buy_invalid_gap_pct: Optional[float] = Field(None, description="距失效价百分比")
+    buy_required_volume_ratio: Optional[float] = Field(None, description="所需量比")
+    buy_requires_sector_resonance: bool = Field(False, description="是否要求板块共振")
     # 风险评估
     buy_risk_level: RiskLevel
     buy_account_fit: str = Field(..., description="适合/一般/不适合")
@@ -299,6 +349,12 @@ class SellPointOutput(BaseModel):
     """卖点分析输出"""
     ts_code: str
     stock_name: str
+    market_price: Optional[float] = Field(None, description="当前价格")
+    cost_price: Optional[float] = Field(None, description="成本价")
+    pnl_pct: Optional[float] = Field(None, description="浮盈亏比例")
+    holding_qty: Optional[int] = Field(None, description="持仓数量")
+    holding_days: Optional[int] = Field(None, description="持有天数")
+    can_sell_today: Optional[bool] = Field(None, description="今日是否可卖")
     # 卖点信号
     sell_signal_tag: SellSignalTag
     sell_point_type: SellPointType
@@ -335,6 +391,10 @@ class AccountPosition(BaseModel):
     buy_date: str
     can_sell_today: bool
     holding_reason: Optional[str] = None
+    pre_close: Optional[float] = None
+    holding_days: int = 0
+    pnl_amount: float = 0.0
+    today_pnl_amount: float = 0.0
 
 
 class AccountInput(BaseModel):
@@ -365,6 +425,8 @@ class AccountProfile(BaseModel):
     today_new_buy_count: int
     t1_locked_count: int
     market_value: float
+    total_pnl_amount: float = 0.0
+    today_pnl_amount: float = 0.0
 
 
 # ========== 执行摘要相关 ==========

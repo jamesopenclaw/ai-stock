@@ -6,6 +6,9 @@ COPY package.json ./
 RUN npm install
 
 COPY . .
+# 与 nginx /api 反代一致，避免写死 localhost:8000（局域网访问 Docker 时失效）
+ARG VITE_API_BASE=/api/v1
+ENV VITE_API_BASE=$VITE_API_BASE
 RUN npm run build
 
 FROM nginx:alpine

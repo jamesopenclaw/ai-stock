@@ -28,6 +28,8 @@ from app.models.schemas import (
     BuySignalTag,
     RiskLevel,
     MarketEnvTag,
+    StockPoolsOutput,
+    AccountInput,
 )
 from app.services.buy_point import BuyPointService
 
@@ -52,7 +54,7 @@ class TestBuyPoint:
             stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
             stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
             stock_core_tag=StockCoreTag.CORE,
-            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
             stock_falsification_cond="跌破MA5",
             stock_comment="强势股，可关注"
         )
@@ -125,6 +127,48 @@ class TestBuyPoint:
         assert buy_point.buy_signal_tag == BuySignalTag.NOT_BUY, \
             f"弱势股应返回不买信号，实际: {buy_point.buy_signal_tag}"
 
+    def test_market_watch_stock_only_observe(self, service, strong_stock):
+        """
+        测试：市场观察池股票不应直接给出可买
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.stock_pool_tag = StockPoolTag.MARKET_WATCH
+        buy_point = service._analyze_stock_buy_point(strong_stock, MockMarketEnv())
+
+        assert buy_point.buy_signal_tag == BuySignalTag.OBSERVE
+
+    def test_defense_account_executable_stock_can_trial_buy(self, service, strong_stock):
+        """
+        测试：防守环境下，明确放入账户可参与池的最强核心股可给轻仓试错信号
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.DEFENSE
+            breakout_allowed = False
+            risk_level = RiskLevel.HIGH
+
+        strong_stock.stock_tradeability_tag = StockTradeabilityTag.NOT_RECOMMENDED
+        strong_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+        strong_stock.pool_entry_reason = "防守日仅保留最强核心股试错"
+        buy_point = service._analyze_stock_buy_point(
+            strong_stock,
+            MockMarketEnv(),
+            AccountInput(
+                total_asset=100000,
+                available_cash=80000,
+                total_position_ratio=0.2,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+        )
+
+        assert buy_point.buy_signal_tag == BuySignalTag.CAN_BUY
+        assert buy_point.buy_account_fit == "一般"
+        assert "防守试错" in buy_point.buy_comment
+
     # ========== 条件字段测试 ==========
 
     def test_trigger_condition_exists(self, service, strong_stock):
@@ -142,6 +186,28 @@ class TestBuyPoint:
         
         assert buy_point.buy_trigger_cond is not None
         assert len(buy_point.buy_trigger_cond) > 0
+
+    def test_buy_point_contains_current_price_and_gap(self, service, strong_stock):
+        """
+        测试：买点输出应包含最新价及与关键价位的距离
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.close = 12.5
+        strong_stock.pre_close = 11.5
+        strong_stock.open = 11.6
+        strong_stock.high = 12.8
+        strong_stock.low = 11.5
+
+        buy_point = service._analyze_stock_buy_point(strong_stock, MockMarketEnv())
+
+        assert buy_point.buy_current_price == 12.5
+        assert buy_point.buy_current_change_pct == 8.5
+        assert buy_point.buy_trigger_gap_pct is not None
+        assert buy_point.buy_invalid_gap_pct is not None
 
     def test_confirm_condition_exists(self, service, strong_stock):
         """
@@ -193,6 +259,36 @@ class TestBuyPoint:
         # 强势股在进攻环境风险不应为高
         assert buy_point.buy_risk_level != RiskLevel.HIGH
 
+    def test_analyze_skips_holding_process_pool(self, service, strong_stock):
+        """
+        测试：持仓处理池股票不应出现在买点列表中
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.stock_pool_tag = StockPoolTag.HOLDING_PROCESS
+        response = service.analyze(
+            "2026-03-20",
+            stocks=[],
+            account=None,
+            market_env=MockMarketEnv(),
+            scored_stocks=[strong_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-03-20",
+                market_watch_pool=[],
+                account_executable_pool=[],
+                holding_process_pool=[strong_stock],
+                total_count=1,
+            ),
+        )
+
+        assert response.total_count == 0
+        assert response.available_buy_points == []
+        assert response.observe_buy_points == []
+        assert response.not_buy_points == []
+
 
 class TestBuyPointPRDRequirements:
     """PRD 验收要求测试"""
@@ -214,7 +310,7 @@ class TestBuyPointPRDRequirements:
             stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
             stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
             stock_core_tag=StockCoreTag.CORE,
-            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
             stock_falsification_cond="跌破MA5",
             stock_comment=""
         )
@@ -244,7 +340,7 @@ class TestBuyPointPRDRequirements:
             stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
             stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
             stock_core_tag=StockCoreTag.CORE,
-            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
             stock_falsification_cond="跌破MA5",
             stock_comment=""
         )
@@ -274,7 +370,7 @@ class TestBuyPointPRDRequirements:
             stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
             stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
             stock_core_tag=StockCoreTag.CORE,
-            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
             stock_falsification_cond="",
             stock_comment=""
         )

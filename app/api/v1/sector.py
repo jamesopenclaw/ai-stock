@@ -37,6 +37,9 @@ async def scan_sectors(
         return ApiResponse(
             data={
                 "trade_date": result.trade_date,
+                "resolved_trade_date": result.resolved_trade_date,
+                "sector_data_mode": result.sector_data_mode,
+                "threshold_profile": result.threshold_profile,
                 "mainline_sectors": [s.model_dump() for s in result.mainline_sectors],
                 "sub_mainline_sectors": [s.model_dump() for s in result.sub_mainline_sectors],
                 "follow_sectors": [s.model_dump() for s in result.follow_sectors],
@@ -65,6 +68,8 @@ async def get_leader_sector(
         return ApiResponse(
             data={
                 "trade_date": result.trade_date,
+                "resolved_trade_date": result.resolved_trade_date,
+                "sector_data_mode": result.sector_data_mode,
                 "sector": result.sector.model_dump()
             }
         )
@@ -87,7 +92,7 @@ async def list_sectors(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        result = sector_scan_service.scan(trade_date)
+        result = sector_scan_service.scan(trade_date, limit_output=False)
 
         # 合并所有板块
         all_sectors = (
@@ -112,6 +117,9 @@ async def list_sectors(
         return ApiResponse(
             data={
                 "trade_date": result.trade_date,
+                "resolved_trade_date": result.resolved_trade_date,
+                "sector_data_mode": result.sector_data_mode,
+                "threshold_profile": result.threshold_profile,
                 "sectors": [s.model_dump() for s in all_sectors],
                 "total": len(all_sectors)
             }

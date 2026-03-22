@@ -22,6 +22,7 @@
             <view class="buy-info">
               <text class="buy-name">{{ item.stock_name }}</text>
               <text class="buy-code">{{ item.ts_code }}</text>
+              <text class="buy-price">最新价 {{ formatPrice(item.buy_current_price) }} {{ formatSignedPct(item.buy_current_change_pct) }}</text>
             </view>
             <view class="buy-right">
               <text :class="['buy-type', 'type-' + item.buy_point_type]">{{ item.buy_point_type }}</text>
@@ -31,8 +32,20 @@
           <!-- 详情展开 -->
           <view v-if="expandedItem === item.ts_code" class="buy-detail">
             <view class="detail-section">
+              <text class="detail-title">候选分层</text>
+              <text class="detail-content">{{ item.candidate_bucket_tag || '-' }}</text>
+            </view>
+            <view class="detail-section">
               <text class="detail-title">触发条件</text>
               <text class="detail-content">{{ item.buy_trigger_cond }}</text>
+            </view>
+            <view class="detail-section">
+              <text class="detail-title">触发/失效价</text>
+              <text class="detail-content">{{ item.buy_trigger_price || '-' }} / {{ item.buy_invalid_price || '-' }}</text>
+            </view>
+            <view class="detail-section">
+              <text class="detail-title">距触发 / 距失效</text>
+              <text class="detail-content">{{ formatGap(item.buy_trigger_gap_pct) }} / {{ formatGap(item.buy_invalid_gap_pct) }}</text>
             </view>
             <view class="detail-section">
               <text class="detail-title">确认条件</text>
@@ -59,12 +72,17 @@
             <view class="buy-info">
               <text class="buy-name">{{ item.stock_name }}</text>
               <text class="buy-code">{{ item.ts_code }}</text>
+              <text class="buy-price">最新价 {{ formatPrice(item.buy_current_price) }} {{ formatSignedPct(item.buy_current_change_pct) }}</text>
             </view>
             <view class="buy-right">
               <text class="buy-type type-observe">{{ item.buy_point_type }}</text>
             </view>
           </view>
           <view v-if="expandedItem === item.ts_code" class="buy-detail">
+            <view class="detail-section">
+              <text class="detail-title">候选来源</text>
+              <text class="detail-content">{{ item.candidate_source_tag || '-' }}</text>
+            </view>
             <view class="detail-section">
               <text class="detail-title">触发条件</text>
               <text class="detail-content">{{ item.buy_trigger_cond }}</text>
@@ -96,6 +114,23 @@ const expandedItem = ref(null)
 
 const toggleDetail = (item) => {
   expandedItem.value = expandedItem.value === item.ts_code ? null : item.ts_code
+}
+
+const formatPrice = (value) => {
+  if (value === null || value === undefined) return '-'
+  return Number(value).toFixed(2)
+}
+
+const formatSignedPct = (value) => {
+  if (value === null || value === undefined) return '-'
+  const num = Number(value)
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}%`
+}
+
+const formatGap = (value) => {
+  if (value === null || value === undefined) return '-'
+  const num = Number(value)
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}%`
 }
 
 const loadData = async () => {
@@ -132,6 +167,7 @@ onMounted(() => {
 .buy-info { display: flex; flex-direction: column; }
 .buy-name { font-weight: bold; }
 .buy-code { font-size: 12px; color: #999; }
+.buy-price { font-size: 12px; color: #666; margin-top: 2px; }
 .buy-right { display: flex; align-items: center; gap: 8px; }
 .buy-type { font-size: 12px; padding: 2px 8px; border-radius: 4px; }
 .type-突破 { background: #e1f3d8; color: #67c23a; }

@@ -23,10 +23,8 @@ class Settings(BaseSettings):
     # Tushare
     tushare_token: str = ""
 
-    # 轻舟账户配置 (手工维护)
+    # 轻舟账户：首次启动写入 DB 的默认总资产（元），之后由账户管理页维护
     qingzhou_total_asset: float = 1000000
-    qingzhou_available_cash: float = 500000
-    qingzhou_total_position_ratio: float = 0.5
 
     # API
     api_v1_prefix: str = "/api/v1"

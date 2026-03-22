@@ -42,6 +42,12 @@ const routes = [
     name: 'Account',
     meta: { title: '账户管理' },
     component: () => import('../views/Account.vue')
+  },
+  {
+    path: '/review',
+    name: 'Review',
+    meta: { title: '复盘统计' },
+    component: () => import('../views/ReviewStats.vue')
   }
 ]
 

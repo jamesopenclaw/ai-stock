@@ -55,7 +55,9 @@ export const accountApi = {
   profile: () => request('/account/profile'),
   positions: () => request('/account/positions'),
   status: () => request('/account/status'),
-  adapt: (tradeDate) => request('/account/adapt', { method: 'POST', data: { trade_date: tradeDate } })
+  adapt: (tradeDate) => request('/account/adapt', { method: 'POST', data: { trade_date: tradeDate } }),
+  updatePosition: (tsCode, data) =>
+    request(`/account/positions/${encodeURIComponent(tsCode)}`, { method: 'PUT', data })
 }
 
 // 获取今日日期

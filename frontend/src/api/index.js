@@ -1,6 +1,7 @@
 import axios from 'axios'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api/v1'
+// 默认走相对路径，便于 Docker 内 nginx 反代 /api；本地可设 VITE_API_BASE=http://localhost:8000/api/v1
+const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -33,7 +34,8 @@ export const decisionApi = {
   buyPoint: (tradeDate, limit) => api.get('/decision/buy-point', { params: { trade_date: tradeDate, limit } }),
   sellPoint: (tradeDate) => api.get('/decision/sell-point', { params: { trade_date: tradeDate } }),
   summary: (tradeDate) => api.get('/decision/summary', { params: { trade_date: tradeDate } }),
-  analyze: (tradeDate) => api.post('/decision/analyze', { trade_date: tradeDate })
+  analyze: (tradeDate) => api.post('/decision/analyze', { trade_date: tradeDate }),
+  reviewStats: (limitDays = 10) => api.get('/decision/review-stats', { params: { limit_days: limitDays } })
 }
 
 // Account API
@@ -41,7 +43,14 @@ export const accountApi = {
   profile: () => api.get('/account/profile'),
   positions: () => api.get('/account/positions'),
   status: () => api.get('/account/status'),
-  adapt: (tradeDate) => api.post('/account/adapt', { trade_date: tradeDate })
+  adapt: (tradeDate) => api.post('/account/adapt', { trade_date: tradeDate }),
+  getConfig: () => api.get('/account/config'),
+  updateConfig: (payload) => api.put('/account/config', payload),
+  addPosition: (payload) => api.post('/account/positions', payload),
+  /** 修改持仓：数量、成本价、买入理由（路径使用 ts_code，需 encode） */
+  updatePosition: (tsCode, payload) =>
+    api.put(`/account/positions/${encodeURIComponent(tsCode)}`, payload),
+  deletePosition: (positionId) => api.delete(`/account/positions/${positionId}`)
 }
 
 export default api
