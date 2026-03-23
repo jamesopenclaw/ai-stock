@@ -2,6 +2,7 @@
 市场环境分析服务
 """
 from typing import Dict, Optional
+from collections import Counter
 from loguru import logger
 
 from app.models.schemas import (
@@ -76,11 +77,28 @@ class MarketEnvService:
         Returns:
             当前市场环境
         """
-        # 拉取数据
-        index_quotes = self.client.get_index_quote(trade_date.replace("-", ""))
-        limit_stats = self.client.get_limit_stats(trade_date.replace("-", ""))
-        market_turnover = self.client.get_market_turnover(trade_date.replace("-", ""))
-        up_down_ratio = self.client.get_up_down_ratio(trade_date.replace("-", ""))
+        compact_trade_date = trade_date.replace("-", "")
+
+        index_payload = self.client.get_index_quote_with_meta(compact_trade_date)
+        limit_payload = self.client.get_limit_stats_with_meta(compact_trade_date)
+        turnover_payload = self.client.get_market_turnover_with_meta(compact_trade_date)
+        up_down_payload = self.client.get_up_down_ratio_with_meta(compact_trade_date)
+
+        index_quotes = index_payload.get("rows", [])
+        limit_stats = limit_payload.get("stats", {})
+        market_turnover = turnover_payload.get("market_turnover", 0)
+        up_down_ratio = up_down_payload.get("up_down_ratio", {})
+
+        resolved_candidates = [
+            str(index_payload.get("data_trade_date") or ""),
+            str(limit_payload.get("data_trade_date") or ""),
+            str(turnover_payload.get("data_trade_date") or ""),
+            str(up_down_payload.get("data_trade_date") or ""),
+        ]
+        resolved_candidates = [d for d in resolved_candidates if d]
+        resolved_trade_date = compact_trade_date
+        if resolved_candidates:
+            resolved_trade_date = Counter(resolved_candidates).most_common(1)[0][0]
 
         # 构建输入数据
         index_sh = index_quotes[0]["change_pct"] if len(index_quotes) > 0 else 0
@@ -88,7 +106,7 @@ class MarketEnvService:
         index_cyb = index_quotes[2]["change_pct"] if len(index_quotes) > 2 else 0
 
         market_data = MarketEnvInput(
-            trade_date=trade_date,
+            trade_date=f"{resolved_trade_date[:4]}-{resolved_trade_date[4:6]}-{resolved_trade_date[6:8]}",
             index_sh=index_sh,
             index_sz=index_sz,
             index_cyb=index_cyb,

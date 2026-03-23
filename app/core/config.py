@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     wecom_webhook_url: str = ""
     notify_enabled: bool = True
 
+    # LLM 辅助层
+    llm_enabled: bool = False
+    llm_provider: str = "custom"
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_timeout_seconds: float = 12.0
+    llm_temperature: float = 0.2
+    llm_max_input_items: int = 8
+
     class Config:
         env_file = ".env"
         case_sensitive = False

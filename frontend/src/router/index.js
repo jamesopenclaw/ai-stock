@@ -48,6 +48,12 @@ const routes = [
     name: 'Review',
     meta: { title: '复盘统计' },
     component: () => import('../views/ReviewStats.vue')
+  },
+  {
+    path: '/system',
+    name: 'SystemSettings',
+    meta: { title: '系统设置' },
+    component: () => import('../views/SystemSettings.vue')
   }
 ]
 

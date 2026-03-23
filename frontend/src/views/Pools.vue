@@ -6,6 +6,12 @@
           <div class="card-header-title">
             <span>三池分类</span>
             <span v-if="displayDate" class="header-date">{{ displayDate }}</span>
+            <span
+              v-if="poolsData.resolved_trade_date && poolsData.resolved_trade_date !== displayDate"
+              class="header-date"
+            >
+              实际候选日 {{ poolsData.resolved_trade_date }}
+            </span>
           </div>
           <el-button @click="loadData" :loading="loading">刷新</el-button>
         </div>
@@ -21,6 +27,9 @@
             <div class="overview-copy">
               <div class="overview-title">{{ overviewTitle }}</div>
               <div class="overview-desc">{{ overviewDesc }}</div>
+              <div v-if="poolsData.llm_summary?.page_summary" class="overview-llm">
+                {{ poolsData.llm_summary.page_summary }}
+              </div>
             </div>
           </div>
 
@@ -48,8 +57,16 @@
             </div>
           </div>
 
+          <div v-if="llmStatusVisible" class="llm-status" :class="llmStatusClass">
+            <span class="llm-status-label">LLM 状态</span>
+            <span class="llm-status-text">{{ llmStatusText }}</span>
+          </div>
+
           <div v-if="topFocusItems.length" class="top-focus">
             <div class="top-focus-title">今天先看</div>
+            <div v-if="poolsData.llm_summary?.top_focus_summary" class="top-focus-summary">
+              {{ poolsData.llm_summary.top_focus_summary }}
+            </div>
             <div class="top-focus-list">
               <div v-for="item in topFocusItems" :key="`${item.poolKey}-${item.ts_code}`" class="top-focus-item">
                 <span class="top-focus-rank">{{ item.rank }}</span>
@@ -158,7 +175,7 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ stock.stock_falsification_cond || '结构破坏或量能转弱时不再优先观察。' }}</div>
+                        <div class="condition-title">{{ stock.llm_risk_note || stock.stock_falsification_cond || '结构破坏或量能转弱时不再优先观察。' }}</div>
                       </div>
                     </section>
                   </div>
@@ -266,7 +283,7 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ stock.position_hint || '按计划仓位执行，不要超配。' }}</div>
+                        <div class="condition-title">{{ stock.llm_risk_note || stock.position_hint || '按计划仓位执行，不要超配。' }}</div>
                       </div>
                     </section>
                   </div>
@@ -384,14 +401,14 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ stock.stock_falsification_cond || '若买入逻辑失效，就不要继续硬扛。' }}</div>
+                        <div class="condition-title">{{ stock.llm_risk_note || stock.stock_falsification_cond || '若买入逻辑失效，就不要继续硬扛。' }}</div>
                       </div>
                     </section>
                   </div>
                 </div>
 
                 <div class="signal-footer">
-                  <span>{{ stock.sell_comment || stock.stock_comment || '-' }}</span>
+                  <span>{{ stock.llm_risk_note || stock.sell_comment || stock.stock_comment || '-' }}</span>
                   <span class="footer-flag">{{ holdingFooterFlag(stock) }}</span>
                 </div>
               </article>
@@ -411,7 +428,13 @@ import { ElMessage } from 'element-plus'
 const loading = ref(false)
 const activeTab = ref('holding')
 const displayDate = ref('')
-const poolsData = ref({ market_watch_pool: [], account_executable_pool: [], holding_process_pool: [] })
+const poolsData = ref({
+  market_watch_pool: [],
+  account_executable_pool: [],
+  holding_process_pool: [],
+  resolved_trade_date: '',
+  llm_status: null,
+})
 
 const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 0)
 const accountCount = computed(() => poolsData.value.account_executable_pool?.length || 0)
@@ -461,6 +484,18 @@ const overviewRules = computed(() => {
     return ['先看进池理由', '仓位提示比题材更重要', '可参与不等于立刻追价']
   }
   return ['观察池只负责缩小盯盘范围', '先看最强结构，再看账户是否允许', '没有执行确认就不要急着动']
+})
+
+const llmStatus = computed(() => poolsData.value.llm_status || null)
+const llmStatusVisible = computed(() => Boolean(llmStatus.value))
+const llmStatusClass = computed(() => {
+  if (llmStatus.value?.success) return 'llm-status-success'
+  if (llmStatus.value?.enabled) return 'llm-status-warning'
+  return 'llm-status-muted'
+})
+const llmStatusText = computed(() => {
+  if (!llmStatus.value) return ''
+  return llmStatus.value.message || (llmStatus.value.success ? 'LLM 解释增强已生效' : 'LLM 当前未生效')
 })
 
 const topFocusItems = computed(() => {
@@ -585,11 +620,11 @@ const accountEntryTagType = (stock) => {
   return 'success'
 }
 
-const marketActionLine = (stock) => stock.stock_comment || '先观察这只票是否继续保持强势结构。'
+const marketActionLine = (stock) => stock.llm_plain_note || stock.stock_comment || '先观察这只票是否继续保持强势结构。'
 const marketFooterLine = (stock) => `${stock.stock_strength_tag || '中'}强度，${stock.stock_continuity_tag || '可观察'}，继续等确认。`
-const accountActionLine = (stock) => stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但仍要等买点确认。'
+const accountActionLine = (stock) => stock.llm_plain_note || stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但仍要等买点确认。'
 const accountFooterFlag = (stock) => ((stock.pool_entry_reason || '').includes('防守') ? '轻仓试错' : '等待买点页确认')
-const holdingActionLine = (stock) => `${stock.sell_signal_tag || '观察'}：${stock.sell_reason || stock.sell_comment || '继续跟踪。'}`
+const holdingActionLine = (stock) => stock.llm_plain_note || `${stock.sell_signal_tag || '观察'}：${stock.sell_reason || stock.sell_comment || '继续跟踪。'}`
 const holdingFooterFlag = (stock) => (stock.can_sell_today ? '今日可卖' : 'T+1锁定')
 
 const sellSignalRank = (value) => {
@@ -625,7 +660,13 @@ const loadData = async () => {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
     const res = await stockApi.pools(tradeDate, 50)
-    poolsData.value = res.data.data
+    poolsData.value = res.data.data || {
+      market_watch_pool: [],
+      account_executable_pool: [],
+      holding_process_pool: [],
+      resolved_trade_date: '',
+      llm_status: null,
+    }
     if (holdingCount.value) activeTab.value = 'holding'
     else if (accountCount.value) activeTab.value = 'account'
     else activeTab.value = 'market'
@@ -725,6 +766,14 @@ onMounted(() => {
   line-height: 1.6;
 }
 
+.overview-llm {
+  padding: 10px 12px;
+  border-radius: 12px;
+  line-height: 1.6;
+  color: var(--color-text-main);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .overview-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -735,6 +784,42 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.llm-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.llm-status-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
+}
+
+.llm-status-text {
+  line-height: 1.5;
+  color: var(--color-text-main);
+}
+
+.llm-status-success {
+  border-color: rgba(47, 207, 154, 0.25);
+  background: rgba(47, 207, 154, 0.08);
+}
+
+.llm-status-warning {
+  border-color: rgba(243, 194, 77, 0.25);
+  background: rgba(243, 194, 77, 0.08);
+}
+
+.llm-status-muted {
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .top-focus {
@@ -751,6 +836,11 @@ onMounted(() => {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-sec);
+}
+
+.top-focus-summary {
+  color: var(--color-text-main);
+  line-height: 1.6;
 }
 
 .top-focus-list {

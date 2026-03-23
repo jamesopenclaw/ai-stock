@@ -41,6 +41,12 @@
       "style": {
         "navigationBarTitleText": "账户管理"
       }
+    },
+    {
+      "path": "pages/system/system",
+      "style": {
+        "navigationBarTitleText": "系统设置"
+      }
     }
   ],
   "globalStyle": {

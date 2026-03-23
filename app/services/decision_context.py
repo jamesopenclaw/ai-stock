@@ -22,6 +22,7 @@ class DecisionContext:
     """单次决策请求共享的数据上下文。"""
 
     trade_date: str
+    resolved_stock_trade_date: Optional[str]
     market_env: object
     sector_scan: object
     stocks: List[StockInput]
@@ -32,6 +33,31 @@ class DecisionContext:
 
 class DecisionContextService:
     """统一构建市场、板块、候选股、持仓和账户上下文。"""
+
+    def _target_date(self, trade_date: Optional[str]) -> datetime.date:
+        """将请求日期规范为 date，用于历史口径计算持仓天数。"""
+        raw = str(trade_date or datetime.now().strftime("%Y-%m-%d"))[:10]
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+
+    def _enrich_holding_time_fields(
+        self,
+        holding: dict,
+        trade_date: Optional[str] = None,
+    ) -> dict:
+        """补充持有天数与 T+1 可卖状态。"""
+        target_date = self._target_date(trade_date)
+        buy_date_raw = str(holding.get("buy_date") or "")[:10]
+
+        try:
+            buy_date = datetime.strptime(buy_date_raw, "%Y-%m-%d").date()
+            holding["holding_days"] = max(0, (target_date - buy_date).days)
+            holding["can_sell_today"] = target_date > buy_date
+        except Exception:
+            holding["holding_days"] = 0
+            if holding.get("can_sell_today") is None:
+                holding["can_sell_today"] = False
+
+        return holding
 
     def _count_today_new_buys(self, holdings: List[dict], trade_date: str) -> int:
         """根据持仓买入日期估算当日新开仓数量。"""
@@ -48,6 +74,7 @@ class DecisionContextService:
             holdings_list = [h.to_dict() for h in holdings]
 
             for h in holdings_list:
+                self._enrich_holding_time_fields(h, trade_date)
                 try:
                     detail = tushare_client.get_stock_detail(h["ts_code"], compact_date)
                     if detail and detail.get("close"):
@@ -94,12 +121,14 @@ class DecisionContextService:
         top_gainers: int,
         holdings_list: Optional[List[dict]] = None,
         include_holdings: bool = False,
-    ) -> List[StockInput]:
+    ) -> tuple[List[StockInput], Optional[str]]:
         """获取候选股，并按需将持仓并入候选池。"""
-        stock_list = tushare_client.get_expanded_stock_list(
+        stock_payload = tushare_client.get_expanded_stock_list_with_meta(
             trade_date.replace("-", ""),
             top_gainers=top_gainers,
         )
+        stock_list = stock_payload.get("rows") or []
+        resolved_trade_date = stock_payload.get("data_trade_date")
         stocks = [
             StockInput(
                 ts_code=s["ts_code"],
@@ -122,7 +151,14 @@ class DecisionContextService:
         if include_holdings:
             stocks = merge_holdings_into_candidate_stocks(trade_date, stocks, holdings_list)
 
-        return stocks
+        resolved_trade_date_fmt = None
+        if resolved_trade_date:
+            resolved_trade_date = str(resolved_trade_date)
+            resolved_trade_date_fmt = (
+                f"{resolved_trade_date[:4]}-{resolved_trade_date[4:6]}-{resolved_trade_date[6:8]}"
+            )
+
+        return stocks, resolved_trade_date_fmt
 
     async def build_context(
         self,
@@ -136,7 +172,7 @@ class DecisionContextService:
         account = await self.build_account_input_from_holdings(holdings_list, trade_date)
         market_env = market_env_service.get_current_env(trade_date)
         sector_scan = sector_scan_service.scan(trade_date, limit_output=False)
-        stocks = self.get_candidate_stocks(
+        stocks, resolved_stock_trade_date = self.get_candidate_stocks(
             trade_date,
             top_gainers=top_gainers,
             holdings_list=holdings_list,
@@ -145,6 +181,7 @@ class DecisionContextService:
 
         return DecisionContext(
             trade_date=trade_date,
+            resolved_stock_trade_date=resolved_stock_trade_date,
             market_env=market_env,
             sector_scan=sector_scan,
             stocks=stocks,

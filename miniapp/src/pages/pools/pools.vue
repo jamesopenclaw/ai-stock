@@ -5,6 +5,9 @@
         <view>
           <view class="page-title">三池分类</view>
           <view class="page-date">{{ today }}</view>
+          <view v-if="pools.resolved_trade_date && pools.resolved_trade_date !== today" class="page-date">
+            实际候选日 {{ pools.resolved_trade_date }}
+          </view>
         </view>
         <view class="hero-badge" :class="heroBadgeClass">{{ heroBadge }}</view>
       </view>
@@ -312,7 +315,7 @@ import { stockApi, getToday } from '../../api'
 const today = ref(getToday())
 const activeTab = ref('holding')
 const loading = ref(false)
-const pools = ref({ market_watch_pool: [], account_executable_pool: [], holding_process_pool: [] })
+const pools = ref({ market_watch_pool: [], account_executable_pool: [], holding_process_pool: [], resolved_trade_date: '' })
 
 const tabs = [
   { key: 'market', name: '观察池' },
@@ -501,7 +504,7 @@ const loadData = async () => {
   loading.value = true
   try {
     const res = await stockApi.pools(today.value, 50)
-    pools.value = res.data.data
+    pools.value = res.data.data || { market_watch_pool: [], account_executable_pool: [], holding_process_pool: [], resolved_trade_date: '' }
     if (holdingCount.value) activeTab.value = 'holding'
     else if (accountCount.value) activeTab.value = 'account'
     else activeTab.value = 'market'

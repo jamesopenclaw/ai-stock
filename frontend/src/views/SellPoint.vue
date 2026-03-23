@@ -17,6 +17,9 @@
           <div class="overview-copy">
             <div class="overview-title">{{ sellHeadline }}</div>
             <div class="overview-desc">{{ sellGuidance }}</div>
+            <div v-if="sellData.llm_summary?.page_summary" class="overview-llm">
+              {{ sellData.llm_summary.page_summary }}
+            </div>
           </div>
           <div class="overview-stats">
             <div class="stat-card stat-sell">
@@ -37,6 +40,14 @@
           </div>
           <div class="overview-rules">
             <div v-for="rule in sellChecklist" :key="rule" class="rule-chip">{{ rule }}</div>
+          </div>
+          <div v-if="llmStatusVisible" class="llm-status" :class="llmStatusClass">
+            <span class="llm-status-label">LLM 状态</span>
+            <span class="llm-status-text">{{ llmStatusText }}</span>
+          </div>
+          <div v-if="sellData.llm_summary?.action_summary" class="overview-action-summary">
+            <span class="summary-kicker">LLM 摘要</span>
+            <span>{{ sellData.llm_summary.action_summary }}</span>
           </div>
           <div v-if="topActions.length" class="top-actions">
             <div class="top-actions-title">今天先处理</div>
@@ -72,6 +83,7 @@
                   <div class="signal-badges">
                     <el-tag size="small" type="danger">{{ point.sell_point_type }}</el-tag>
                     <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
+                    <el-tag v-if="hasLlmCopy(point)" size="small" type="info">LLM解读</el-tag>
                   </div>
                 </div>
 
@@ -94,6 +106,24 @@
                   </div>
                 </div>
 
+                <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
+                  <div class="llm-copy-head">LLM 解读</div>
+                  <div class="llm-copy-list">
+                    <div v-if="point.llm_action_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">动作</span>
+                      <span class="llm-copy-text">{{ point.llm_action_sentence }}</span>
+                    </div>
+                    <div v-if="point.llm_trigger_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">时机</span>
+                      <span class="llm-copy-text">{{ point.llm_trigger_sentence }}</span>
+                    </div>
+                    <div v-if="point.llm_risk_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">风险</span>
+                      <span class="llm-copy-text">{{ point.llm_risk_sentence }}</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="condition-section">
                   <div class="section-kicker">执行清单</div>
                   <div class="condition-panel-grid condition-panel-grid-watch">
@@ -106,7 +136,7 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ point.sell_reason }}</div>
+                        <div class="condition-title">{{ point.llm_action_sentence || point.sell_reason }}</div>
                       </div>
                     </section>
 
@@ -119,14 +149,14 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ point.sell_trigger_cond }}</div>
+                        <div class="condition-title">{{ point.llm_trigger_sentence || point.sell_trigger_cond }}</div>
                       </div>
                     </section>
                   </div>
                 </div>
 
                 <div class="signal-footer">
-                  <span>{{ point.sell_comment || '-' }}</span>
+                  <span>{{ point.llm_risk_sentence || point.sell_comment || '-' }}</span>
                   <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
                 </div>
               </article>
@@ -148,6 +178,7 @@
                   <div class="signal-badges">
                     <el-tag size="small" type="warning">{{ point.sell_point_type }}</el-tag>
                     <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
+                    <el-tag v-if="hasLlmCopy(point)" size="small" type="info">LLM解读</el-tag>
                   </div>
                 </div>
 
@@ -170,6 +201,24 @@
                   </div>
                 </div>
 
+                <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
+                  <div class="llm-copy-head">LLM 解读</div>
+                  <div class="llm-copy-list">
+                    <div v-if="point.llm_action_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">动作</span>
+                      <span class="llm-copy-text">{{ point.llm_action_sentence }}</span>
+                    </div>
+                    <div v-if="point.llm_trigger_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">时机</span>
+                      <span class="llm-copy-text">{{ point.llm_trigger_sentence }}</span>
+                    </div>
+                    <div v-if="point.llm_risk_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">风险</span>
+                      <span class="llm-copy-text">{{ point.llm_risk_sentence }}</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="condition-section">
                   <div class="section-kicker">观察重点</div>
                   <div class="condition-panel-grid condition-panel-grid-watch">
@@ -182,7 +231,7 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ point.sell_reason }}</div>
+                        <div class="condition-title">{{ point.llm_action_sentence || point.sell_reason }}</div>
                       </div>
                     </section>
 
@@ -195,14 +244,14 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ point.sell_trigger_cond }}</div>
+                        <div class="condition-title">{{ point.llm_trigger_sentence || point.sell_trigger_cond }}</div>
                       </div>
                     </section>
                   </div>
                 </div>
 
                 <div class="signal-footer">
-                  <span>{{ point.sell_comment || '-' }}</span>
+                  <span>{{ point.llm_risk_sentence || point.sell_comment || '-' }}</span>
                   <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
                 </div>
               </article>
@@ -224,6 +273,7 @@
                   <div class="signal-badges">
                     <el-tag size="small" type="success">{{ point.sell_signal_tag }}</el-tag>
                     <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
+                    <el-tag v-if="hasLlmCopy(point)" size="small" type="info">LLM解读</el-tag>
                   </div>
                 </div>
 
@@ -246,6 +296,24 @@
                   </div>
                 </div>
 
+                <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
+                  <div class="llm-copy-head">LLM 解读</div>
+                  <div class="llm-copy-list">
+                    <div v-if="point.llm_action_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">动作</span>
+                      <span class="llm-copy-text">{{ point.llm_action_sentence }}</span>
+                    </div>
+                    <div v-if="point.llm_trigger_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">时机</span>
+                      <span class="llm-copy-text">{{ point.llm_trigger_sentence }}</span>
+                    </div>
+                    <div v-if="point.llm_risk_sentence" class="llm-copy-item">
+                      <span class="llm-copy-label">风险</span>
+                      <span class="llm-copy-text">{{ point.llm_risk_sentence }}</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="condition-section">
                   <div class="section-kicker">观察重点</div>
                   <div class="condition-panel-grid condition-panel-grid-watch">
@@ -258,7 +326,7 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ point.sell_comment || point.sell_reason }}</div>
+                        <div class="condition-title">{{ point.llm_action_sentence || point.sell_comment || point.sell_reason }}</div>
                       </div>
                     </section>
 
@@ -271,14 +339,14 @@
                         </div>
                       </div>
                       <div class="panel-body">
-                        <div class="condition-title">{{ point.sell_trigger_cond }}</div>
+                        <div class="condition-title">{{ point.llm_trigger_sentence || point.sell_trigger_cond }}</div>
                       </div>
                     </section>
                   </div>
                 </div>
 
                 <div class="signal-footer">
-                  <span>{{ point.sell_reason || '-' }}</span>
+                  <span>{{ point.llm_risk_sentence || point.sell_reason || '-' }}</span>
                   <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
                 </div>
               </article>
@@ -298,7 +366,7 @@ import { ElMessage } from 'element-plus'
 const loading = ref(false)
 const activeTab = ref('sell')
 const displayDate = ref('')
-const sellData = ref({ sell_positions: [], reduce_positions: [], hold_positions: [] })
+const sellData = ref({ sell_positions: [], reduce_positions: [], hold_positions: [], llm_status: null })
 
 const sellHeadline = computed(() => {
   if (sellData.value.sell_positions?.length) return '先处理明确该卖的持仓，再考虑减仓和继续持有的部分'
@@ -320,6 +388,18 @@ const sellChecklist = computed(() => {
     return ['先把风险降下来', '反弹无力就执行', '减仓后再看结构是否修复']
   }
   return ['当前先观察', '留意后续处理条件', '不要因为无动作就忽视风险']
+})
+
+const llmStatus = computed(() => sellData.value.llm_status || null)
+const llmStatusVisible = computed(() => Boolean(llmStatus.value))
+const llmStatusClass = computed(() => {
+  if (llmStatus.value?.success) return 'llm-status-success'
+  if (llmStatus.value?.enabled) return 'llm-status-warning'
+  return 'llm-status-muted'
+})
+const llmStatusText = computed(() => {
+  if (!llmStatus.value) return ''
+  return llmStatus.value.message || (llmStatus.value.success ? 'LLM 解释增强已生效' : 'LLM 当前未生效')
 })
 
 const topActions = computed(() => {
@@ -377,10 +457,14 @@ const formatDays = (value) => {
   return `${value}天`
 }
 
-const sellActionLine = (point) => `优先处理：${point.sell_reason}。`
-const reduceActionLine = (point) => `先降风险：${point.sell_reason}。`
-const holdActionLine = (point) => `继续跟踪：${point.sell_comment || point.sell_reason}。`
-const topActionReason = (point) => shortTriggerText(point.sell_trigger_cond || point.sell_reason || '-')
+const hasLlmCopy = (point) => Boolean(
+  point?.llm_action_sentence || point?.llm_trigger_sentence || point?.llm_risk_sentence
+)
+
+const sellActionLine = (point) => point.llm_action_sentence || `优先处理：${point.sell_reason}。`
+const reduceActionLine = (point) => point.llm_action_sentence || `先降风险：${point.sell_reason}。`
+const holdActionLine = (point) => point.llm_action_sentence || `继续跟踪：${point.sell_comment || point.sell_reason}。`
+const topActionReason = (point) => point.llm_trigger_sentence || shortTriggerText(point.sell_trigger_cond || point.sell_reason || '-')
 
 const shortTriggerText = (text) => {
   if (!text) return '-'
@@ -474,6 +558,27 @@ onMounted(() => {
   line-height: 1.6;
 }
 
+.overview-llm,
+.overview-action-summary {
+  padding: 10px 12px;
+  border-radius: 12px;
+  line-height: 1.6;
+  color: var(--color-text-main);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.overview-action-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.summary-kicker {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
+}
+
 .overview-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -484,6 +589,42 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.llm-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.llm-status-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
+}
+
+.llm-status-text {
+  line-height: 1.5;
+  color: var(--color-text-main);
+}
+
+.llm-status-success {
+  border-color: rgba(47, 207, 154, 0.25);
+  background: rgba(47, 207, 154, 0.08);
+}
+
+.llm-status-warning {
+  border-color: rgba(243, 194, 77, 0.25);
+  background: rgba(243, 194, 77, 0.08);
+}
+
+.llm-status-muted {
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .top-actions {
@@ -685,6 +826,45 @@ onMounted(() => {
 .signal-intent-hold {
   background: rgba(68, 209, 159, 0.08);
   border: 1px solid rgba(68, 209, 159, 0.14);
+}
+
+.llm-copy-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(88, 176, 255, 0.18);
+  background: linear-gradient(135deg, rgba(88, 176, 255, 0.09), rgba(88, 176, 255, 0.04));
+}
+
+.llm-copy-head {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9dc2ff;
+}
+
+.llm-copy-list {
+  display: grid;
+  gap: 8px;
+}
+
+.llm-copy-item {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.llm-copy-label {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.llm-copy-text {
+  color: var(--color-text-main);
+  line-height: 1.7;
+  font-weight: 500;
 }
 
 .quote-strip {

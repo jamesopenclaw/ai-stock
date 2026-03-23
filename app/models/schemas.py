@@ -246,6 +246,9 @@ class StockOutput(BaseModel):
     # 账户可参与池补充说明
     pool_entry_reason: Optional[str] = None
     position_hint: Optional[str] = None
+    # LLM 辅助解释
+    llm_plain_note: Optional[str] = None
+    llm_risk_note: Optional[str] = None
 
 
 # ========== 三池相关 ==========
@@ -253,6 +256,7 @@ class StockOutput(BaseModel):
 class StockPoolsOutput(BaseModel):
     """三池输出"""
     trade_date: str
+    resolved_trade_date: Optional[str] = Field(None, description="实际使用的候选行情交易日")
     market_watch_pool: List[StockOutput] = Field(default_factory=list, description="市场最强观察池")
     account_executable_pool: List[StockOutput] = Field(default_factory=list, description="账户可参与池")
     holding_process_pool: List[StockOutput] = Field(default_factory=list, description="持仓处理池")
@@ -365,6 +369,10 @@ class SellPointOutput(BaseModel):
     sell_priority: SellPriority
     # 简评
     sell_comment: str = ""
+    # LLM 辅助解释
+    llm_action_sentence: Optional[str] = None
+    llm_trigger_sentence: Optional[str] = None
+    llm_risk_sentence: Optional[str] = None
 
 
 class SellPointResponse(BaseModel):
@@ -466,6 +474,46 @@ class FullDecisionResponse(BaseModel):
     account_fit: dict
     # 执行摘要
     summary: DecisionSummary
+
+
+# ========== LLM 辅助相关 ==========
+
+class LlmStockNote(BaseModel):
+    """LLM 对单只股票的辅助说明"""
+    ts_code: str
+    plain_note: str = ""
+    risk_note: str = ""
+
+
+class LlmPoolsSummary(BaseModel):
+    """三池页 LLM 摘要"""
+    page_summary: str = ""
+    top_focus_summary: str = ""
+    pool_empty_reason: str = ""
+    stock_notes: List[LlmStockNote] = Field(default_factory=list)
+
+
+class LlmSellNote(BaseModel):
+    """卖点页 LLM 对单只持仓的辅助说明"""
+    ts_code: str
+    action_sentence: str = ""
+    trigger_sentence: str = ""
+    risk_sentence: str = ""
+
+
+class LlmSellSummary(BaseModel):
+    """卖点页 LLM 摘要"""
+    page_summary: str = ""
+    action_summary: str = ""
+    notes: List[LlmSellNote] = Field(default_factory=list)
+
+
+class LlmCallStatus(BaseModel):
+    """LLM 调用状态"""
+    enabled: bool = False
+    success: bool = False
+    status: str = "disabled"
+    message: str = ""
 
 
 # ========== 通用响应 ==========

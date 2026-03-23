@@ -8,7 +8,7 @@
           <template #header>
             <div class="card-header">
               <span>账户概况</span>
-              <el-button type="primary" size="small" @click="openConfigDialog">设置</el-button>
+              <el-button type="primary" size="small" @click="openConfigDialog">账户设置</el-button>
             </div>
           </template>
           <div v-if="profile" class="profile-info">
@@ -195,8 +195,8 @@
       </template>
     </el-dialog>
 
-    <!-- 账户配置：总资产 -->
-    <el-dialog v-model="showConfigDialog" title="账户配置" width="480px">
+    <!-- 账户配置 -->
+    <el-dialog v-model="showConfigDialog" title="账户设置" width="480px">
       <el-form label-width="100px">
         <el-form-item label="总资产">
           <el-input-number
@@ -412,14 +412,17 @@ const handleDelete = async (row) => {
 const loadData = async () => {
   if (isFirstLoad.value) pageLoading.value = true
   try {
-    const [profileRes, statusRes, posRes] = await Promise.all([
+    const [profileRes, statusRes, posRes] = await Promise.allSettled([
       accountApi.profile(),
       accountApi.status(),
       accountApi.positions()
     ])
-    profile.value = profileRes.data.data
-    status.value = statusRes.data.data
-    positions.value = posRes.data.data.positions || []
+    if (profileRes.status === 'fulfilled') profile.value = profileRes.value.data.data
+    if (statusRes.status === 'fulfilled') status.value = statusRes.value.data.data
+    if (posRes.status === 'fulfilled') positions.value = posRes.value.data.data.positions || []
+    if (!profile.value || !status.value) {
+      throw new Error('账户核心数据加载失败')
+    }
   } catch (error) {
     ElMessage.error('加载失败')
   } finally {
@@ -432,14 +435,12 @@ const openConfigDialog = async () => {
   try {
     const res = await accountApi.getConfig()
     const payload = res.data
-    const ta =
-      payload?.code === 200 && payload?.data?.total_asset != null
-        ? payload.data.total_asset
-        : profile.value?.total_asset ?? 1_000_000
-    configForm.value.totalAsset = Math.max(0.01, Number(Number(ta).toFixed(2)))
+    const data = payload?.code === 200 ? (payload.data || {}) : {}
+    const ta = data.total_asset != null ? data.total_asset : profile.value?.total_asset ?? 1_000_000
+    configForm.value = { totalAsset: Math.max(0.01, Number(Number(ta).toFixed(2))) }
   } catch {
     const ta = profile.value?.total_asset ?? 1_000_000
-    configForm.value.totalAsset = Math.max(0.01, Number(Number(ta).toFixed(2)))
+    configForm.value = { totalAsset: Math.max(0.01, Number(Number(ta).toFixed(2))) }
   }
   showConfigDialog.value = true
 }

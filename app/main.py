@@ -54,6 +54,21 @@ async def startup_event():
             await conn.execute(
                 text(
                     """
+                    ALTER TABLE account_config
+                    ADD COLUMN IF NOT EXISTS llm_enabled BOOLEAN DEFAULT FALSE,
+                    ADD COLUMN IF NOT EXISTS llm_provider VARCHAR(40) DEFAULT 'custom',
+                    ADD COLUMN IF NOT EXISTS llm_base_url VARCHAR(255) DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS llm_api_key VARCHAR(255) DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS llm_model VARCHAR(120) DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS llm_timeout_seconds DOUBLE PRECISION DEFAULT 12.0,
+                    ADD COLUMN IF NOT EXISTS llm_temperature DOUBLE PRECISION DEFAULT 0.2,
+                    ADD COLUMN IF NOT EXISTS llm_max_input_items INTEGER DEFAULT 8
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
                     ALTER TABLE review_snapshots
                     ADD COLUMN IF NOT EXISTS return_1d DOUBLE PRECISION DEFAULT 0,
                     ADD COLUMN IF NOT EXISTS return_3d DOUBLE PRECISION DEFAULT 0,
@@ -74,6 +89,14 @@ async def startup_event():
                     AccountConfig(
                         id=1,
                         total_asset=float(settings.qingzhou_total_asset),
+                        llm_enabled=bool(settings.llm_enabled),
+                        llm_provider=settings.llm_provider,
+                        llm_base_url=settings.llm_base_url,
+                        llm_api_key=settings.llm_api_key,
+                        llm_model=settings.llm_model,
+                        llm_timeout_seconds=float(settings.llm_timeout_seconds),
+                        llm_temperature=float(settings.llm_temperature),
+                        llm_max_input_items=int(settings.llm_max_input_items),
                     )
                 )
                 await session.commit()

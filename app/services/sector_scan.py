@@ -47,12 +47,13 @@ class SectorScanService:
         """
         compact_trade_date = trade_date.replace("-", "")
         resolved_trade_date = self.client._resolve_trade_date(compact_trade_date)
-        resolved_trade_date_fmt = (
-            f"{resolved_trade_date[:4]}-{resolved_trade_date[4:6]}-{resolved_trade_date[6:8]}"
-        )
 
         # 获取板块数据
         sector_payload = self._get_sector_data(resolved_trade_date)
+        resolved_trade_date = sector_payload.get("data_trade_date") or resolved_trade_date
+        resolved_trade_date_fmt = (
+            f"{resolved_trade_date[:4]}-{resolved_trade_date[4:6]}-{resolved_trade_date[6:8]}"
+        )
         sector_data = sector_payload["rows"]
         sector_data_mode = sector_payload["sector_data_mode"]
         threshold_profile = "relaxed" if sector_data_mode == "industry_only" else "strict"
@@ -144,8 +145,10 @@ class SectorScanService:
         """
         try:
             compact = trade_date.replace("-", "")
-            concept_rows = self.client.get_concept_sectors_from_limitup(compact)
-            industry_rows = self.client.get_sector_data(compact)
+            industry_meta = self.client.get_sector_data_with_meta(compact)
+            actual_trade_date = str(industry_meta.get("data_trade_date") or compact)
+            industry_rows = industry_meta.get("rows") or []
+            concept_rows = self.client.get_concept_sectors_from_limitup(actual_trade_date)
             concept_rows = [{**r, "sector_source_type": "concept"} for r in concept_rows]
             industry_rows = [{**r, "sector_source_type": "industry"} for r in industry_rows]
             seen_names = {r.get("sector_name", "") for r in concept_rows}
@@ -156,19 +159,28 @@ class SectorScanService:
                     merged.append(r)
                     seen_names.add(name)
             if not merged:
+                if industry_meta.get("used_mock"):
+                    return {
+                        "rows": self.client._mock_sector_data(),
+                        "sector_data_mode": "mock",
+                        "data_trade_date": actual_trade_date,
+                    }
                 return {
-                    "rows": self.client._mock_sector_data(),
-                    "sector_data_mode": "mock",
+                    "rows": [],
+                    "sector_data_mode": "empty",
+                    "data_trade_date": actual_trade_date,
                 }
             return {
                 "rows": merged,
                 "sector_data_mode": "hybrid" if concept_rows else "industry_only",
+                "data_trade_date": actual_trade_date,
             }
         except Exception as e:
             logger.error(f"获取板块数据失败: {e}")
             return {
                 "rows": self.client._mock_sector_data(),
                 "sector_data_mode": "mock",
+                "data_trade_date": compact,
             }
 
     def _score_sectors(

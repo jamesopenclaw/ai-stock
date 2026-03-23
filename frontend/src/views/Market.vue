@@ -6,12 +6,21 @@
           <div class="card-header-title">
             <span>市场环境分析</span>
             <span v-if="displayDate" class="header-date">{{ displayDate }}</span>
+            <span
+              v-if="resolvedDate && resolvedDate !== displayDate"
+              class="header-date"
+            >
+              实际数据日 {{ resolvedDate }}
+            </span>
           </div>
           <el-button @click="loadData" :loading="loading">刷新</el-button>
         </div>
       </template>
       <el-skeleton v-if="loading" :rows="14" animated />
       <template v-else>
+        <div v-if="dataNotice" class="data-notice">
+          {{ dataNotice }}
+        </div>
         <div v-if="marketEnv" class="env-analysis">
           <div class="env-tag-wrap">
             <el-tag
@@ -114,6 +123,7 @@ const marketEnv = ref(null)
 const indexData = ref([])
 const marketStats = ref(null)
 const displayDate = ref('')
+const resolvedDate = ref('')
 
 const getLocalDate = () => {
   const now = new Date()
@@ -147,6 +157,8 @@ const brokenBoardClass = (r) => {
   return 'text-red'
 }
 
+const dataNotice = ref('')
+
 const loadData = async () => {
   loading.value = true
   try {
@@ -160,6 +172,18 @@ const loadData = async () => {
     marketEnv.value = envRes.data.data
     indexData.value = indexRes.data.data.indexes || []
     marketStats.value = statsRes.data.data
+    resolvedDate.value = envRes.data.data?.resolved_trade_date || indexRes.data.data?.resolved_trade_date || statsRes.data.data?.resolved_trade_date || ''
+    const notices = []
+    if (resolvedDate.value && resolvedDate.value !== tradeDate) {
+      notices.push(`当前请求日没有完整行情，已回退到最近有数据的交易日 ${resolvedDate.value}。`)
+    }
+    if (indexRes.data.data?.used_mock) {
+      notices.push('指数行情当前使用了模拟数据。')
+    }
+    if (statsRes.data.data?.used_mock) {
+      notices.push('市场情绪统计当前使用了模拟数据。')
+    }
+    dataNotice.value = notices.join(' ')
   } catch (error) {
     ElMessage.error('加载失败')
   } finally {
@@ -202,6 +226,16 @@ onMounted(() => {
   color: var(--color-text-sec);
   letter-spacing: 0.02em;
   font-weight: 400;
+}
+
+.data-notice {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  line-height: 1.6;
+  color: #f3c24d;
+  background: rgba(243, 194, 77, 0.08);
+  border: 1px solid rgba(243, 194, 77, 0.18);
 }
 
 /* 首屏：全宽标签 + 文案 + 三评分 */

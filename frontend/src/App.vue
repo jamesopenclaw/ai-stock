@@ -41,6 +41,10 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>复盘统计</span>
         </el-menu-item>
+        <el-menu-item index="/system">
+          <el-icon><Setting /></el-icon>
+          <span>系统设置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     

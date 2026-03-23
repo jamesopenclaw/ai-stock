@@ -23,6 +23,7 @@ from app.data.tushare_client import tushare_client
 from app.models.schemas import StockInput
 from app.services.decision_context import decision_context_service
 from app.services.review_snapshot import review_snapshot_service
+from app.services.llm_explainer import llm_explainer_service
 
 router = APIRouter()
 
@@ -97,6 +98,10 @@ async def analyze_sell_point(
             market_env=context.market_env,
             sector_scan=context.sector_scan,
         )
+        llm_summary, llm_status = await llm_explainer_service.rewrite_sell_points_with_status(
+            result,
+            context.market_env,
+        )
 
         return ApiResponse(
             data={
@@ -104,7 +109,9 @@ async def analyze_sell_point(
                 "hold_positions": [p.model_dump() for p in result.hold_positions],
                 "reduce_positions": [p.model_dump() for p in result.reduce_positions],
                 "sell_positions": [p.model_dump() for p in result.sell_positions],
-                "total_count": result.total_count
+                "total_count": result.total_count,
+                "llm_summary": llm_summary.model_dump() if llm_summary else None,
+                "llm_status": llm_status.model_dump(),
             }
         )
     except Exception as e:

@@ -56,6 +56,10 @@
         <text class="link-icon">💰</text>
         <text class="link-text">买点分析</text>
       </view>
+      <view class="link-item" @click="goTo('/system')">
+        <text class="link-icon">⚙️</text>
+        <text class="link-text">系统设置</text>
+      </view>
     </view>
 
     <!-- 主线板块 -->
@@ -146,6 +150,10 @@ const loadData = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const goTo = (path) => {
+  uni.navigateTo({ url: `/pages${path}${path === '/system' ? '/system' : path}` })
 }
 
 // 下拉刷新

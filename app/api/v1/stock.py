@@ -14,6 +14,7 @@ from app.services.stock_filter import (
 )
 from app.services.decision_context import decision_context_service
 from app.services.sell_point import sell_point_service
+from app.services.llm_explainer import llm_explainer_service
 from app.data.tushare_client import tushare_client
 
 router = APIRouter()
@@ -97,6 +98,7 @@ async def get_stock_pools(
             sector_scan=context.sector_scan,
             scored_stocks=scored_stocks,
         )
+        result.resolved_trade_date = context.resolved_stock_trade_date
         sell_analysis = sell_point_service.analyze(
             trade_date,
             context.holdings,
@@ -104,14 +106,21 @@ async def get_stock_pools(
             sector_scan=context.sector_scan,
         )
         result = stock_filter_service.attach_sell_analysis(result, sell_analysis)
+        llm_summary, llm_status = await llm_explainer_service.summarize_stock_pools_with_status(
+            result,
+            context.market_env,
+        )
 
         return ApiResponse(
             data={
                 "trade_date": result.trade_date,
+                "resolved_trade_date": result.resolved_trade_date,
                 "market_watch_pool": [s.model_dump() for s in result.market_watch_pool],
                 "account_executable_pool": [s.model_dump() for s in result.account_executable_pool],
                 "holding_process_pool": [s.model_dump() for s in result.holding_process_pool],
-                "total_count": result.total_count
+                "total_count": result.total_count,
+                "llm_summary": llm_summary.model_dump() if llm_summary else None,
+                "llm_status": llm_status.model_dump(),
             }
         )
     except Exception as e:

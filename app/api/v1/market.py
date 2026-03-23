@@ -40,7 +40,8 @@ async def get_market_env(
         result = market_env_service.get_current_env(trade_date)
         return ApiResponse(
             data={
-                "trade_date": result.trade_date,
+                "trade_date": trade_date,
+                "resolved_trade_date": result.trade_date,
                 "market_env_tag": result.market_env_tag.value,
                 "breakout_allowed": result.breakout_allowed,
                 "risk_level": result.risk_level.value,
@@ -92,11 +93,13 @@ async def get_index_quote(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        quotes = tushare_client.get_index_quote(trade_date.replace("-", ""))
+        payload = tushare_client.get_index_quote_with_meta(trade_date.replace("-", ""))
         return ApiResponse(
             data={
                 "trade_date": trade_date,
-                "indexes": quotes
+                "resolved_trade_date": f"{str(payload.get('data_trade_date'))[:4]}-{str(payload.get('data_trade_date'))[4:6]}-{str(payload.get('data_trade_date'))[6:8]}" if payload.get("data_trade_date") else trade_date,
+                "used_mock": bool(payload.get("used_mock")),
+                "indexes": payload.get("rows", []),
             }
         )
     except Exception as e:
@@ -116,18 +119,27 @@ async def get_market_stats(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        stats = tushare_client.get_limit_stats(trade_date.replace("-", ""))
-        turnover = tushare_client.get_market_turnover(trade_date.replace("-", ""))
-        up_down = tushare_client.get_up_down_ratio(trade_date.replace("-", ""))
+        compact_trade_date = trade_date.replace("-", "")
+        stats_payload = tushare_client.get_limit_stats_with_meta(compact_trade_date)
+        turnover_payload = tushare_client.get_market_turnover_with_meta(compact_trade_date)
+        up_down_payload = tushare_client.get_up_down_ratio_with_meta(compact_trade_date)
+        resolved_trade_date = str(
+            stats_payload.get("data_trade_date")
+            or turnover_payload.get("data_trade_date")
+            or up_down_payload.get("data_trade_date")
+            or compact_trade_date
+        )
 
         return ApiResponse(
             data={
                 "trade_date": trade_date,
-                "limit_up_count": stats.get("limit_up_count", 0),
-                "limit_down_count": stats.get("limit_down_count", 0),
-                "broken_board_rate": stats.get("broken_board_rate", 0),
-                "market_turnover": turnover,
-                "up_down_ratio": up_down
+                "resolved_trade_date": f"{resolved_trade_date[:4]}-{resolved_trade_date[4:6]}-{resolved_trade_date[6:8]}",
+                "used_mock": bool(stats_payload.get("used_mock") or turnover_payload.get("used_mock") or up_down_payload.get("used_mock")),
+                "limit_up_count": stats_payload.get("stats", {}).get("limit_up_count", 0),
+                "limit_down_count": stats_payload.get("stats", {}).get("limit_down_count", 0),
+                "broken_board_rate": stats_payload.get("stats", {}).get("broken_board_rate", 0),
+                "market_turnover": turnover_payload.get("market_turnover", 0),
+                "up_down_ratio": up_down_payload.get("up_down_ratio", {})
             }
         )
     except Exception as e:

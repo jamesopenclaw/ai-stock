@@ -157,22 +157,31 @@ class TushareClient:
         Returns:
             指数行情列表
         """
+        return self.get_index_quote_with_meta(trade_date).get("rows", [])
+
+    def get_index_quote_with_meta(self, trade_date: str) -> Dict[str, object]:
+        """获取主要指数行情，并返回实际使用的数据日期。"""
         if not self.token:
-            return self._mock_index_quote(trade_date)
+            return {
+                "rows": self._mock_index_quote(trade_date),
+                "data_trade_date": trade_date,
+                "used_mock": True,
+            }
 
         try:
             effective_trade_date = self._resolve_trade_date(trade_date)
             # 上证指数、深成指、创业板
             index_codes = ["000001.SH", "399001.SZ", "399006.SZ"]
-            result = []
-
-            for ts_code in index_codes:
-                df = self.pro.index_daily(
-                    ts_code=ts_code,
-                    start_date=effective_trade_date,
-                    end_date=effective_trade_date
-                )
-                if not df.empty:
+            for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
+                result = []
+                for ts_code in index_codes:
+                    df = self.pro.index_daily(
+                        ts_code=ts_code,
+                        start_date=data_trade_date,
+                        end_date=data_trade_date
+                    )
+                    if df is None or df.empty:
+                        continue
                     row = df.iloc[0]
                     name = {
                         "000001.SH": "上证指数",
@@ -189,16 +198,30 @@ class TushareClient:
                         "amount": float(row["amount"]),
                         "trade_date": row["trade_date"]
                     })
+                if result:
+                    if data_trade_date != effective_trade_date:
+                        logger.info(
+                            f"指数行情从 {effective_trade_date} 回退到最近有数据交易日 {data_trade_date}"
+                        )
+                    return {
+                        "rows": result,
+                        "data_trade_date": data_trade_date,
+                        "used_mock": False,
+                    }
 
-            if not result:
-                logger.warning(
-                    f"指数行情无数据（{effective_trade_date}），使用模拟数据"
-                )
-                return self._mock_index_quote(trade_date)
-            return result
+            logger.warning(f"最近交易日均无指数行情（截至 {effective_trade_date}）")
+            return {
+                "rows": [],
+                "data_trade_date": effective_trade_date,
+                "used_mock": False,
+            }
         except Exception as e:
             logger.error(f"获取指数行情失败: {e}")
-            return self._mock_index_quote(trade_date)
+            return {
+                "rows": [],
+                "data_trade_date": trade_date,
+                "used_mock": False,
+            }
 
     def get_limit_stats(self, trade_date: str) -> Dict:
         """
@@ -210,50 +233,77 @@ class TushareClient:
         Returns:
             涨跌停统计
         """
+        return self.get_limit_stats_with_meta(trade_date).get("stats", {})
+
+    def get_limit_stats_with_meta(self, trade_date: str) -> Dict[str, object]:
+        """获取涨跌停统计，并返回实际使用的数据日期。"""
         if not self.token:
-            return self._mock_limit_stats()
+            return {
+                "stats": self._mock_limit_stats(),
+                "data_trade_date": trade_date,
+                "used_mock": True,
+            }
 
         try:
             effective_trade_date = self._resolve_trade_date(trade_date)
-            # Tushare v1.4+ 改名为 limit_list_d，旧 limit_list 接口已不返回数据
-            df_up = self.pro.limit_list_d(
-                trade_date=effective_trade_date,
-                limit_type='U',
-            )
-            df_down = self.pro.limit_list_d(
-                trade_date=effective_trade_date,
-                limit_type='D',
-            )
-            limit_up_count = len(df_up) if df_up is not None else 0
-            limit_down_count = len(df_down) if df_down is not None else 0
-
-            # 炸板率：open_times > 0 表示当天曾打开过（炸板），占涨停总数的比例
-            broken_board_rate = 0.0
-            if (
-                limit_up_count > 0
-                and df_up is not None
-                and "open_times" in df_up.columns
-            ):
-                broken = len(df_up[df_up["open_times"] > 0])
-                broken_board_rate = round(broken / limit_up_count * 100, 1)
-
-            if limit_up_count == 0 and limit_down_count == 0:
-                logger.warning(
-                    f"涨跌停列表为空（{effective_trade_date}），"
-                    "请确认 Tushare 权限与交易日是否正确"
+            for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
+                df_up = self.pro.limit_list_d(
+                    trade_date=data_trade_date,
+                    limit_type='U',
                 )
+                df_down = self.pro.limit_list_d(
+                    trade_date=data_trade_date,
+                    limit_type='D',
+                )
+                limit_up_count = len(df_up) if df_up is not None else 0
+                limit_down_count = len(df_down) if df_down is not None else 0
+
+                broken_board_rate = 0.0
+                if (
+                    limit_up_count > 0
+                    and df_up is not None
+                    and "open_times" in df_up.columns
+                ):
+                    broken = len(df_up[df_up["open_times"] > 0])
+                    broken_board_rate = round(broken / limit_up_count * 100, 1)
+
+                if limit_up_count == 0 and limit_down_count == 0:
+                    logger.warning(f"涨跌停列表为空（{data_trade_date}）")
+                    continue
+
+                if data_trade_date != effective_trade_date:
+                    logger.info(
+                        f"涨跌停统计从 {effective_trade_date} 回退到最近有数据交易日 {data_trade_date}"
+                    )
+                return {
+                    "stats": {
+                        "limit_up_count": limit_up_count,
+                        "limit_down_count": limit_down_count,
+                        "broken_board_rate": broken_board_rate,
+                    },
+                    "data_trade_date": data_trade_date,
+                    "used_mock": False,
+                }
 
             return {
-                "limit_up_count": limit_up_count,
-                "limit_down_count": limit_down_count,
-                "broken_board_rate": broken_board_rate,
+                "stats": {
+                    "limit_up_count": 0,
+                    "limit_down_count": 0,
+                    "broken_board_rate": 0.0,
+                },
+                "data_trade_date": effective_trade_date,
+                "used_mock": False,
             }
         except Exception as e:
             logger.error(f"获取涨跌停统计失败: {e}")
             return {
-                "limit_up_count": 0,
-                "limit_down_count": 0,
-                "broken_board_rate": 0.0,
+                "stats": {
+                    "limit_up_count": 0,
+                    "limit_down_count": 0,
+                    "broken_board_rate": 0.0,
+                },
+                "data_trade_date": trade_date,
+                "used_mock": False,
             }
 
     def get_sector_data(self, trade_date: str) -> List[Dict]:
@@ -266,52 +316,115 @@ class TushareClient:
         Returns:
             板块行情列表（按平均涨跌幅降序）
         """
+        return self.get_sector_data_with_meta(trade_date)["rows"]
+
+    def _recent_open_dates(self, trade_date: str, count: int = 5) -> List[str]:
+        """获取截至指定日期的最近若干开市日，按新到旧排序。"""
         if not self.token:
-            return self._mock_sector_data()
+            return [trade_date]
+
+        try:
+            from datetime import datetime, timedelta
+
+            end_dt = datetime.strptime(trade_date, "%Y%m%d")
+            start_dt = end_dt - timedelta(days=20)
+            cal_df = self.pro.trade_cal(
+                exchange="SSE",
+                start_date=start_dt.strftime("%Y%m%d"),
+                end_date=trade_date,
+                fields="cal_date,is_open",
+            )
+            if cal_df is None or cal_df.empty:
+                return [trade_date]
+            open_days = cal_df[cal_df["is_open"] == 1]["cal_date"].tolist()
+            open_days = sorted((str(day) for day in open_days), reverse=True)
+            return open_days[:count] or [trade_date]
+        except Exception as e:
+            logger.warning(f"获取最近交易日序列失败: {e}")
+            return [trade_date]
+
+    def _aggregate_sector_rows(self, df) -> List[Dict]:
+        """将 bak_daily 原始数据聚合成行业板块列表。"""
+        if df is None or df.empty:
+            return []
+
+        df = df.copy()
+        df["pct_change"] = df["pct_change"].fillna(0)
+        df["amount"] = df["amount"].fillna(0)
+        df = df[df["industry"].notna() & (df["industry"] != "")]
+        if df.empty:
+            return []
+
+        grouped = (
+            df.groupby("industry")
+            .agg(
+                sector_change_pct=("pct_change", "mean"),
+                sector_turnover=("amount", "sum"),
+                stock_count=("ts_code", "count"),
+            )
+            .reset_index()
+            .sort_values("sector_change_pct", ascending=False)
+        )
+
+        sectors = []
+        for _, row in grouped.iterrows():
+            sectors.append({
+                "sector_name": str(row["industry"]),
+                "sector_code": "",
+                "sector_change_pct": round(float(row["sector_change_pct"]), 2),
+                "sector_turnover": round(float(row["sector_turnover"]) / 10000, 2),
+                "stock_count": int(row["stock_count"]),
+            })
+        return sectors
+
+    def get_sector_data_with_meta(self, trade_date: str) -> Dict[str, object]:
+        """获取行业板块，并返回实际使用的数据日期。"""
+        if not self.token:
+            return {
+                "rows": self._mock_sector_data(),
+                "data_trade_date": trade_date,
+                "used_mock": True,
+            }
 
         try:
             effective_trade_date = self._resolve_trade_date(trade_date)
-            df = self.pro.bak_daily(
-                trade_date=effective_trade_date,
-                fields="ts_code,industry,pct_change,amount"
-            )
-            if df is None or df.empty:
-                logger.warning(f"bak_daily 板块数据为空（{effective_trade_date}）")
-                return self._mock_sector_data()
-
-            df["pct_change"] = df["pct_change"].fillna(0)
-            df["amount"] = df["amount"].fillna(0)
-            df = df[df["industry"].notna() & (df["industry"] != "")]
-
-            grouped = (
-                df.groupby("industry")
-                .agg(
-                    sector_change_pct=("pct_change", "mean"),
-                    sector_turnover=("amount", "sum"),
-                    stock_count=("ts_code", "count"),
+            for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
+                df = self.pro.bak_daily(
+                    trade_date=data_trade_date,
+                    fields="ts_code,industry,pct_change,amount"
                 )
-                .reset_index()
-                .sort_values("sector_change_pct", ascending=False)
-            )
+                sectors = self._aggregate_sector_rows(df)
+                if not sectors:
+                    logger.warning(f"bak_daily 板块数据为空（{data_trade_date}）")
+                    continue
 
-            sectors = []
-            for _, row in grouped.iterrows():
-                sectors.append({
-                    "sector_name": str(row["industry"]),
-                    "sector_code": "",
-                    "sector_change_pct": round(float(row["sector_change_pct"]), 2),
-                    # amount 单位万元 → 亿元
-                    "sector_turnover": round(float(row["sector_turnover"]) / 10000, 2),
-                    "stock_count": int(row["stock_count"]),
-                })
+                if data_trade_date != effective_trade_date:
+                    logger.info(
+                        f"板块数据从 {effective_trade_date} 回退到最近有数据交易日 {data_trade_date}"
+                    )
 
-            logger.info(
-                f"板块数据（{effective_trade_date}）: {len(sectors)} 个行业"
-            )
-            return sectors
+                logger.info(
+                    f"板块数据（{data_trade_date}）: {len(sectors)} 个行业"
+                )
+                return {
+                    "rows": sectors,
+                    "data_trade_date": data_trade_date,
+                    "used_mock": False,
+                }
+
+            logger.warning(f"最近交易日均无板块数据（截至 {effective_trade_date}）")
+            return {
+                "rows": [],
+                "data_trade_date": effective_trade_date,
+                "used_mock": False,
+            }
         except Exception as e:
             logger.error(f"获取板块数据失败: {e}")
-            return self._mock_sector_data()
+            return {
+                "rows": [],
+                "data_trade_date": trade_date,
+                "used_mock": False,
+            }
 
     def get_market_turnover(self, trade_date: str) -> float:
         """
@@ -323,33 +436,45 @@ class TushareClient:
         Returns:
             成交额(亿元)
         """
+        return float(self.get_market_turnover_with_meta(trade_date).get("market_turnover") or 0.0)
+
+    def get_market_turnover_with_meta(self, trade_date: str) -> Dict[str, object]:
+        """获取两市成交额，并返回实际使用的数据日期。"""
         if not self.token:
-            return 12000.0  # 默认值
+            return {"market_turnover": 12000.0, "data_trade_date": trade_date, "used_mock": True}
 
         try:
             effective_trade_date = self._resolve_trade_date(trade_date)
-            # 用指数日线接口获取上证+深成指成交额（amount 为千元，/100000 → 亿元）
-            sh_df = self.pro.index_daily(
-                ts_code="000001.SH",
-                start_date=effective_trade_date,
-                end_date=effective_trade_date
-            )
-            sz_df = self.pro.index_daily(
-                ts_code="399001.SZ",
-                start_date=effective_trade_date,
-                end_date=effective_trade_date
-            )
-            total = 0.0
-            if not sh_df.empty:
-                total += float(sh_df.iloc[0]["amount"])
-            if not sz_df.empty:
-                total += float(sz_df.iloc[0]["amount"])
-            if total > 0:
-                return total / 100000  # 千元 → 亿元
-            return 12000.0
+            for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
+                sh_df = self.pro.index_daily(
+                    ts_code="000001.SH",
+                    start_date=data_trade_date,
+                    end_date=data_trade_date
+                )
+                sz_df = self.pro.index_daily(
+                    ts_code="399001.SZ",
+                    start_date=data_trade_date,
+                    end_date=data_trade_date
+                )
+                total = 0.0
+                if sh_df is not None and not sh_df.empty:
+                    total += float(sh_df.iloc[0]["amount"])
+                if sz_df is not None and not sz_df.empty:
+                    total += float(sz_df.iloc[0]["amount"])
+                if total > 0:
+                    if data_trade_date != effective_trade_date:
+                        logger.info(
+                            f"市场成交额从 {effective_trade_date} 回退到最近有数据交易日 {data_trade_date}"
+                        )
+                    return {
+                        "market_turnover": total / 100000,
+                        "data_trade_date": data_trade_date,
+                        "used_mock": False,
+                    }
+            return {"market_turnover": 12000.0, "data_trade_date": effective_trade_date, "used_mock": False}
         except Exception as e:
             logger.error(f"获取成交额失败: {e}")
-            return 12000.0
+            return {"market_turnover": 12000.0, "data_trade_date": trade_date, "used_mock": False}
 
     def get_up_down_ratio(self, trade_date: str) -> Dict:
         """
@@ -361,29 +486,55 @@ class TushareClient:
         Returns:
             涨跌家数 {"up": int, "down": int, "flat": int, "total": int}
         """
+        return self.get_up_down_ratio_with_meta(trade_date).get("up_down_ratio", {})
+
+    def get_up_down_ratio_with_meta(self, trade_date: str) -> Dict[str, object]:
+        """获取涨跌家数，并返回实际使用的数据日期。"""
         if not self.token:
-            return {"up": 0, "down": 0, "flat": 0, "total": 0}
+            return {
+                "up_down_ratio": {"up": 0, "down": 0, "flat": 0, "total": 0},
+                "data_trade_date": trade_date,
+                "used_mock": True,
+            }
 
         try:
             effective_trade_date = self._resolve_trade_date(trade_date)
-            df = self.pro.bak_daily(
-                trade_date=effective_trade_date,
-                fields="ts_code,pct_change"
-            )
-            if df is None or df.empty:
-                logger.warning(f"bak_daily 无数据（{effective_trade_date}）")
-                return {"up": 0, "down": 0, "flat": 0, "total": 0}
+            for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
+                df = self.pro.bak_daily(
+                    trade_date=data_trade_date,
+                    fields="ts_code,pct_change"
+                )
+                if df is None or df.empty:
+                    logger.warning(f"bak_daily 无数据（{data_trade_date}）")
+                    continue
 
-            df["pct_change"] = df["pct_change"].fillna(0)
-            up = int((df["pct_change"] > 0).sum())
-            down = int((df["pct_change"] < 0).sum())
-            flat = int((df["pct_change"] == 0).sum())
-            total = len(df)
-            logger.info(f"涨跌家数（{effective_trade_date}）: 涨{up} 跌{down} 平{flat}")
-            return {"up": up, "down": down, "flat": flat, "total": total}
+                df["pct_change"] = df["pct_change"].fillna(0)
+                up = int((df["pct_change"] > 0).sum())
+                down = int((df["pct_change"] < 0).sum())
+                flat = int((df["pct_change"] == 0).sum())
+                total = len(df)
+                if data_trade_date != effective_trade_date:
+                    logger.info(
+                        f"涨跌家数从 {effective_trade_date} 回退到最近有数据交易日 {data_trade_date}"
+                    )
+                logger.info(f"涨跌家数（{data_trade_date}）: 涨{up} 跌{down} 平{flat}")
+                return {
+                    "up_down_ratio": {"up": up, "down": down, "flat": flat, "total": total},
+                    "data_trade_date": data_trade_date,
+                    "used_mock": False,
+                }
+            return {
+                "up_down_ratio": {"up": 0, "down": 0, "flat": 0, "total": 0},
+                "data_trade_date": effective_trade_date,
+                "used_mock": False,
+            }
         except Exception as e:
             logger.error(f"获取涨跌家数失败: {e}")
-            return {"up": 0, "down": 0, "flat": 0, "total": 0}
+            return {
+                "up_down_ratio": {"up": 0, "down": 0, "flat": 0, "total": 0},
+                "data_trade_date": trade_date,
+                "used_mock": False,
+            }
 
     def get_concept_sectors_from_limitup(self, trade_date: str) -> List[Dict]:
         """
@@ -566,28 +717,56 @@ class TushareClient:
         Returns:
             个股行情列表
         """
-        if not self.token:
-            return self._mock_stock_list()
+        return self.get_stock_list_with_meta(trade_date, limit).get("rows", [])
 
-        try:
-            effective_trade_date = self._resolve_trade_date(trade_date)
+    def _fetch_recent_stock_bak_df(self, trade_date: str) -> Dict[str, object]:
+        """获取最近一个有 bak_daily 个股数据的交易日明细。"""
+        if not self.token:
+            return {"df": None, "data_trade_date": trade_date, "used_mock": True}
+
+        effective_trade_date = self._resolve_trade_date(trade_date)
+        for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
             df = self.pro.bak_daily(
-                trade_date=effective_trade_date,
+                trade_date=data_trade_date,
                 fields=(
                     "ts_code,name,industry,pct_change,close,open,high,low,"
                     "pre_close,vol,amount,turn_over,vol_ratio"
                 ),
             )
             if df is None or df.empty:
-                logger.warning(f"bak_daily 个股数据为空（{effective_trade_date}）")
-                return self._mock_stock_list()
+                logger.warning(f"bak_daily 个股数据为空（{data_trade_date}）")
+                continue
+            if data_trade_date != effective_trade_date:
+                logger.info(
+                    f"个股行情从 {effective_trade_date} 回退到最近有数据交易日 {data_trade_date}"
+                )
+            return {"df": df, "data_trade_date": data_trade_date, "used_mock": False}
 
-            # 清洗
+        return {"df": None, "data_trade_date": effective_trade_date, "used_mock": False}
+
+    def get_stock_list_with_meta(self, trade_date: str, limit: int = 100) -> Dict[str, object]:
+        """获取个股行情列表，并返回实际使用的数据交易日。"""
+        if not self.token:
+            return {
+                "rows": self._mock_stock_list(),
+                "data_trade_date": trade_date,
+                "used_mock": True,
+            }
+
+        try:
+            payload = self._fetch_recent_stock_bak_df(trade_date)
+            df = payload.get("df")
+            if df is None or df.empty:
+                return {
+                    "rows": [],
+                    "data_trade_date": payload.get("data_trade_date"),
+                    "used_mock": False,
+                }
+
+            df = df.copy()
             df["pct_change"] = df["pct_change"].fillna(0)
             df["turn_over"] = df["turn_over"].fillna(0)
             df["vol_ratio"] = df["vol_ratio"].fillna(1)
-
-            # 按涨跌幅降序，截取前 limit 条
             df = df.sort_values("pct_change", ascending=False).head(limit)
 
             result = []
@@ -608,12 +787,20 @@ class TushareClient:
                 })
 
             logger.info(
-                f"个股列表（{effective_trade_date}）: 共 {len(result)} 只"
+                f"个股列表（{payload.get('data_trade_date')}）: 共 {len(result)} 只"
             )
-            return result
+            return {
+                "rows": result,
+                "data_trade_date": payload.get("data_trade_date"),
+                "used_mock": False,
+            }
         except Exception as e:
             logger.error(f"获取个股列表失败: {e}")
-            return self._mock_stock_list()
+            return {
+                "rows": [],
+                "data_trade_date": trade_date,
+                "used_mock": False,
+            }
 
     def get_expanded_stock_list(
         self,
@@ -630,24 +817,41 @@ class TushareClient:
 
         无 token 时回退为 _mock_stock_list。
         """
+        return self.get_expanded_stock_list_with_meta(
+            trade_date,
+            top_gainers=top_gainers,
+            vol_ratio_min=vol_ratio_min,
+            pct_floor=pct_floor,
+        ).get("rows", [])
+
+    def get_expanded_stock_list_with_meta(
+        self,
+        trade_date: str,
+        top_gainers: int = 100,
+        vol_ratio_min: float = 2.5,
+        pct_floor: float = -5.0,
+    ) -> Dict[str, object]:
+        """扩展候选池，并返回实际使用的数据交易日。"""
         if not self.token:
-            return self._mock_stock_list()
+            return {
+                "rows": self._mock_stock_list(),
+                "data_trade_date": trade_date,
+                "used_mock": True,
+            }
 
         try:
-            effective_trade_date = self._resolve_trade_date(trade_date)
-            df = self.pro.bak_daily(
-                trade_date=effective_trade_date,
-                fields=(
-                    "ts_code,name,industry,pct_change,close,open,high,low,"
-                    "pre_close,vol,amount,turn_over,vol_ratio"
-                ),
-            )
+            payload = self._fetch_recent_stock_bak_df(trade_date)
+            df = payload.get("df")
+            effective_trade_date = str(payload.get("data_trade_date") or trade_date)
             if df is None or df.empty:
                 logger.warning(
-                    f"bak_daily 个股数据为空（{effective_trade_date}），"
-                    "扩展候选池回退 mock"
+                    f"扩展候选池无可用个股数据（截至 {effective_trade_date}）"
                 )
-                return self._mock_stock_list()
+                return {
+                    "rows": [],
+                    "data_trade_date": effective_trade_date,
+                    "used_mock": False,
+                }
 
             df["pct_change"] = df["pct_change"].fillna(0)
             df["turn_over"] = df["turn_over"].fillna(0)
@@ -712,10 +916,18 @@ class TushareClient:
                 f"扩展个股候选（{effective_trade_date}）: 共 {len(result)} 只 "
                 f"(涨幅前{top_n}+涨停+量比≥{vol_ratio_min})"
             )
-            return result
+            return {
+                "rows": result,
+                "data_trade_date": effective_trade_date,
+                "used_mock": False,
+            }
         except Exception as e:
             logger.error(f"获取扩展个股列表失败: {e}")
-            return self._mock_stock_list()
+            return {
+                "rows": [],
+                "data_trade_date": trade_date,
+                "used_mock": False,
+            }
 
     def get_stock_detail(self, ts_code: str, trade_date: str) -> Dict:
         """
@@ -745,13 +957,45 @@ class TushareClient:
                 stock_name = stock_info.iloc[0].get("name", ts_code)
                 industry = stock_info.iloc[0].get("industry", "未知")
 
-            # 获取日线数据
+            # 优先取 bak_daily，当天可用时字段更完整；若当天尚未落库，再回退到最近可用日线
+            bak_df = self.pro.bak_daily(
+                trade_date=effective_trade_date,
+                fields=(
+                    "ts_code,name,industry,pct_change,close,open,high,low,"
+                    "pre_close,vol,amount,turn_over,vol_ratio"
+                ),
+            )
+            if bak_df is not None and not bak_df.empty:
+                row_df = bak_df[bak_df["ts_code"] == ts_code]
+                if row_df is not None and not row_df.empty:
+                    row = row_df.iloc[0]
+                    return {
+                        "ts_code": ts_code,
+                        "stock_name": str(row.get("name") or stock_name),
+                        "sector_name": str(row.get("industry") or industry or "未知"),
+                        "close": float(row.get("close") or 0),
+                        "change_pct": float(row.get("pct_change") or 0),
+                        "turnover_rate": float(row.get("turn_over") or 0),
+                        "amount": float(row.get("amount") or 0),
+                        "vol_ratio": float(row.get("vol_ratio") or 1.0),
+                        "high": float(row.get("high") or 0),
+                        "low": float(row.get("low") or 0),
+                        "open": float(row.get("open") or 0),
+                        "pre_close": float(row.get("pre_close") or 0),
+                    }
+
+            from datetime import datetime, timedelta
+
+            lookback_start = (
+                datetime.strptime(effective_trade_date, "%Y%m%d") - timedelta(days=10)
+            ).strftime("%Y%m%d")
+
             df = self.pro.daily(
                 ts_code=ts_code,
-                start_date=effective_trade_date,
+                start_date=lookback_start,
                 end_date=effective_trade_date,
             )
-            if df.empty:
+            if df is None or df.empty:
                 return self._mock_stock_detail(ts_code)
 
             row = df.iloc[0]

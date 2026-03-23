@@ -21,7 +21,7 @@ from app.core.database import async_session_factory
 from app.services.account_config_service import (
     get_total_asset,
     get_config as get_account_config_from_db,
-    update_total_asset as update_account_total_asset,
+    update_config as update_account_config,
 )
 from sqlalchemy import select
 from loguru import logger
@@ -68,7 +68,16 @@ class UpdatePositionRequest(BaseModel):
 
 class AccountConfigUpdateRequest(BaseModel):
     """账户配置更新"""
-    total_asset: float = Field(..., gt=0, description="总资产(元)")
+    total_asset: Optional[float] = Field(None, gt=0, description="总资产(元)")
+    llm_enabled: Optional[bool] = Field(None, description="是否启用 LLM 辅助层")
+    llm_provider: Optional[str] = Field(None, description="LLM 供应商")
+    llm_base_url: Optional[str] = Field(None, description="LLM Base URL")
+    llm_api_key: Optional[str] = Field(None, description="LLM API Key，留空则保持不变")
+    clear_llm_api_key: Optional[bool] = Field(None, description="是否清空已保存的 API Key")
+    llm_model: Optional[str] = Field(None, description="LLM 模型名")
+    llm_timeout_seconds: Optional[float] = Field(None, gt=0, description="LLM 超时秒数")
+    llm_temperature: Optional[float] = Field(None, ge=0, le=2, description="LLM 温度")
+    llm_max_input_items: Optional[int] = Field(None, ge=1, le=20, description="单次最大输入条数")
 
 
 async def get_stock_name(ts_code: str) -> str:
@@ -227,7 +236,7 @@ async def get_account_config() -> ApiResponse:
 async def put_account_config(request: AccountConfigUpdateRequest) -> ApiResponse:
     """更新账户配置"""
     try:
-        data = await update_account_total_asset(request.total_asset)
+        data = await update_account_config(request.model_dump())
         return ApiResponse(data=data)
     except ValueError as e:
         return ApiResponse(code=400, message=str(e))

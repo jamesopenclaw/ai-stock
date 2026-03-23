@@ -271,6 +271,7 @@ class StockFilterService:
 
         return StockPoolsOutput(
             trade_date=trade_date,
+            resolved_trade_date=None,
             market_watch_pool=visible_market_watch,   # 最多20只
             account_executable_pool=visible_account_executable,  # 最多10只
             holding_process_pool=holding_process,  # 全部持仓

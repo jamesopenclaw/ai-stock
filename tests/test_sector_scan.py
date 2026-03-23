@@ -466,6 +466,27 @@ class TestSectorScan:
 
         assert dates == ["20260323", "20260321", "20260320", "20260319"]
 
+    def test_scan_uses_actual_industry_data_trade_date(self, service, monkeypatch):
+        """
+        测试：当天无行业数据时，扫描结果应显示实际回退到的数据交易日
+        """
+        monkeypatch.setattr(
+            service,
+            "_get_sector_data",
+            lambda _trade_date: {
+                "rows": [
+                    {"sector_name": "火力发电", "sector_change_pct": 1.15, "sector_source_type": "industry"},
+                ],
+                "sector_data_mode": "industry_only",
+                "data_trade_date": "20260320",
+            },
+        )
+
+        result = service.scan("2026-03-23", limit_output=False)
+
+        assert result.resolved_trade_date == "2026-03-20"
+        assert result.total_sectors == 1
+
 
 class TestSectorScanAPI:
     """板块扫描 API 测试（模拟 API 响应格式）"""
