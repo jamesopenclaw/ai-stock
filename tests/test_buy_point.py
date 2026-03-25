@@ -187,6 +187,96 @@ class TestBuyPoint:
         assert buy_point.buy_trigger_cond is not None
         assert len(buy_point.buy_trigger_cond) > 0
 
+    def test_breakthrough_trigger_condition_uses_price_level(self, service, strong_stock):
+        """
+        测试：突破型触发条件应使用价格位，不应误写成涨跌幅关键位
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.change_pct = 6.0
+        strong_stock.close = 7.85
+        strong_stock.pre_close = 7.20
+        strong_stock.open = 7.30
+        strong_stock.high = 7.92
+        strong_stock.low = 7.22
+
+        buy_point = service._analyze_stock_buy_point(strong_stock, MockMarketEnv())
+
+        assert "触发价" in buy_point.buy_trigger_cond
+        assert "当日高点" in buy_point.buy_trigger_cond
+        assert "%" not in buy_point.buy_trigger_cond
+
+    def test_extended_strong_stock_prefers_retrace_support(self, service, strong_stock):
+        """
+        测试：涨幅过大的强票不应默认继续追突破
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.change_pct = 8.5
+        buy_point = service._analyze_stock_buy_point(strong_stock, MockMarketEnv())
+
+        assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
+
+    def test_account_executable_medium_stock_can_buy_on_retrace(self, service, medium_stock):
+        """
+        测试：账户可参与池中的中强可交易票，也可作为回踩承接型可买对象
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        medium_stock.stock_tradeability_tag = StockTradeabilityTag.TRADABLE
+        medium_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+
+        buy_point = service._analyze_stock_buy_point(
+            medium_stock,
+            MockMarketEnv(),
+            AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.2,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+        )
+
+        assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
+        assert buy_point.buy_signal_tag == BuySignalTag.CAN_BUY
+
+    def test_account_executable_caution_stock_can_buy_on_comfortable_retrace(self, service, medium_stock):
+        """
+        测试：账户可参与池中的谨慎票，只要是舒服回踩位，也应进入可买
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        medium_stock.stock_tradeability_tag = StockTradeabilityTag.CAUTION
+        medium_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+
+        buy_point = service._analyze_stock_buy_point(
+            medium_stock,
+            MockMarketEnv(),
+            AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.2,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+        )
+
+        assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
+        assert buy_point.buy_signal_tag == BuySignalTag.CAN_BUY
+
     def test_buy_point_contains_current_price_and_gap(self, service, strong_stock):
         """
         测试：买点输出应包含最新价及与关键价位的距离
@@ -288,6 +378,122 @@ class TestBuyPoint:
         assert response.available_buy_points == []
         assert response.observe_buy_points == []
         assert response.not_buy_points == []
+
+    def test_available_buy_points_only_come_from_account_executable_pool(self, service, strong_stock):
+        """
+        测试：可买列表必须只来自账户可参与池
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.change_pct = 6.0
+        strong_stock.stock_pool_tag = StockPoolTag.MARKET_WATCH
+
+        response = service.analyze(
+            "2026-03-20",
+            stocks=[],
+            market_env=MockMarketEnv(),
+            scored_stocks=[strong_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-03-20",
+                market_watch_pool=[strong_stock],
+                trend_recognition_pool=[],
+                account_executable_pool=[],
+                holding_process_pool=[],
+                total_count=1,
+            ),
+        )
+
+        assert response.available_buy_points == []
+        assert len(response.observe_buy_points) == 1
+        assert response.observe_buy_points[0].stock_pool_tag == StockPoolTag.MARKET_WATCH.value
+
+    def test_buy_point_output_keeps_pool_source_fields(self, service, medium_stock):
+        """
+        测试：买点结果应保留来源池与入池原因，方便页面联动展示
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        medium_stock.stock_tradeability_tag = StockTradeabilityTag.TRADABLE
+        medium_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+        medium_stock.pool_entry_reason = "账户允许参与，优先看回踩承接"
+
+        buy_point = service._analyze_stock_buy_point(
+            medium_stock,
+            MockMarketEnv(),
+            AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.2,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+        )
+
+        assert buy_point.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE.value
+        assert buy_point.pool_entry_reason == "账户允许参与，优先看回踩承接"
+
+    def test_analyze_overlays_realtime_display_quote(self, service, strong_stock, monkeypatch):
+        """
+        测试：盘中买点列表展示价应走实时行情，不受稳定三池日线口径影响
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.close = 12.5
+        strong_stock.pre_close = 11.5
+        strong_stock.open = 11.6
+        strong_stock.high = 12.8
+        strong_stock.low = 11.5
+        strong_stock.quote_time = "2026-03-23 15:00:00"
+        strong_stock.data_source = "daily"
+
+        monkeypatch.setattr(
+            "app.services.buy_point.tushare_client._should_use_realtime_quote",
+            lambda trade_date: True,
+        )
+        monkeypatch.setattr(
+            "app.services.buy_point.tushare_client._fetch_realtime_quote_map",
+            lambda ts_codes: {
+                "000001.SZ": {
+                    "close": 12.88,
+                    "change_pct": 11.13,
+                    "quote_time": "2026-03-24 10:31:00",
+                    "data_source": "realtime_dc",
+                }
+            },
+        )
+
+        response = service.analyze(
+            "2026-03-24",
+            stocks=[],
+            market_env=MockMarketEnv(),
+            scored_stocks=[strong_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-03-24",
+                market_watch_pool=[],
+                trend_recognition_pool=[],
+                account_executable_pool=[strong_stock],
+                holding_process_pool=[],
+                total_count=1,
+            ),
+        )
+
+        assert response.total_count == 1
+        buy_point = response.available_buy_points[0]
+        assert buy_point.buy_current_price == 12.88
+        assert buy_point.buy_current_change_pct == 11.13
+        assert buy_point.buy_quote_time == "2026-03-24 10:31:00"
+        assert buy_point.buy_data_source == "realtime_dc"
+        assert buy_point.buy_trigger_gap_pct is not None
+        assert buy_point.buy_invalid_gap_pct is not None
 
 
 class TestBuyPointPRDRequirements:

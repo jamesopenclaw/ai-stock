@@ -150,10 +150,12 @@ class NotifyService:
             pools_data: 三池数据
         """
         market_pool = pools_data.get("market_watch_pool", [])
+        trend_pool = pools_data.get("trend_recognition_pool", [])
         account_pool = pools_data.get("account_executable_pool", [])
         holding_pool = pools_data.get("holding_process_pool", [])
 
         market_count = len(market_pool)
+        trend_count = len(trend_pool)
         account_count = len(account_pool)
         holding_count = len(holding_pool)
 
@@ -166,6 +168,7 @@ class NotifyService:
         content = f"""## 🏊 三池分类结果
 
 - **市场观察池**: {market_count} 只
+- **趋势辨识池**: {trend_count} 只
 - **账户可参与池**: {account_count} 只
 - **持仓处理池**: {holding_count} 只
 

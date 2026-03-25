@@ -7,7 +7,10 @@
             <span>卖点分析</span>
             <span v-if="displayDate" class="header-date">{{ displayDate }}</span>
           </div>
-          <el-button @click="loadData" :loading="loading">刷新</el-button>
+          <div class="header-actions">
+            <el-button @click="loadData()" :loading="loading">刷新</el-button>
+            <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
+          </div>
         </div>
       </template>
 
@@ -95,6 +98,9 @@
                   <div class="metric-card">
                     <span class="metric-label">现价 / 成本</span>
                     <strong class="metric-value">{{ formatPrice(point.market_price) }} / {{ formatPrice(point.cost_price) }}</strong>
+                    <span class="metric-meta" :class="{ 'metric-meta-live': isRealtimeSource(point.data_source) }">
+                      {{ quoteMetaLine(point.data_source, point.quote_time, displayDate) }}
+                    </span>
                   </div>
                   <div class="metric-card">
                     <span class="metric-label">浮盈亏</span>
@@ -157,7 +163,11 @@
 
                 <div class="signal-footer">
                   <span>{{ point.llm_risk_sentence || point.sell_comment || '-' }}</span>
-                  <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                  <div class="footer-actions">
+                    <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                  </div>
                 </div>
               </article>
             </div>
@@ -190,6 +200,9 @@
                   <div class="metric-card">
                     <span class="metric-label">现价 / 成本</span>
                     <strong class="metric-value">{{ formatPrice(point.market_price) }} / {{ formatPrice(point.cost_price) }}</strong>
+                    <span class="metric-meta" :class="{ 'metric-meta-live': isRealtimeSource(point.data_source) }">
+                      {{ quoteMetaLine(point.data_source, point.quote_time, displayDate) }}
+                    </span>
                   </div>
                   <div class="metric-card">
                     <span class="metric-label">浮盈亏</span>
@@ -252,7 +265,11 @@
 
                 <div class="signal-footer">
                   <span>{{ point.llm_risk_sentence || point.sell_comment || '-' }}</span>
-                  <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                  <div class="footer-actions">
+                    <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                  </div>
                 </div>
               </article>
             </div>
@@ -285,6 +302,9 @@
                   <div class="metric-card">
                     <span class="metric-label">现价 / 成本</span>
                     <strong class="metric-value">{{ formatPrice(point.market_price) }} / {{ formatPrice(point.cost_price) }}</strong>
+                    <span class="metric-meta" :class="{ 'metric-meta-live': isRealtimeSource(point.data_source) }">
+                      {{ quoteMetaLine(point.data_source, point.quote_time, displayDate) }}
+                    </span>
                   </div>
                   <div class="metric-card">
                     <span class="metric-label">浮盈亏</span>
@@ -347,7 +367,11 @@
 
                 <div class="signal-footer">
                   <span>{{ point.llm_risk_sentence || point.sell_reason || '-' }}</span>
-                  <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                  <div class="footer-actions">
+                    <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                  </div>
                 </div>
               </article>
             </div>
@@ -355,6 +379,19 @@
         </el-tabs>
       </template>
     </el-card>
+    <SellAnalysisDrawer
+      v-model="sellAnalysisVisible"
+      :ts-code="sellAnalysisStock.tsCode"
+      :stock-name="sellAnalysisStock.stockName"
+      :trade-date="displayDate"
+    />
+    <StockCheckupDrawer
+      v-model="checkupVisible"
+      :ts-code="checkupStock.tsCode"
+      :stock-name="checkupStock.stockName"
+      :default-target="checkupStock.defaultTarget"
+      :trade-date="displayDate"
+    />
   </div>
 </template>
 
@@ -362,11 +399,18 @@
 import { computed, ref, onMounted } from 'vue'
 import { decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
+import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
+import SellAnalysisDrawer from '../components/SellAnalysisDrawer.vue'
 
 const loading = ref(false)
+const llmRefreshing = ref(false)
 const activeTab = ref('sell')
 const displayDate = ref('')
 const sellData = ref({ sell_positions: [], reduce_positions: [], hold_positions: [], llm_status: null })
+const sellAnalysisVisible = ref(false)
+const sellAnalysisStock = ref({ tsCode: '', stockName: '' })
+const checkupVisible = ref(false)
+const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型' })
 
 const sellHeadline = computed(() => {
   if (sellData.value.sell_positions?.length) return '先处理明确该卖的持仓，再考虑减仓和继续持有的部分'
@@ -457,6 +501,22 @@ const formatDays = (value) => {
   return `${value}天`
 }
 
+const isRealtimeSource = (source) => String(source || '').startsWith('realtime_')
+
+const quoteSourceLabel = (source) => {
+  if (!source) return '日线回退'
+  if (String(source).startsWith('realtime_')) return '盘中实时'
+  if (source === 'mock') return '模拟数据'
+  return '日线回退'
+}
+
+const quoteMetaLine = (source, quoteTime, fallbackDate) => {
+  const label = quoteSourceLabel(source)
+  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
+  if (fallbackDate) return `${label} ${fallbackDate}`
+  return label
+}
+
 const hasLlmCopy = (point) => Boolean(
   point?.llm_action_sentence || point?.llm_trigger_sentence || point?.llm_risk_sentence
 )
@@ -481,12 +541,31 @@ const orderLabel = (index, signal) => {
   return `${prefix}观察 `
 }
 
-const loadData = async () => {
-  loading.value = true
+const openCheckup = (point, defaultTarget = '持仓型') => {
+  checkupStock.value = {
+    tsCode: point.ts_code,
+    stockName: point.stock_name || point.ts_code,
+    defaultTarget
+  }
+  checkupVisible.value = true
+}
+
+const openSellAnalysis = (point) => {
+  sellAnalysisStock.value = {
+    tsCode: point.ts_code,
+    stockName: point.stock_name || point.ts_code
+  }
+  sellAnalysisVisible.value = true
+}
+
+const loadData = async (options = {}) => {
+  const forceLlmRefresh = Boolean(options.forceLlmRefresh)
+  if (forceLlmRefresh) llmRefreshing.value = true
+  else loading.value = true
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
-    const res = await decisionApi.sellPoint(tradeDate)
+    const res = await decisionApi.sellPoint(tradeDate, { forceLlmRefresh })
     sellData.value = res.data.data
     if (sellData.value.sell_positions?.length) activeTab.value = 'sell'
     else if (sellData.value.reduce_positions?.length) activeTab.value = 'reduce'
@@ -495,7 +574,12 @@ const loadData = async () => {
     ElMessage.error('加载失败')
   } finally {
     loading.value = false
+    llmRefreshing.value = false
   }
+}
+
+const refreshLlm = async () => {
+  await loadData({ forceLlmRefresh: true })
 }
 
 onMounted(() => {
@@ -514,6 +598,12 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -890,6 +980,15 @@ onMounted(() => {
   font-size: 1.15rem;
 }
 
+.metric-meta {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.metric-meta-live {
+  color: #54d2a4;
+}
+
 .condition-section {
   display: grid;
   gap: 10px;
@@ -984,6 +1083,13 @@ onMounted(() => {
   font-size: 13px;
 }
 
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .footer-flag {
   white-space: nowrap;
   color: #8ab4ff;
@@ -1008,6 +1114,10 @@ onMounted(() => {
   .signal-footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .footer-actions {
+    justify-content: flex-start;
   }
 }
 </style>

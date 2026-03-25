@@ -62,10 +62,13 @@
       <template #header>
         <span>主要指数行情</span>
       </template>
+      <div v-if="indexNotice" class="data-notice section-notice-index">
+        {{ indexNotice }}
+      </div>
       <el-empty v-if="!indexData?.length" description="暂无指数行情" />
       <el-table v-else :data="indexData" style="width: 100%">
         <el-table-column prop="name" label="指数" />
-        <el-table-column prop="close" label="收盘价" />
+        <el-table-column prop="close" label="最新价" />
         <el-table-column prop="change_pct" label="涨跌幅">
           <template #default="{ row }">
             <span :class="row.change_pct > 0 ? 'text-red' : 'text-green'">
@@ -75,6 +78,13 @@
         </el-table-column>
         <el-table-column prop="volume" label="成交量" />
         <el-table-column prop="amount" label="成交额" />
+        <el-table-column label="来源 / 时间" width="170">
+          <template #default="{ row }">
+            <span :class="['index-source', { 'index-source-live': isRealtimeSource(row.data_source) }]">
+              {{ quoteMetaLine(row.data_source, row.quote_time, row.trade_date) }}
+            </span>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -82,6 +92,9 @@
       <template #header>
         <span>市场情绪指标</span>
       </template>
+      <div v-if="statsNotice" class="data-notice section-notice-index">
+        {{ statsNotice }}
+      </div>
       <el-empty v-if="!marketStats" description="暂无市场情绪数据" />
       <el-row v-else :gutter="20" class="equal-height sentiment-row">
         <el-col :xs="12" :sm="12" :md="6">
@@ -109,6 +122,12 @@
           </div>
         </el-col>
       </el-row>
+      <div v-if="marketStats?.up_down_ratio" class="market-breadth">
+        <span>上涨 {{ marketStats.up_down_ratio.up || 0 }}</span>
+        <span>下跌 {{ marketStats.up_down_ratio.down || 0 }}</span>
+        <span>平盘 {{ marketStats.up_down_ratio.flat || 0 }}</span>
+        <span>共 {{ marketStats.up_down_ratio.total || 0 }}</span>
+      </div>
     </el-card>
   </div>
 </template>
@@ -124,6 +143,8 @@ const indexData = ref([])
 const marketStats = ref(null)
 const displayDate = ref('')
 const resolvedDate = ref('')
+const indexNotice = ref('')
+const statsNotice = ref('')
 
 const getLocalDate = () => {
   const now = new Date()
@@ -157,6 +178,32 @@ const brokenBoardClass = (r) => {
   return 'text-red'
 }
 
+const isRealtimeSource = (source) => String(source || '').startsWith('realtime_')
+
+const quoteSourceLabel = (source) => {
+  if (!source) return '日线回退'
+  if (String(source).startsWith('realtime_')) return '盘中实时'
+  if (source === 'mock') return '模拟数据'
+  return '日线回退'
+}
+
+const quoteMetaLine = (source, quoteTime, fallbackTradeDate) => {
+  const label = quoteSourceLabel(source)
+  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
+  const raw = String(fallbackTradeDate || '')
+  if (raw.length === 8) {
+    return `${label} ${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+  }
+  return label
+}
+
+const isMixedMode = (indexRows, stats) => {
+  const indexRealtime = (indexRows || []).some((row) => isRealtimeSource(row?.data_source))
+  const statsRealtime = isRealtimeSource(stats?.turnover_data_source) || isRealtimeSource(stats?.up_down_data_source)
+  const statsFallback = !isRealtimeSource(stats?.limit_stats_data_source) || !isRealtimeSource(stats?.turnover_data_source) || !isRealtimeSource(stats?.up_down_data_source)
+  return indexRealtime && (statsFallback || !statsRealtime)
+}
+
 const dataNotice = ref('')
 
 const loadData = async () => {
@@ -173,8 +220,30 @@ const loadData = async () => {
     indexData.value = indexRes.data.data.indexes || []
     marketStats.value = statsRes.data.data
     resolvedDate.value = envRes.data.data?.resolved_trade_date || indexRes.data.data?.resolved_trade_date || statsRes.data.data?.resolved_trade_date || ''
+    const firstIndex = indexData.value?.[0]
+    indexNotice.value = firstIndex
+      ? `指数行情当前使用${quoteMetaLine(firstIndex.data_source, firstIndex.quote_time, firstIndex.trade_date)}；情绪统计仍按 ${statsRes.data.data?.resolved_trade_date || resolvedDate.value || tradeDate} 口径计算。`
+      : ''
+    const turnoverText = quoteMetaLine(
+      statsRes.data.data?.turnover_data_source,
+      statsRes.data.data?.turnover_quote_time,
+      statsRes.data.data?.resolved_trade_date?.replaceAll('-', '')
+    )
+    const breadthText = quoteMetaLine(
+      statsRes.data.data?.up_down_data_source,
+      statsRes.data.data?.up_down_quote_time,
+      statsRes.data.data?.resolved_trade_date?.replaceAll('-', '')
+    )
+    const limitText = quoteMetaLine(
+      statsRes.data.data?.limit_stats_data_source,
+      statsRes.data.data?.limit_stats_quote_time,
+      statsRes.data.data?.resolved_trade_date?.replaceAll('-', '')
+    )
+    statsNotice.value = `涨跌家数使用${breadthText}，成交额使用${turnoverText}；涨跌停和炸板率使用${limitText}。`
     const notices = []
-    if (resolvedDate.value && resolvedDate.value !== tradeDate) {
+    if (isMixedMode(indexData.value, statsRes.data.data)) {
+      notices.push(`当前环境判断使用混合口径：指数已切到盘中实时，但情绪指标仍有部分沿用 ${statsRes.data.data?.resolved_trade_date || resolvedDate.value || tradeDate}。`)
+    } else if (resolvedDate.value && resolvedDate.value !== tradeDate) {
       notices.push(`当前请求日没有完整行情，已回退到最近有数据的交易日 ${resolvedDate.value}。`)
     }
     if (indexRes.data.data?.used_mock) {
@@ -236,6 +305,19 @@ onMounted(() => {
   color: #f3c24d;
   background: rgba(243, 194, 77, 0.08);
   border: 1px solid rgba(243, 194, 77, 0.18);
+}
+
+.section-notice-index {
+  margin-bottom: 12px;
+}
+
+.index-source {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.index-source-live {
+  color: #54d2a4;
 }
 
 /* 首屏：全宽标签 + 文案 + 三评分 */
@@ -343,5 +425,14 @@ onMounted(() => {
 .stat-card .value-emphasis {
   font-size: clamp(2rem, 3.8vw, 3rem);
   letter-spacing: -0.02em;
+}
+
+.market-breadth {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  color: var(--color-text-sec);
+  font-size: 13px;
 }
 </style>

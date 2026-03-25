@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = ""
-    llm_timeout_seconds: float = 12.0
+    llm_timeout_seconds: float = 60.0
+    # 个股体检输出 JSON 较大，实际 HTTP 等待时间取 max(账户超时, 本值)
+    llm_stock_checkup_min_timeout_seconds: float = 45.0
     llm_temperature: float = 0.2
     llm_max_input_items: int = 8
 

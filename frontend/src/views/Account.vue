@@ -98,13 +98,23 @@
           <el-button type="primary" @click="showAddDialog = true">+ 新增持仓</el-button>
         </div>
       </template>
+      <div v-if="positions.length" class="quote-summary">
+        {{ positionsQuoteSummary }}
+      </div>
       <el-empty v-if="!positions.length" description="暂无持仓" />
       <el-table v-else :data="positions" style="width: 100%">
         <el-table-column prop="ts_code" label="代码" width="100" />
         <el-table-column prop="stock_name" label="名称" width="120" />
         <el-table-column prop="holding_qty" label="数量" width="100" />
         <el-table-column prop="cost_price" label="成本" width="100" />
-        <el-table-column prop="market_price" label="现价" width="90" />
+        <el-table-column prop="market_price" label="现价" width="140">
+          <template #default="{ row }">
+            <div class="price-cell">
+              <div>{{ formatPrice(row.market_price) }}</div>
+              <div class="quote-meta">{{ formatQuoteMeta(row) }}</div>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="holding_days" label="持股天数" width="90" />
         <el-table-column label="盈亏金额" width="120">
           <template #default="{ row }">
@@ -132,8 +142,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="holding_reason" label="买入理由" />
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="openCheckup(row)">全面体检</el-button>
             <el-button type="primary" link size="small" @click="openEditDialog(row)">编辑</el-button>
             <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
           </template>
@@ -214,13 +225,22 @@
         <el-button type="primary" :loading="configSaving" @click="saveAccountConfig">保存</el-button>
       </template>
     </el-dialog>
+
+    <StockCheckupDrawer
+      v-model="checkupVisible"
+      :ts-code="checkupStock.tsCode"
+      :stock-name="checkupStock.stockName"
+      :default-target="checkupStock.defaultTarget"
+      :trade-date="getLocalDate()"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { accountApi, stockApi } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 
 const profile = ref(null)
 const status = ref(null)
@@ -234,6 +254,16 @@ const editSaving = ref(false)
 const showConfigDialog = ref(false)
 const configSaving = ref(false)
 const configForm = ref({ totalAsset: 1_000_000 })
+const checkupVisible = ref(false)
+const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型' })
+
+const getLocalDate = () => {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
 
 /** 金额展示为千分位 + 两位小数 */
 const formatYuan = (n) => {
@@ -265,6 +295,46 @@ const pnlAmountClass = (n) => {
   if (num < 0) return 'text-green'
   return ''
 }
+
+const formatPrice = (n) => {
+  if (n == null || Number.isNaN(Number(n))) return '—'
+  return Number(n).toFixed(2)
+}
+
+const simplifySource = (source) => {
+  if (!source) return '未知来源'
+  if (String(source).startsWith('realtime_')) return '盘中实时'
+  if (String(source).includes('daily') || source === 'bak_daily') return '日线回退'
+  return String(source)
+}
+
+const formatQuoteMeta = (row) => {
+  const source = simplifySource(row?.data_source)
+  if (!row?.quote_time) return source
+  const time = String(row.quote_time).split(' ')[1] || row.quote_time
+  return `${source} ${time}`
+}
+
+const positionsQuoteSummary = computed(() => {
+  if (!positions.value.length) return ''
+  const realtimeRows = positions.value.filter(
+    (row) => row?.data_source && String(row.data_source).startsWith('realtime_')
+  )
+  if (!realtimeRows.length) {
+    return '当前持仓现价未取到盘中实时，已回退到最近可用日线。'
+  }
+  const latest = realtimeRows
+    .map((row) => row.quote_time)
+    .filter(Boolean)
+    .sort()
+    .slice(-1)[0]
+  const prefix = realtimeRows.length === positions.value.length
+    ? '当前持仓现价已切到盘中实时。'
+    : '当前持仓现价为混合口径，部分股票已切到盘中实时。'
+  if (!latest) return prefix
+  const time = String(latest).split(' ')[1] || latest
+  return `${prefix} 最新时间 ${time}。`
+})
 const newPosition = ref({
   ts_code: '',
   stock_name: '',
@@ -409,6 +479,15 @@ const handleDelete = async (row) => {
   }
 }
 
+const openCheckup = (row) => {
+  checkupStock.value = {
+    tsCode: row.ts_code,
+    stockName: row.stock_name || row.ts_code,
+    defaultTarget: '持仓型'
+  }
+  checkupVisible.value = true
+}
+
 const loadData = async () => {
   if (isFirstLoad.value) pageLoading.value = true
   try {
@@ -545,4 +624,26 @@ onMounted(() => {
 .info-item .label, .status-item .label { color: var(--color-text-sec); flex-shrink: 0; }
 .info-item .value, .status-item .value { font-weight: bold; font-size: 16px; text-align: right; }
 .status-item .value { flex: 1; word-break: break-all; }
+
+.quote-summary {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(214, 166, 56, 0.28);
+  border-radius: 10px;
+  background: rgba(214, 166, 56, 0.08);
+  color: var(--color-warning);
+  font-size: 13px;
+}
+
+.price-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.2;
+}
+
+.quote-meta {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
 </style>

@@ -13,7 +13,10 @@
               实际候选日 {{ poolsData.resolved_trade_date }}
             </span>
           </div>
-          <el-button @click="loadData" :loading="loading">刷新</el-button>
+          <div class="header-actions">
+            <el-button @click="loadData()" :loading="loading">刷新</el-button>
+            <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
+          </div>
         </div>
       </template>
 
@@ -38,6 +41,11 @@
               <span class="stat-label">市场观察</span>
               <strong class="stat-value">{{ marketCount }}</strong>
               <span class="stat-tip">看方向和最强结构</span>
+            </div>
+            <div class="stat-card stat-trend">
+              <span class="stat-label">趋势辨识</span>
+              <strong class="stat-value">{{ trendCount }}</strong>
+              <span class="stat-tip">看结构和持续生命力</span>
             </div>
             <div class="stat-card stat-account">
               <span class="stat-label">账户可参与</span>
@@ -88,7 +96,7 @@
             <template #label>
               <span>市场最强观察池 <em class="tab-count">{{ marketCount }}</em></span>
             </template>
-            <el-empty v-if="!marketCount" description="暂无需要观察的强势候选" />
+            <el-empty v-if="!marketCount" :description="emptyPoolText('market')" />
             <div v-else class="signal-grid">
               <article
                 v-for="stock in marketPool"
@@ -122,6 +130,9 @@
                     <span :class="['quote-change', pctClass(stock.change_pct)]">
                       {{ formatSignedPct(stock.change_pct) }}
                     </span>
+                    <span class="quote-source" :class="{ 'quote-source-live': isRealtimeSource(stock.data_source) }">
+                      {{ quoteMetaLine(stock.data_source, stock.quote_time, poolsData.resolved_trade_date || displayDate) }}
+                    </span>
                   </div>
                   <div class="quote-side">
                     <span class="quote-pair">
@@ -147,6 +158,26 @@
                   <div class="metric-card">
                     <span class="metric-label">交易性</span>
                     <strong class="metric-value">{{ stock.stock_tradeability_tag }}</strong>
+                  </div>
+                </div>
+
+                <div class="profile-section">
+                  <div class="section-kicker">五项画像</div>
+                  <div class="profile-tags">
+                    <span v-for="tag in stockProfileTags(stock)" :key="tag" class="profile-tag">
+                      {{ tag }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="decision-section">
+                  <div class="decision-card">
+                    <div class="decision-title">进池原因</div>
+                    <div class="decision-copy">{{ stock.why_this_pool || stock.pool_decision_summary || stock.stock_comment || '因为它能代表当天最强偏好。' }}</div>
+                  </div>
+                  <div class="decision-card">
+                    <div class="decision-title">未进其他池</div>
+                    <div class="decision-copy">{{ notOtherPoolsLine(stock) }}</div>
                   </div>
                 </div>
 
@@ -183,7 +214,141 @@
 
                 <div class="signal-footer">
                   <span>{{ marketFooterLine(stock) }}</span>
-                  <span class="footer-flag">只观察，不直接执行</span>
+                  <div class="footer-actions">
+                    <span class="footer-flag">只观察，不直接执行</span>
+                    <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </el-tab-pane>
+
+          <el-tab-pane name="trend">
+            <template #label>
+              <span>趋势辨识度观察池 <em class="tab-count">{{ trendCount }}</em></span>
+            </template>
+            <el-empty v-if="!trendCount" :description="emptyPoolText('trend')" />
+            <div v-else class="signal-grid">
+              <article
+                v-for="stock in trendPool"
+                :key="stock.ts_code"
+                class="signal-card signal-card-trend"
+              >
+                <div class="signal-card-header">
+                  <div>
+                    <div class="signal-stock">{{ stock.stock_name }}</div>
+                    <div class="signal-code">{{ stock.ts_code }}</div>
+                  </div>
+                  <div class="signal-badges">
+                    <el-tag size="small" type="warning">{{ stock.structure_state_tag || '结构观察' }}</el-tag>
+                    <el-tag size="small" type="info">{{ stock.stock_role_tag || stock.stock_core_tag }}</el-tag>
+                  </div>
+                </div>
+
+                <div class="signal-meta">
+                  <span>{{ stock.sector_name || '无板块信息' }}</span>
+                  <span>{{ stock.candidate_source_tag || '无来源标记' }}</span>
+                </div>
+
+                <div class="signal-intent signal-intent-trend">
+                  {{ trendActionLine(stock) }}
+                </div>
+
+                <div class="quote-strip">
+                  <div class="quote-main">
+                    <span class="quote-label">最新价</span>
+                    <strong class="quote-price">{{ formatPrice(stock.close) }}</strong>
+                    <span :class="['quote-change', pctClass(stock.change_pct)]">
+                      {{ formatSignedPct(stock.change_pct) }}
+                    </span>
+                    <span class="quote-source" :class="{ 'quote-source-live': isRealtimeSource(stock.data_source) }">
+                      {{ quoteMetaLine(stock.data_source, stock.quote_time, poolsData.resolved_trade_date || displayDate) }}
+                    </span>
+                  </div>
+                  <div class="quote-side">
+                    <span class="quote-pair">
+                      执行分
+                      <strong>{{ formatScore(stock.account_entry_score) }}</strong>
+                    </span>
+                    <span class="quote-pair">
+                      综合分
+                      <strong>{{ formatScore(stock.stock_score) }}</strong>
+                    </span>
+                  </div>
+                </div>
+
+                <div class="price-strip">
+                  <div class="metric-card">
+                    <span class="metric-label">结构</span>
+                    <strong class="metric-value">{{ stock.structure_state_tag }}</strong>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">次日交易性</span>
+                    <strong class="metric-value">{{ stock.next_tradeability_tag }}</strong>
+                  </div>
+                  <div class="metric-card">
+                    <span class="metric-label">连续性</span>
+                    <strong class="metric-value">{{ stock.stock_continuity_tag }}</strong>
+                  </div>
+                </div>
+
+                <div class="profile-section">
+                  <div class="section-kicker">五项画像</div>
+                  <div class="profile-tags">
+                    <span v-for="tag in stockProfileTags(stock)" :key="tag" class="profile-tag">
+                      {{ tag }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="decision-section">
+                  <div class="decision-card">
+                    <div class="decision-title">为什么值得长期盯</div>
+                    <div class="decision-copy">{{ stock.why_this_pool || stock.pool_decision_summary || '结构更耐打，适合持续跟踪。' }}</div>
+                  </div>
+                  <div class="decision-card">
+                    <div class="decision-title">为什么不是别的池</div>
+                    <div class="decision-copy">{{ notOtherPoolsLine(stock) }}</div>
+                  </div>
+                </div>
+
+                <div class="condition-section">
+                  <div class="section-kicker">趋势清单</div>
+                  <div class="condition-panel-grid condition-panel-grid-watch">
+                    <section class="condition-panel condition-panel-trigger">
+                      <div class="panel-head">
+                        <span class="panel-step">1</span>
+                        <div>
+                          <div class="panel-title">盯结构</div>
+                          <div class="panel-subtitle">看承接、趋势和分歧修复</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="condition-title">{{ stock.pool_decision_summary || stock.stock_comment || '重点看趋势是否继续保持清晰。' }}</div>
+                      </div>
+                    </section>
+
+                    <section class="condition-panel condition-panel-invalid">
+                      <div class="panel-head">
+                        <span class="panel-step">2</span>
+                        <div>
+                          <div class="panel-title">失效点</div>
+                          <div class="panel-subtitle">结构破坏就不再当趋势锚</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="condition-title">{{ stock.llm_risk_note || stock.stock_falsification_cond || '承接转弱或关键位失守时降级。' }}</div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+
+                <div class="signal-footer">
+                  <span>{{ trendFooterLine(stock) }}</span>
+                  <div class="footer-actions">
+                    <span class="footer-flag">看结构，不急着追</span>
+                    <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
+                  </div>
                 </div>
               </article>
             </div>
@@ -195,105 +360,143 @@
             </template>
             <el-empty
               v-if="!accountCount"
-              :description="holdingCount ? '先处理持仓风险；当前没有满足账户准入的新标的' : '当前没有满足账户准入的新标的'"
+              :description="emptyPoolText('account')"
             />
-            <div v-else class="signal-grid">
-              <article
-                v-for="stock in accountPool"
-                :key="stock.ts_code"
-                class="signal-card signal-card-account"
-              >
-                <div class="signal-card-header">
+            <div v-else class="account-group-stack">
+              <section v-for="group in accountPoolGroups" :key="group.key" class="account-group">
+                <div class="account-group-head">
                   <div>
-                    <div class="signal-stock">{{ stock.stock_name }}</div>
-                    <div class="signal-code">{{ stock.ts_code }}</div>
+                    <div class="account-group-title">{{ group.title }}</div>
+                    <div class="account-group-desc">{{ group.desc }}</div>
                   </div>
-                  <div class="signal-badges">
-                    <el-tag size="small" type="success">{{ stock.candidate_bucket_tag || '可参与' }}</el-tag>
-                    <el-tag size="small" :type="accountEntryTagType(stock)">{{ accountEntryTag(stock) }}</el-tag>
-                  </div>
+                  <div class="account-group-meta">{{ group.items.length }} 只</div>
                 </div>
 
-                <div class="signal-meta">
-                  <span>{{ stock.sector_name || '无板块信息' }}</span>
-                  <span>{{ stock.candidate_source_tag || '无来源标记' }}</span>
-                </div>
-
-                <div class="signal-intent signal-intent-account">
-                  {{ accountActionLine(stock) }}
-                </div>
-
-                <div class="quote-strip">
-                  <div class="quote-main">
-                    <span class="quote-label">最新价</span>
-                    <strong class="quote-price">{{ formatPrice(stock.close) }}</strong>
-                    <span :class="['quote-change', pctClass(stock.change_pct)]">
-                      {{ formatSignedPct(stock.change_pct) }}
-                    </span>
-                  </div>
-                  <div class="quote-side">
-                    <span class="quote-pair">
-                      综合分
-                      <strong>{{ formatScore(stock.stock_score) }}</strong>
-                    </span>
-                    <span class="quote-pair">
-                      换手
-                      <strong>{{ formatSignedNumber(stock.turnover_rate, '%') }}</strong>
-                    </span>
-                  </div>
-                </div>
-
-                <div class="price-strip">
-                  <div class="metric-card">
-                    <span class="metric-label">强弱</span>
-                    <strong class="metric-value">{{ stock.stock_strength_tag }}</strong>
-                  </div>
-                  <div class="metric-card">
-                    <span class="metric-label">连续性</span>
-                    <strong class="metric-value">{{ stock.stock_continuity_tag }}</strong>
-                  </div>
-                  <div class="metric-card">
-                    <span class="metric-label">交易性</span>
-                    <strong class="metric-value">{{ stock.stock_tradeability_tag }}</strong>
-                  </div>
-                </div>
-
-                <div class="condition-section">
-                  <div class="section-kicker">执行清单</div>
-                  <div class="condition-panel-grid condition-panel-grid-watch">
-                    <section class="condition-panel condition-panel-trigger">
-                      <div class="panel-head">
-                        <span class="panel-step">1</span>
-                        <div>
-                          <div class="panel-title">为什么能进池</div>
-                          <div class="panel-subtitle">先看账户和结构是否匹配</div>
-                        </div>
+                <div class="signal-grid">
+                  <article
+                    v-for="stock in group.items"
+                    :key="stock.ts_code"
+                    class="signal-card signal-card-account"
+                  >
+                    <div class="signal-card-header">
+                      <div>
+                        <div class="signal-stock">{{ stock.stock_name }}</div>
+                        <div class="signal-code">{{ stock.ts_code }}</div>
                       </div>
-                      <div class="panel-body">
-                        <div class="condition-title">{{ stock.pool_entry_reason || stock.stock_comment || '满足常规开仓条件。' }}</div>
+                      <div class="signal-badges">
+                        <el-tag size="small" type="success">{{ stock.candidate_bucket_tag || '可参与' }}</el-tag>
+                        <el-tag size="small" :type="accountEntryTagType(stock)">{{ accountEntryTag(stock) }}</el-tag>
                       </div>
-                    </section>
+                    </div>
 
-                    <section class="condition-panel condition-panel-confirm">
-                      <div class="panel-head">
-                        <span class="panel-step">2</span>
-                        <div>
-                          <div class="panel-title">仓位提示</div>
-                          <div class="panel-subtitle">执行前先按提示控制仓位</div>
-                        </div>
-                      </div>
-                      <div class="panel-body">
-                        <div class="condition-title">{{ stock.llm_risk_note || stock.position_hint || '按计划仓位执行，不要超配。' }}</div>
-                      </div>
-                    </section>
-                  </div>
-                </div>
+                    <div class="signal-meta">
+                      <span>{{ stock.sector_name || '无板块信息' }}</span>
+                      <span>{{ stock.candidate_source_tag || '无来源标记' }}</span>
+                    </div>
 
-                <div class="signal-footer">
-                  <span>{{ stock.stock_comment || '可参与不代表立刻追价，仍要等买点页确认。' }}</span>
-                  <span class="footer-flag">{{ accountFooterFlag(stock) }}</span>
+                    <div class="signal-intent signal-intent-account">
+                      {{ accountActionLine(stock) }}
+                    </div>
+
+                    <div class="quote-strip">
+                      <div class="quote-main">
+                        <span class="quote-label">最新价</span>
+                        <strong class="quote-price">{{ formatPrice(stock.close) }}</strong>
+                        <span :class="['quote-change', pctClass(stock.change_pct)]">
+                          {{ formatSignedPct(stock.change_pct) }}
+                        </span>
+                        <span class="quote-source" :class="{ 'quote-source-live': isRealtimeSource(stock.data_source) }">
+                          {{ quoteMetaLine(stock.data_source, stock.quote_time, poolsData.resolved_trade_date || displayDate) }}
+                        </span>
+                      </div>
+                      <div class="quote-side">
+                        <span class="quote-pair">
+                          执行分
+                          <strong>{{ formatScore(stock.account_entry_score) }}</strong>
+                        </span>
+                        <span class="quote-pair">
+                          综合分
+                          <strong>{{ formatScore(stock.stock_score) }}</strong>
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="price-strip">
+                      <div class="metric-card">
+                        <span class="metric-label">强弱</span>
+                        <strong class="metric-value">{{ stock.stock_strength_tag }}</strong>
+                      </div>
+                      <div class="metric-card">
+                        <span class="metric-label">连续性</span>
+                        <strong class="metric-value">{{ stock.stock_continuity_tag }}</strong>
+                      </div>
+                      <div class="metric-card">
+                        <span class="metric-label">交易性</span>
+                        <strong class="metric-value">{{ stock.stock_tradeability_tag }}</strong>
+                      </div>
+                    </div>
+
+                    <div class="profile-section">
+                      <div class="section-kicker">五项画像</div>
+                      <div class="profile-tags">
+                        <span v-for="tag in stockProfileTags(stock)" :key="tag" class="profile-tag">
+                          {{ tag }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="decision-section">
+                      <div class="decision-card">
+                        <div class="decision-title">进池原因</div>
+                        <div class="decision-copy">{{ stock.why_this_pool || stock.pool_entry_reason || stock.stock_comment || '满足账户可执行条件。' }}</div>
+                      </div>
+                      <div class="decision-card">
+                        <div class="decision-title">未进其他池</div>
+                        <div class="decision-copy">{{ notOtherPoolsLine(stock) }}</div>
+                      </div>
+                    </div>
+
+                    <div class="condition-section">
+                      <div class="section-kicker">执行清单</div>
+                      <div class="condition-panel-grid condition-panel-grid-watch">
+                        <section class="condition-panel condition-panel-trigger">
+                          <div class="panel-head">
+                            <span class="panel-step">1</span>
+                            <div>
+                              <div class="panel-title">为什么能进池</div>
+                              <div class="panel-subtitle">先看账户和结构是否匹配</div>
+                            </div>
+                          </div>
+                          <div class="panel-body">
+                            <div class="condition-title">{{ stock.pool_entry_reason || stock.stock_comment || '满足常规开仓条件。' }}</div>
+                          </div>
+                        </section>
+
+                        <section class="condition-panel condition-panel-confirm">
+                          <div class="panel-head">
+                            <span class="panel-step">2</span>
+                            <div>
+                              <div class="panel-title">仓位提示</div>
+                              <div class="panel-subtitle">执行前先按提示控制仓位</div>
+                            </div>
+                          </div>
+                          <div class="panel-body">
+                            <div class="condition-title">{{ stock.llm_risk_note || stock.position_hint || '按计划仓位执行，不要超配。' }}</div>
+                          </div>
+                        </section>
+                      </div>
+                    </div>
+
+                    <div class="signal-footer">
+                      <span>{{ stock.stock_comment || '可参与不代表立刻追价，仍要等买点页确认。' }}</span>
+                      <div class="footer-actions">
+                        <span class="footer-flag">{{ accountFooterFlag(stock) }}</span>
+                        <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
+                      </div>
+                    </div>
+                  </article>
                 </div>
-              </article>
+              </section>
             </div>
           </el-tab-pane>
 
@@ -334,6 +537,9 @@
                     <strong class="quote-price">{{ formatPrice(stock.close) }} / {{ formatPrice(stock.cost_price) }}</strong>
                     <span :class="['quote-change', pctClass(stock.pnl_pct)]">
                       {{ formatSignedPct(stock.pnl_pct) }}
+                    </span>
+                    <span class="quote-source" :class="{ 'quote-source-live': isRealtimeSource(stock.data_source) }">
+                      {{ quoteMetaLine(stock.data_source, stock.quote_time, displayDate) }}
                     </span>
                   </div>
                   <div class="quote-side">
@@ -409,7 +615,10 @@
 
                 <div class="signal-footer">
                   <span>{{ stock.llm_risk_note || stock.sell_comment || stock.stock_comment || '-' }}</span>
-                  <span class="footer-flag">{{ holdingFooterFlag(stock) }}</span>
+                  <div class="footer-actions">
+                    <span class="footer-flag">{{ holdingFooterFlag(stock) }}</span>
+                    <el-button type="primary" link size="small" @click="openCheckup(stock, '持仓型')">全面体检</el-button>
+                  </div>
                 </div>
               </article>
             </div>
@@ -417,6 +626,13 @@
         </el-tabs>
       </template>
     </el-card>
+    <StockCheckupDrawer
+      v-model="checkupVisible"
+      :ts-code="checkupStock.tsCode"
+      :stock-name="checkupStock.stockName"
+      :default-target="checkupStock.defaultTarget"
+      :trade-date="displayDate"
+    />
   </div>
 </template>
 
@@ -424,28 +640,72 @@
 import { computed, ref, onMounted } from 'vue'
 import { stockApi } from '../api'
 import { ElMessage } from 'element-plus'
+import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 
 const loading = ref(false)
+const llmRefreshing = ref(false)
 const activeTab = ref('holding')
 const displayDate = ref('')
 const poolsData = ref({
   market_watch_pool: [],
+  trend_recognition_pool: [],
   account_executable_pool: [],
   holding_process_pool: [],
   resolved_trade_date: '',
   llm_status: null,
 })
+const checkupVisible = ref(false)
+const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
 
 const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 0)
+const trendCount = computed(() => poolsData.value.trend_recognition_pool?.length || 0)
 const accountCount = computed(() => poolsData.value.account_executable_pool?.length || 0)
 const holdingCount = computed(() => poolsData.value.holding_process_pool?.length || 0)
 
 const marketPool = computed(() =>
   [...(poolsData.value.market_watch_pool || [])].sort((a, b) => Number(b.stock_score || 0) - Number(a.stock_score || 0))
 )
-const accountPool = computed(() =>
-  [...(poolsData.value.account_executable_pool || [])].sort((a, b) => Number(b.stock_score || 0) - Number(a.stock_score || 0))
+const trendPool = computed(() =>
+  [...(poolsData.value.trend_recognition_pool || [])].sort((a, b) => Number(b.stock_score || 0) - Number(a.stock_score || 0))
 )
+const accountPool = computed(() =>
+  [...(poolsData.value.account_executable_pool || [])].sort((a, b) => {
+    const scoreDiff = Number(b.account_entry_score || 0) - Number(a.account_entry_score || 0)
+    if (scoreDiff !== 0) return scoreDiff
+    const stockScoreDiff = Number(b.stock_score || 0) - Number(a.stock_score || 0)
+    if (stockScoreDiff !== 0) return stockScoreDiff
+    return Number(b.change_pct || 0) - Number(a.change_pct || 0)
+  })
+)
+const isComfortableAccountEntry = (stock) => ['回踩确认', '低吸预备'].includes(stock.next_tradeability_tag)
+const accountPoolGroups = computed(() => {
+  const comfortable = accountPool.value.filter((stock) => isComfortableAccountEntry(stock))
+  const breakthrough = accountPool.value.filter((stock) => stock.next_tradeability_tag === '突破确认')
+  const other = accountPool.value.filter(
+    (stock) => !isComfortableAccountEntry(stock) && stock.next_tradeability_tag !== '突破确认'
+  )
+
+  return [
+    {
+      key: 'comfortable',
+      title: '回踩 / 低吸可参与',
+      desc: '更偏舒服买点，优先看承接和确认，不急着追。',
+      items: comfortable,
+    },
+    {
+      key: 'breakthrough',
+      title: '突破确认可参与',
+      desc: '更偏强势跟随，重点看放量过位和站稳，不做盲追。',
+      items: breakthrough,
+    },
+    {
+      key: 'other',
+      title: '其他可参与',
+      desc: '账户允许参与，但需要你回到买点页结合盘中再细看。',
+      items: other,
+    },
+  ].filter((group) => group.items.length)
+})
 const holdingPool = computed(() =>
   [...(poolsData.value.holding_process_pool || [])].sort(compareHoldingPriority)
 )
@@ -453,25 +713,29 @@ const holdingPool = computed(() =>
 const overviewBadge = computed(() => {
   if (holdingCount.value) return '先处理持仓'
   if (accountCount.value) return '看可参与'
+  if (trendCount.value) return '先看趋势锚'
   return '先看观察池'
 })
 
 const overviewBadgeClass = computed(() => {
   if (holdingCount.value) return 'badge-holding'
   if (accountCount.value) return 'badge-account'
+  if (trendCount.value) return 'badge-trend'
   return 'badge-market'
 })
 
 const overviewTitle = computed(() => {
   if (holdingCount.value) return '已有仓位优先，先把该卖、该减、该持有的动作排清楚'
   if (accountCount.value) return '当前有能执行的新标的，先看账户可参与池，再回到买点页确认'
+  if (trendCount.value) return '今天更值得盯结构清晰的趋势锚，不必只追最热那一笔'
   if (marketCount.value) return '当前更适合先观察市场最强结构，不要把观察票当成执行票'
-  return '今天三池都比较清淡，先等新的结构和账户信号'
+  return '今天几类观察池都比较清淡，先等新的结构和账户信号'
 })
 
 const overviewDesc = computed(() => {
   if (holdingCount.value) return '持仓处理池是今天优先级最高的区域；先处理旧仓风险，再决定是否看新票。'
   if (accountCount.value) return '账户可参与池说明系统已经过了账户准入这一步，但真正执行仍要结合买点和盘中确认。'
+  if (trendCount.value) return '趋势辨识度池更关注结构、承接和连续性，适合盯真正能当锚的票。'
   if (marketCount.value) return '观察池的任务是帮你缩小盯盘范围，先看方向、板块和量能，不要直接下单。'
   return '当前没有明显需要处理的仓位，也没有通过准入的新标的，适合保持节奏。'
 })
@@ -482,6 +746,9 @@ const overviewRules = computed(() => {
   }
   if (accountCount.value) {
     return ['先看进池理由', '仓位提示比题材更重要', '可参与不等于立刻追价']
+  }
+  if (trendCount.value) {
+    return ['看谁最耐打，不看谁最响', '趋势锚优先盯承接和修复', '结构清晰比日内最强更重要']
   }
   return ['观察池只负责缩小盯盘范围', '先看最强结构，再看账户是否允许', '没有执行确认就不要急着动']
 })
@@ -521,6 +788,16 @@ const topFocusItems = computed(() => {
       focus: stock.pool_entry_reason || stock.position_hint || stock.stock_comment || '等待买点确认',
       meta: `可参与 / ${stock.candidate_bucket_tag || '未分层'} / ${formatSignedPct(stock.change_pct)}`,
       orderLabel: items.length ? '再看 ' : '先看 ',
+    })
+  } else if (trendPool.value.length) {
+    const stock = trendPool.value[0]
+    items.push({
+      poolKey: 'trend',
+      ts_code: stock.ts_code,
+      stock_name: stock.stock_name,
+      focus: stock.why_this_pool || stock.pool_decision_summary || stock.stock_comment || '先盯结构与承接',
+      meta: `趋势池 / ${stock.structure_state_tag || '结构'} / ${formatSignedPct(stock.change_pct)}`,
+      orderLabel: items.length ? '再盯 ' : '先盯 ',
     })
   } else if (marketPool.value.length) {
     const stock = marketPool.value[0]
@@ -597,6 +874,22 @@ const pctClass = (value) => {
   return 'text-neutral'
 }
 
+const isRealtimeSource = (source) => String(source || '').startsWith('realtime_')
+
+const quoteSourceLabel = (source) => {
+  if (!source) return '日线回退'
+  if (String(source).startsWith('realtime_')) return '盘中实时'
+  if (source === 'mock') return '模拟数据'
+  return '日线回退'
+}
+
+const quoteMetaLine = (source, quoteTime, fallbackDate) => {
+  const label = quoteSourceLabel(source)
+  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
+  if (fallbackDate) return `${label} ${fallbackDate}`
+  return label
+}
+
 const sellTagType = (value) => {
   if (value === '卖出') return 'danger'
   if (value === '减仓') return 'warning'
@@ -620,8 +913,36 @@ const accountEntryTagType = (stock) => {
   return 'success'
 }
 
+const stockProfileTags = (stock) => [
+  stock.sector_profile_tag,
+  stock.stock_role_tag,
+  stock.day_strength_tag,
+  stock.structure_state_tag,
+  stock.next_tradeability_tag,
+].filter(Boolean)
+
+const notOtherPoolsLine = (stock) => {
+  const reasons = stock.not_other_pools || []
+  if (!reasons.length) return '当前没有额外降级说明。'
+  return reasons.join(' ')
+}
+
+const emptyPoolText = (poolKey) => {
+  if (poolKey === 'account') {
+    return holdingCount.value
+      ? '先处理持仓风险；当前没有满足账户准入的新标的'
+      : (poolsData.value.llm_summary?.pool_empty_reason || '当前没有满足账户准入的新标的')
+  }
+  if (poolKey === 'trend') {
+    return poolsData.value.llm_summary?.pool_empty_reason || '暂无结构清晰、值得持续盯的趋势锚。'
+  }
+  return poolsData.value.llm_summary?.pool_empty_reason || '暂无需要观察的强势候选'
+}
+
 const marketActionLine = (stock) => stock.llm_plain_note || stock.stock_comment || '先观察这只票是否继续保持强势结构。'
 const marketFooterLine = (stock) => `${stock.stock_strength_tag || '中'}强度，${stock.stock_continuity_tag || '可观察'}，继续等确认。`
+const trendActionLine = (stock) => stock.llm_plain_note || stock.why_this_pool || '这只票更适合盯结构和承接，不急着看日内最炸。'
+const trendFooterLine = (stock) => `${stock.structure_state_tag || '结构'} / ${stock.next_tradeability_tag || '待确认'}，更适合做趋势锚。`
 const accountActionLine = (stock) => stock.llm_plain_note || stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但仍要等买点确认。'
 const accountFooterFlag = (stock) => ((stock.pool_entry_reason || '').includes('防守') ? '轻仓试错' : '等待买点页确认')
 const holdingActionLine = (stock) => stock.llm_plain_note || `${stock.sell_signal_tag || '观察'}：${stock.sell_reason || stock.sell_comment || '继续跟踪。'}`
@@ -654,14 +975,26 @@ const holdingOrderLabel = (index) => {
   return '最后处理 '
 }
 
-const loadData = async () => {
-  loading.value = true
+const openCheckup = (stock, defaultTarget = '观察型') => {
+  checkupStock.value = {
+    tsCode: stock.ts_code,
+    stockName: stock.stock_name || stock.ts_code,
+    defaultTarget
+  }
+  checkupVisible.value = true
+}
+
+const loadData = async (options = {}) => {
+  const forceLlmRefresh = Boolean(options.forceLlmRefresh)
+  if (forceLlmRefresh) llmRefreshing.value = true
+  else loading.value = true
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
-    const res = await stockApi.pools(tradeDate, 50)
+    const res = await stockApi.pools(tradeDate, 50, { forceLlmRefresh })
     poolsData.value = res.data.data || {
       market_watch_pool: [],
+      trend_recognition_pool: [],
       account_executable_pool: [],
       holding_process_pool: [],
       resolved_trade_date: '',
@@ -669,12 +1002,18 @@ const loadData = async () => {
     }
     if (holdingCount.value) activeTab.value = 'holding'
     else if (accountCount.value) activeTab.value = 'account'
+    else if (trendCount.value) activeTab.value = 'trend'
     else activeTab.value = 'market'
   } catch (error) {
     ElMessage.error('加载失败')
   } finally {
     loading.value = false
+    llmRefreshing.value = false
   }
+}
+
+const refreshLlm = async () => {
+  await loadData({ forceLlmRefresh: true })
 }
 
 onMounted(() => {
@@ -693,6 +1032,12 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -747,6 +1092,10 @@ onMounted(() => {
   background: linear-gradient(135deg, #1d8b6f, #2fcf9a);
 }
 
+.badge-trend {
+  background: linear-gradient(135deg, #9c6cf5, #c68cff);
+}
+
 .badge-market {
   background: linear-gradient(135deg, #4f76d9, #67a5ff);
 }
@@ -776,7 +1125,7 @@ onMounted(() => {
 
 .overview-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -905,6 +1254,10 @@ onMounted(() => {
   box-shadow: inset 0 0 0 1px rgba(47, 207, 154, 0.12);
 }
 
+.stat-trend {
+  box-shadow: inset 0 0 0 1px rgba(198, 140, 255, 0.12);
+}
+
 .stat-holding {
   box-shadow: inset 0 0 0 1px rgba(243, 157, 86, 0.12);
 }
@@ -944,6 +1297,41 @@ onMounted(() => {
   margin-top: 8px;
 }
 
+.account-group-stack {
+  display: grid;
+  gap: 20px;
+  margin-top: 8px;
+}
+
+.account-group {
+  display: grid;
+  gap: 10px;
+}
+
+.account-group-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.account-group-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.account-group-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.account-group-meta {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
 .signal-card {
   display: grid;
   gap: 16px;
@@ -959,6 +1347,10 @@ onMounted(() => {
 
 .signal-card-account {
   box-shadow: inset 0 0 0 1px rgba(47, 207, 154, 0.08);
+}
+
+.signal-card-trend {
+  box-shadow: inset 0 0 0 1px rgba(198, 140, 255, 0.08);
 }
 
 .signal-card-holding {
@@ -1025,10 +1417,60 @@ onMounted(() => {
   border: 1px solid rgba(47, 207, 154, 0.18);
 }
 
+.signal-intent-trend {
+  color: #f0e6ff;
+  background: rgba(156, 108, 245, 0.16);
+  border: 1px solid rgba(198, 140, 255, 0.2);
+}
+
 .signal-intent-holding {
   color: #fff2df;
   background: rgba(204, 107, 40, 0.16);
   border: 1px solid rgba(243, 157, 86, 0.18);
+}
+
+.profile-section,
+.decision-section {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.profile-tag {
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-text-main);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.decision-section {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.decision-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.decision-title {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.decision-copy {
+  line-height: 1.65;
+  color: var(--color-text-main);
 }
 
 .quote-strip,
@@ -1072,6 +1514,15 @@ onMounted(() => {
 .quote-change {
   font-size: 14px;
   font-weight: 600;
+}
+
+.quote-source {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.quote-source-live {
+  color: #54d2a4;
 }
 
 .quote-side {
@@ -1183,6 +1634,13 @@ onMounted(() => {
   color: var(--color-text-sec);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .footer-flag {

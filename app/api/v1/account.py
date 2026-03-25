@@ -147,54 +147,34 @@ def _safe_float(val, default: float = 0.0) -> float:
 
 
 def refresh_holdings_price(holdings: List[dict]):
-    """批量刷新持仓现价、昨收（用 bak_daily，支持交易日回退）"""
+    """批量刷新持仓现价、昨收（统一复用个股详情链路，支持实时覆盖和交易日回退）"""
     if not holdings:
         return
     try:
         today = datetime.now().strftime("%Y%m%d")
-        effective_date = tushare_client._resolve_trade_date(today)
-        try:
-            df = tushare_client.pro.bak_daily(
-                trade_date=effective_date,
-                fields="ts_code,close,pre_close"
-            )
-        except Exception as e:
-            logger.warning(f"bak_daily 含 pre_close 失败，回退为仅 close: {e}")
-            df = tushare_client.pro.bak_daily(
-                trade_date=effective_date,
-                fields="ts_code,close"
-            )
-        if df is None or df.empty:
-            logger.warning(f"bak_daily 返回空，无法刷新持仓现价（{effective_date}）")
-            return
-        has_pre_close = "pre_close" in df.columns
-        price_map = {}
-        pre_close_map = {}
-        for _, row in df.iterrows():
-            tc = row.get("ts_code")
-            if not tc:
-                continue
-            close = _safe_float(row.get("close"), 0.0)
-            if close > 0:
-                price_map[tc] = close
-            pre = row.get("pre_close") if has_pre_close else None
-            pre_v = _safe_float(pre, 0.0)
-            if pre_v > 0:
-                pre_close_map[tc] = pre_v
         for h in holdings:
-            tc = h.get("ts_code")
-            price = price_map.get(tc)
-            if price:
-                h["market_price"] = price
-                # 昨收：无则与现价相同，当日盈亏为 0
-                pre_close = pre_close_map.get(tc) or price
-                h["pre_close"] = pre_close
-                cost = h.get("cost_price") or 0
-                qty = h.get("holding_qty") or 0
-                if cost > 0:
-                    h["pnl_pct"] = round((price - cost) / cost * 100, 2)
-                if qty > 0:
-                    h["holding_market_value"] = round(qty * price, 2)
+            ts_code = normalize_ts_code(h.get("ts_code") or "")
+            if not ts_code:
+                continue
+            detail = tushare_client.get_stock_detail(ts_code, today)
+            price = _safe_float(detail.get("close"), 0.0)
+            pre_close = _safe_float(detail.get("pre_close"), 0.0)
+            if price <= 0:
+                continue
+
+            h["ts_code"] = ts_code
+            h["stock_name"] = detail.get("stock_name") or h.get("stock_name") or ts_code
+            h["market_price"] = price
+            h["pre_close"] = pre_close or price
+            h["quote_time"] = detail.get("quote_time")
+            h["data_source"] = detail.get("data_source")
+
+            cost = _safe_float(h.get("cost_price"), 0.0)
+            qty = int(h.get("holding_qty") or 0)
+            if cost > 0:
+                h["pnl_pct"] = round((price - cost) / cost * 100, 2)
+            if qty > 0:
+                h["holding_market_value"] = round(qty * price, 2)
     except Exception as e:
         logger.error(f"刷新持仓现价失败: {e}")
 
@@ -289,23 +269,15 @@ async def add_position(request: AddPositionRequest) -> ApiResponse:
         # 获取股票名称
         stock_name = await get_stock_name(ts_code)
 
-        # 获取现价（用 bak_daily + 交易日回退，避免周末返回空）
+        # 获取现价（统一复用个股详情链路，支持实时覆盖和交易日回退）
         market_price = request.cost_price
         try:
-            effective_date = tushare_client._resolve_trade_date(datetime.now().strftime("%Y%m%d"))
-            df = tushare_client.pro.bak_daily(
-                trade_date=effective_date,
-                fields="ts_code,close,name"
-            )
-            if df is not None and not df.empty:
-                row = df[df["ts_code"] == ts_code]
-                if not row.empty:
-                    price = float(row.iloc[0].get("close", 0) or 0)
-                    if price > 0:
-                        market_price = price
-                    name = row.iloc[0].get("name", "")
-                    if name:
-                        stock_name = name
+            detail = tushare_client.get_stock_detail(ts_code, datetime.now().strftime("%Y%m%d"))
+            price = _safe_float(detail.get("close"), 0.0)
+            if price > 0:
+                market_price = price
+            if detail.get("stock_name"):
+                stock_name = detail["stock_name"]
         except Exception as e:
             logger.warning(f"获取 {ts_code} 现价失败，使用成本价: {e}")
         

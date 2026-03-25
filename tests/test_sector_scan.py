@@ -16,10 +16,15 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.models.schemas import (
+    MarketEnvOutput,
+    MarketEnvTag,
+    RiskLevel,
     SectorOutput,
     SectorMainlineTag,
     SectorContinuityTag,
-    SectorTradeabilityTag
+    SectorTradeabilityTag,
+    SectorTierTag,
+    SectorActionHint,
 )
 from app.services.sector_scan import SectorScanService
 
@@ -138,6 +143,46 @@ class TestSectorScan:
         assert thermal.sector_mainline_tag == SectorMainlineTag.MAINLINE
         assert hydro.sector_mainline_tag == SectorMainlineTag.SUB_MAINLINE
 
+    def test_attack_env_lowers_mainline_threshold(self, service):
+        """
+        测试：进攻环境下，应允许扩散型方向更容易进入主线候选。
+        """
+        market_env = MarketEnvOutput(
+            trade_date="2026-03-20",
+            market_env_tag=MarketEnvTag.ATTACK,
+            breakout_allowed=True,
+            risk_level=RiskLevel.LOW,
+            market_comment="进攻环境",
+            index_score=75,
+            sentiment_score=82,
+            overall_score=79,
+        )
+        sectors = [{"sector_name": "攻击型板块", "sector_change_pct": 2.3}]
+
+        scored = service._score_sectors(sectors, market_env=market_env)
+
+        assert scored[0].sector_mainline_tag == SectorMainlineTag.MAINLINE
+
+    def test_defense_env_raises_mainline_threshold(self, service):
+        """
+        测试：防守环境下，相同涨幅应下调为次主线或观察。
+        """
+        market_env = MarketEnvOutput(
+            trade_date="2026-03-20",
+            market_env_tag=MarketEnvTag.DEFENSE,
+            breakout_allowed=False,
+            risk_level=RiskLevel.HIGH,
+            market_comment="防守环境",
+            index_score=30,
+            sentiment_score=28,
+            overall_score=29,
+        )
+        sectors = [{"sector_name": "防守市板块", "sector_change_pct": 2.5}]
+
+        scored = service._score_sectors(sectors, market_env=market_env)
+
+        assert scored[0].sector_mainline_tag == SectorMainlineTag.SUB_MAINLINE
+
     def test_sector_source_type_preserved(self, service):
         """
         测试：混合口径评分后应保留板块来源类型
@@ -193,6 +238,33 @@ class TestSectorScan:
         assert "题材口径" in sector.sector_reason_tags
         assert "连续性待确认" in sector.sector_reason_tags
         assert "需确认" in sector.sector_reason_tags
+
+    def test_sector_outputs_dimension_scores_tier_and_action(self, service):
+        """
+        测试：板块输出应包含五维评分、A/B/C 分级与执行建议。
+        """
+        sectors = [
+            {
+                "sector_name": "电力设备",
+                "sector_change_pct": 3.8,
+                "sector_source_type": "limitup_industry",
+                "stock_count": 9,
+                "sector_turnover": 420,
+            },
+        ]
+
+        scored = service._score_sectors(sectors, trade_date="2026-03-20")
+        sector = scored[0]
+
+        assert sector.sector_dimension_scores is not None
+        assert sector.sector_dimension_scores.linkage_score > 0
+        assert sector.sector_tier in [SectorTierTag.A, SectorTierTag.B, SectorTierTag.C]
+        assert sector.sector_action_hint in [
+            SectorActionHint.EXECUTABLE,
+            SectorActionHint.OBSERVE,
+            SectorActionHint.AVOID,
+        ]
+        assert sector.sector_summary_reason
 
     def test_trash_sector_filtering(self, service):
         """
@@ -486,6 +558,127 @@ class TestSectorScan:
 
         assert result.resolved_trade_date == "2026-03-20"
         assert result.total_sectors == 1
+
+    def test_scan_exposes_concept_fallback_reason(self, service, monkeypatch):
+        """
+        测试：题材聚合降级原因应透传到扫描结果，供前端准确提示
+        """
+        monkeypatch.setattr(
+            service,
+            "_get_sector_data",
+            lambda _trade_date: {
+                "rows": [
+                    {"sector_name": "火力发电", "sector_change_pct": 1.15, "sector_source_type": "industry"},
+                ],
+                "sector_data_mode": "industry_only",
+                "concept_data_status": "missing_theme",
+                "concept_data_message": "涨停列表未提供 theme 字段，无法按题材聚合",
+                "data_trade_date": "20260323",
+            },
+        )
+
+        result = service.scan("2026-03-23", limit_output=False)
+
+        assert result.sector_data_mode == "industry_only"
+        assert result.concept_data_status == "missing_theme"
+        assert result.concept_data_message == "涨停列表未提供 theme 字段，无法按题材聚合"
+
+    def test_get_leader_returns_proxy_stocks(self, service, monkeypatch):
+        """
+        测试：主线接口应返回风向标个股。
+        """
+        monkeypatch.setattr(
+            service,
+            "scan",
+            lambda *_args, **_kwargs: type(
+                "ScanResult",
+                (),
+                {
+                    "trade_date": "2026-03-23",
+                    "resolved_trade_date": "2026-03-23",
+                    "sector_data_mode": "hybrid",
+                    "threshold_profile": "attack",
+                    "concept_data_status": "ok",
+                    "concept_data_message": "题材聚合成功",
+                    "mainline_sectors": [
+                        SectorOutput(
+                            sector_name="算力",
+                            sector_change_pct=4.2,
+                            sector_strength_rank=1,
+                            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                            sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+                            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                        )
+                    ],
+                    "sub_mainline_sectors": [],
+                    "follow_sectors": [],
+                    "trash_sectors": [],
+                },
+            )(),
+        )
+        monkeypatch.setattr(
+            service,
+            "_pick_leader_stocks",
+            lambda *_args, **_kwargs: [
+                {
+                    "ts_code": "300308.SZ",
+                    "stock_name": "中际旭创",
+                    "change_pct": 6.21,
+                    "amount": 356000.0,
+                }
+            ],
+        )
+
+        result = service.get_leader("2026-03-23")
+
+        assert result.sector.sector_name == "算力"
+        assert result.leader_stocks[0].stock_name == "中际旭创"
+
+    def test_get_sector_data_falls_back_to_limitup_industry(self, service, monkeypatch):
+        """
+        测试：theme 缺失时，应退回涨停行业聚合，而不是直接退到行业均值。
+        """
+        monkeypatch.setattr(
+            service.client,
+            "get_sector_data_with_meta",
+            lambda _trade_date: {
+                "rows": [
+                    {"sector_name": "电力", "sector_change_pct": 0.88},
+                    {"sector_name": "化工", "sector_change_pct": 0.52},
+                ],
+                "data_trade_date": "20260323",
+                "used_mock": False,
+            },
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_concept_sectors_from_limitup_with_meta",
+            lambda _trade_date: {
+                "rows": [],
+                "data_trade_date": "20260323",
+                "status": "missing_theme",
+                "message": "涨停列表未提供 theme 字段，无法按题材聚合",
+            },
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_limitup_industry_sectors_with_meta",
+            lambda _trade_date: {
+                "rows": [
+                    {"sector_name": "电力", "sector_change_pct": 10.02, "stock_count": 2},
+                ],
+                "data_trade_date": "20260323",
+                "status": "ok",
+                "message": "涨停行业聚合成功，共 1 个行业",
+            },
+        )
+
+        payload = service._get_sector_data("20260323")
+
+        assert payload["sector_data_mode"] == "limitup_industry_hybrid"
+        assert payload["concept_data_status"] == "limitup_industry_ok"
+        assert payload["rows"][0]["sector_source_type"] == "limitup_industry"
+        assert len(payload["rows"]) == 2
 
 
 class TestSectorScanAPI:

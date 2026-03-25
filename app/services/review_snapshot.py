@@ -22,73 +22,86 @@ class ReviewSnapshotService:
         "buy_observe": "观察",
     }
 
-    async def save_analysis_snapshot(self, trade_date: str, stock_pools, buy_analysis) -> int:
-        """保存某交易日的候选池与买点快照。"""
+    async def save_analysis_snapshot(self, trade_date: str, stock_pools=None, buy_analysis=None) -> int:
+        """保存某交易日的候选池与买点快照，支持三池页/买点页部分写入。"""
         rows = []
+        snapshot_types_to_replace = []
 
-        for stock in stock_pools.market_watch_pool:
-            rows.append(
-                ReviewSnapshot(
-                    trade_date=trade_date,
-                    snapshot_type="pool_market",
-                    ts_code=stock.ts_code,
-                    stock_name=stock.stock_name,
-                    candidate_source_tag=stock.candidate_source_tag,
-                    candidate_bucket_tag=stock.candidate_bucket_tag,
-                    stock_pool_tag=stock.stock_pool_tag.value,
-                    stock_score=stock.stock_score,
-                    base_price=stock.close or 0.0,
+        if stock_pools is not None:
+            snapshot_types_to_replace.extend(["pool_market", "pool_account"])
+            for stock in stock_pools.market_watch_pool:
+                rows.append(
+                    ReviewSnapshot(
+                        trade_date=trade_date,
+                        snapshot_type="pool_market",
+                        ts_code=stock.ts_code,
+                        stock_name=stock.stock_name,
+                        candidate_source_tag=stock.candidate_source_tag,
+                        candidate_bucket_tag=stock.candidate_bucket_tag,
+                        stock_pool_tag=stock.stock_pool_tag.value,
+                        stock_score=stock.stock_score,
+                        base_price=stock.close or 0.0,
+                    )
                 )
-            )
 
-        for stock in stock_pools.account_executable_pool:
-            rows.append(
-                ReviewSnapshot(
-                    trade_date=trade_date,
-                    snapshot_type="pool_account",
-                    ts_code=stock.ts_code,
-                    stock_name=stock.stock_name,
-                    candidate_source_tag=stock.candidate_source_tag,
-                    candidate_bucket_tag=stock.candidate_bucket_tag,
-                    stock_pool_tag=stock.stock_pool_tag.value,
-                    stock_score=stock.stock_score,
-                    base_price=stock.close or 0.0,
+            for stock in stock_pools.account_executable_pool:
+                rows.append(
+                    ReviewSnapshot(
+                        trade_date=trade_date,
+                        snapshot_type="pool_account",
+                        ts_code=stock.ts_code,
+                        stock_name=stock.stock_name,
+                        candidate_source_tag=stock.candidate_source_tag,
+                        candidate_bucket_tag=stock.candidate_bucket_tag,
+                        stock_pool_tag=stock.stock_pool_tag.value,
+                        stock_score=stock.stock_score,
+                        base_price=stock.close or 0.0,
+                    )
                 )
-            )
 
-        for bp in buy_analysis.available_buy_points:
-            rows.append(
-                ReviewSnapshot(
-                    trade_date=trade_date,
-                    snapshot_type="buy_available",
-                    ts_code=bp.ts_code,
-                    stock_name=bp.stock_name,
-                    candidate_source_tag=bp.candidate_source_tag,
-                    candidate_bucket_tag=bp.candidate_bucket_tag,
-                    buy_signal_tag=bp.buy_signal_tag.value,
-                    buy_point_type=bp.buy_point_type.value,
-                    base_price=bp.buy_trigger_price or 0.0,
+        if buy_analysis is not None:
+            snapshot_types_to_replace.extend(["buy_available", "buy_observe"])
+            for bp in buy_analysis.available_buy_points:
+                rows.append(
+                    ReviewSnapshot(
+                        trade_date=trade_date,
+                        snapshot_type="buy_available",
+                        ts_code=bp.ts_code,
+                        stock_name=bp.stock_name,
+                        candidate_source_tag=bp.candidate_source_tag,
+                        candidate_bucket_tag=bp.candidate_bucket_tag,
+                        buy_signal_tag=bp.buy_signal_tag.value,
+                        buy_point_type=bp.buy_point_type.value,
+                        base_price=bp.buy_trigger_price or 0.0,
+                    )
                 )
-            )
 
-        for bp in buy_analysis.observe_buy_points:
-            rows.append(
-                ReviewSnapshot(
-                    trade_date=trade_date,
-                    snapshot_type="buy_observe",
-                    ts_code=bp.ts_code,
-                    stock_name=bp.stock_name,
-                    candidate_source_tag=bp.candidate_source_tag,
-                    candidate_bucket_tag=bp.candidate_bucket_tag,
-                    buy_signal_tag=bp.buy_signal_tag.value,
-                    buy_point_type=bp.buy_point_type.value,
-                    base_price=bp.buy_trigger_price or 0.0,
+            for bp in buy_analysis.observe_buy_points:
+                rows.append(
+                    ReviewSnapshot(
+                        trade_date=trade_date,
+                        snapshot_type="buy_observe",
+                        ts_code=bp.ts_code,
+                        stock_name=bp.stock_name,
+                        candidate_source_tag=bp.candidate_source_tag,
+                        candidate_bucket_tag=bp.candidate_bucket_tag,
+                        buy_signal_tag=bp.buy_signal_tag.value,
+                        buy_point_type=bp.buy_point_type.value,
+                        base_price=bp.buy_trigger_price or 0.0,
+                    )
                 )
-            )
+
+        if not snapshot_types_to_replace:
+            return 0
 
         async with async_session_factory() as session:
-            await session.execute(delete(ReviewSnapshot).where(ReviewSnapshot.trade_date == trade_date))
-            session.add_all(rows)
+            await session.execute(
+                delete(ReviewSnapshot)
+                .where(ReviewSnapshot.trade_date == trade_date)
+                .where(ReviewSnapshot.snapshot_type.in_(snapshot_types_to_replace))
+            )
+            if rows:
+                session.add_all(rows)
             await session.commit()
 
         return len(rows)
@@ -229,11 +242,22 @@ class ReviewSnapshotService:
                 .where(ReviewSnapshot.snapshot_type.in_(["buy_available", "buy_observe"]))
             )
             rows = result.scalars().all()
+            stats_mode = "buy"
+
+            if not rows:
+                result = await session.execute(
+                    select(ReviewSnapshot)
+                    .where(ReviewSnapshot.trade_date.in_(trade_dates))
+                    .where(ReviewSnapshot.snapshot_type.in_(["pool_account", "pool_market"]))
+                )
+                rows = result.scalars().all()
+                stats_mode = "pool"
 
         return {
             "trade_dates": sorted(trade_dates),
             "snapshot_count": len(rows),
             "bucket_stats": self._aggregate_bucket_stats(rows),
+            "stats_mode": stats_mode,
         }
 
 

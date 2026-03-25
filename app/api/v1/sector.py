@@ -11,6 +11,7 @@ from app.models.schemas import (
     LeaderSectorResponse,
     ApiResponse
 )
+from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
 
 router = APIRouter()
@@ -33,12 +34,15 @@ async def scan_sectors(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        result = sector_scan_service.scan(trade_date)
+        market_env = market_env_service.get_current_env(trade_date)
+        result = sector_scan_service.scan(trade_date, market_env=market_env)
         return ApiResponse(
             data={
                 "trade_date": result.trade_date,
                 "resolved_trade_date": result.resolved_trade_date,
                 "sector_data_mode": result.sector_data_mode,
+                "concept_data_status": result.concept_data_status,
+                "concept_data_message": result.concept_data_message,
                 "threshold_profile": result.threshold_profile,
                 "mainline_sectors": [s.model_dump() for s in result.mainline_sectors],
                 "sub_mainline_sectors": [s.model_dump() for s in result.sub_mainline_sectors],
@@ -64,13 +68,18 @@ async def get_leader_sector(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        result = sector_scan_service.get_leader(trade_date)
+        market_env = market_env_service.get_current_env(trade_date)
+        result = sector_scan_service.get_leader(trade_date, market_env=market_env)
         return ApiResponse(
             data={
                 "trade_date": result.trade_date,
                 "resolved_trade_date": result.resolved_trade_date,
                 "sector_data_mode": result.sector_data_mode,
-                "sector": result.sector.model_dump()
+                "threshold_profile": result.threshold_profile,
+                "concept_data_status": result.concept_data_status,
+                "concept_data_message": result.concept_data_message,
+                "sector": result.sector.model_dump(),
+                "leader_stocks": [s.model_dump() for s in result.leader_stocks],
             }
         )
     except Exception as e:
@@ -92,7 +101,12 @@ async def list_sectors(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        result = sector_scan_service.scan(trade_date, limit_output=False)
+        market_env = market_env_service.get_current_env(trade_date)
+        result = sector_scan_service.scan(
+            trade_date,
+            limit_output=False,
+            market_env=market_env,
+        )
 
         # 合并所有板块
         all_sectors = (
@@ -119,6 +133,8 @@ async def list_sectors(
                 "trade_date": result.trade_date,
                 "resolved_trade_date": result.resolved_trade_date,
                 "sector_data_mode": result.sector_data_mode,
+                "concept_data_status": result.concept_data_status,
+                "concept_data_message": result.concept_data_message,
                 "threshold_profile": result.threshold_profile,
                 "sectors": [s.model_dump() for s in all_sectors],
                 "total": len(all_sectors)

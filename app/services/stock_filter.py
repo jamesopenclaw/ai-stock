@@ -12,6 +12,11 @@ from app.models.schemas import (
     StockTradeabilityTag,
     StockCoreTag,
     StockPoolTag,
+    SectorProfileTag,
+    StockRoleTag,
+    DayStrengthTag,
+    StructureStateTag,
+    NextTradeabilityTag,
     StockPoolsOutput,
     SectorMainlineTag,
     SectorTradeabilityTag,
@@ -78,6 +83,10 @@ def merge_holdings_into_candidate_stocks(
                 open=float(detail.get("open") or 0),
                 pre_close=float(detail.get("pre_close") or 0),
                 candidate_source_tag="持仓补齐",
+                volume=detail.get("volume"),
+                avg_price=detail.get("avg_price"),
+                quote_time=detail.get("quote_time"),
+                data_source=detail.get("data_source"),
             )
         )
         seen.add(tc)
@@ -190,6 +199,7 @@ class StockFilterService:
 
         # 三池分类
         market_watch = []    # 市场最强观察池
+        trend_recognition = []  # 趋势辨识度观察池
         account_executable = []  # 账户可参与池
         holding_process = []  # 持仓处理池
 
@@ -223,8 +233,19 @@ class StockFilterService:
                     continue
                 scored = self._score_stock(raw_stock, market_env, sector_map)
             scored = self._apply_holding_context(scored, holding_map.get(holding_code))
-            scored.stock_pool_tag = StockPoolTag.HOLDING_PROCESS
-            holding_process.append(scored)
+            holding_process.append(
+                self._clone_for_pool(
+                    scored,
+                    StockPoolTag.HOLDING_PROCESS,
+                    why_this_pool="持仓票与新开仓票分离，优先进入持仓处理池。",
+                    not_other_pools=[
+                        "持仓票不进入市场最强观察池。",
+                        "持仓票不进入趋势辨识度观察池。",
+                        "持仓票不进入账户可参与池。",
+                    ],
+                    pool_decision_summary="持仓票单独处理，先看卖点和风险控制。",
+                )
+            )
             holding_process_codes.add(holding_code)
 
         for stock in scored_stocks:
@@ -234,48 +255,162 @@ class StockFilterService:
                 # 持仓处理池
                 if normalized_code not in holding_process_codes:
                     stock = self._apply_holding_context(stock, holding_map.get(normalized_code))
-                    stock.stock_pool_tag = StockPoolTag.HOLDING_PROCESS
-                    holding_process.append(stock)
+                    holding_process.append(
+                        self._clone_for_pool(
+                            stock,
+                            StockPoolTag.HOLDING_PROCESS,
+                            why_this_pool="持仓票与新开仓票分离，优先进入持仓处理池。",
+                            not_other_pools=[
+                                "持仓票不进入市场最强观察池。",
+                                "持仓票不进入趋势辨识度观察池。",
+                                "持仓票不进入账户可参与池。",
+                            ],
+                            pool_decision_summary="持仓票单独处理，先看卖点和风险控制。",
+                        )
+                    )
                     holding_process_codes.add(normalized_code)
-            elif stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE:
-                # 可交易 -> 账户可参与池
-                if self._is_account_executable(stock, account):
-                    stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
-                    stock.pool_entry_reason = "满足常规开仓条件"
-                    stock.position_hint = "按计划仓位执行"
-                    account_executable.append(stock)
-                elif self._should_enter_market_watch(stock):
-                    stock.stock_pool_tag = StockPoolTag.MARKET_WATCH
-                    market_watch.append(stock)
-                else:
-                    stock.stock_pool_tag = StockPoolTag.NOT_IN_POOL
             else:
-                defense_allowed, defense_reason, defense_position_hint = self._allow_defense_trial(
+                market_ok = self._should_enter_market_watch(stock)
+                trend_ok = self._should_enter_trend_recognition(stock)
+                account_ok, account_reason, account_position_hint = self._should_enter_account_pool(
                     stock,
                     account,
                     market_env,
                 )
-                if defense_allowed:
-                    stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
-                    stock.pool_entry_reason = defense_reason
-                    stock.position_hint = defense_position_hint
-                    account_executable.append(stock)
-                elif self._should_enter_market_watch(stock):
-                    stock.stock_pool_tag = StockPoolTag.MARKET_WATCH
-                    market_watch.append(stock)
-                else:
-                    stock.stock_pool_tag = StockPoolTag.NOT_IN_POOL
+                if market_ok:
+                    why = self._why_market_watch(stock)
+                    market_watch.append(
+                        self._clone_for_pool(
+                            stock,
+                            StockPoolTag.MARKET_WATCH,
+                            why_this_pool=why,
+                            not_other_pools=self._build_not_other_pool_reasons(
+                                StockPoolTag.MARKET_WATCH,
+                                market_ok=market_ok,
+                                trend_ok=trend_ok,
+                                account_ok=account_ok,
+                                account_reason=account_reason,
+                            ),
+                            pool_decision_summary=self._build_pool_summary(
+                                stock,
+                                StockPoolTag.MARKET_WATCH,
+                                why,
+                            ),
+                        )
+                    )
+                if trend_ok:
+                    why = self._why_trend_recognition(stock)
+                    trend_recognition.append(
+                        self._clone_for_pool(
+                            stock,
+                            StockPoolTag.TREND_RECOGNITION,
+                            why_this_pool=why,
+                            not_other_pools=self._build_not_other_pool_reasons(
+                                StockPoolTag.TREND_RECOGNITION,
+                                market_ok=market_ok,
+                                trend_ok=trend_ok,
+                                account_ok=account_ok,
+                                account_reason=account_reason,
+                            ),
+                            pool_decision_summary=self._build_pool_summary(
+                                stock,
+                                StockPoolTag.TREND_RECOGNITION,
+                                why,
+                            ),
+                        )
+                    )
+                if account_ok:
+                    account_clone = self._clone_for_pool(
+                        stock,
+                        StockPoolTag.ACCOUNT_EXECUTABLE,
+                        why_this_pool=account_reason,
+                        not_other_pools=self._build_not_other_pool_reasons(
+                            StockPoolTag.ACCOUNT_EXECUTABLE,
+                            market_ok=market_ok,
+                            trend_ok=trend_ok,
+                            account_ok=account_ok,
+                            account_reason=account_reason,
+                        ),
+                        pool_decision_summary=self._build_pool_summary(
+                            stock,
+                            StockPoolTag.ACCOUNT_EXECUTABLE,
+                            account_reason,
+                        ),
+                    )
+                    account_clone.pool_entry_reason = account_reason
+                    account_clone.position_hint = account_position_hint
+                    account_executable.append(account_clone)
 
         visible_market_watch = market_watch[:20]
-        visible_account_executable = account_executable[:10]
+        visible_trend_recognition = trend_recognition[:10]
+        visible_account_executable = self._select_visible_account_executable(account_executable, limit=10)
 
         return StockPoolsOutput(
             trade_date=trade_date,
             resolved_trade_date=None,
             market_watch_pool=visible_market_watch,   # 最多20只
+            trend_recognition_pool=visible_trend_recognition,
             account_executable_pool=visible_account_executable,  # 最多10只
             holding_process_pool=holding_process,  # 全部持仓
-            total_count=len(visible_market_watch) + len(visible_account_executable) + len(holding_process)
+            total_count=(
+                len(visible_market_watch)
+                + len(visible_trend_recognition)
+                + len(visible_account_executable)
+                + len(holding_process)
+            ),
+        )
+
+    def _select_visible_account_executable(
+        self,
+        account_executable: List[StockOutput],
+        limit: int = 10,
+    ) -> List[StockOutput]:
+        """账户可参与池展示时保留结构多样性，避免单一买法占满前排。"""
+        ranked = sorted(
+            account_executable,
+            key=lambda stock: (
+                float(stock.account_entry_score or 0),
+                float(stock.stock_score or 0),
+                float(stock.change_pct or 0),
+            ),
+            reverse=True,
+        )
+        if len(ranked) <= limit:
+            return ranked
+
+        comfortable_entries = [
+            stock for stock in ranked
+            if stock.next_tradeability_tag in {
+                NextTradeabilityTag.RETRACE_CONFIRM,
+                NextTradeabilityTag.LOW_SUCK,
+            }
+        ]
+        breakthrough_entries = [
+            stock for stock in ranked
+            if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
+        ]
+        if not comfortable_entries or not breakthrough_entries:
+            return ranked[:limit]
+
+        reserved_comfortable = comfortable_entries[: min(3, len(comfortable_entries), max(2, limit // 3))]
+        reserved_breakthrough = breakthrough_entries[: min(3, len(breakthrough_entries), max(2, limit // 3))]
+
+        visible = reserved_comfortable + reserved_breakthrough
+        selected_codes = {stock.ts_code for stock in visible}
+        for stock in ranked:
+            if stock.ts_code in selected_codes:
+                continue
+            visible.append(stock)
+            if len(visible) >= limit:
+                break
+        return sorted(
+            visible[:limit],
+            key=lambda stock: (
+                float(stock.account_entry_score or 0),
+                float(stock.stock_score or 0),
+                float(stock.change_pct or 0),
+            ),
+            reverse=True,
         )
 
     def _apply_holding_context(self, stock: StockOutput, holding: Optional[Dict]) -> StockOutput:
@@ -294,6 +429,8 @@ class StockFilterService:
         stock.can_sell_today = bool(holding.get("can_sell_today")) if holding.get("can_sell_today") is not None else None
         stock.holding_reason = holding.get("holding_reason")
         stock.holding_days = int(holding.get("holding_days") or 0) if holding.get("holding_days") is not None else None
+        stock.quote_time = holding.get("quote_time") or stock.quote_time
+        stock.data_source = holding.get("data_source") or stock.data_source
         return stock
 
     def attach_sell_analysis(
@@ -326,6 +463,25 @@ class StockFilterService:
             stock.sell_comment = point.sell_comment
 
         return stock_pools
+
+    def _clone_for_pool(
+        self,
+        stock: StockOutput,
+        pool_tag: StockPoolTag,
+        why_this_pool: str,
+        not_other_pools: List[str],
+        pool_decision_summary: str,
+    ) -> StockOutput:
+        """复制股票对象，并挂上池内说明。"""
+        return stock.model_copy(
+            update={
+                "stock_pool_tag": pool_tag,
+                "why_this_pool": why_this_pool,
+                "not_other_pools": not_other_pools,
+                "pool_decision_summary": pool_decision_summary,
+            },
+            deep=True,
+        )
 
     def _is_account_executable(self, stock: StockOutput, account: Optional[AccountInput]) -> bool:
         """校验账户是否具备执行条件。"""
@@ -398,11 +554,143 @@ class StockFilterService:
 
     def _should_enter_market_watch(self, stock: StockOutput) -> bool:
         """观察池只保留值得继续跟踪的候选。"""
-        if stock.candidate_bucket_tag in {"强势确认", "趋势回踩", "异动预备", "持仓映射"}:
+        if stock.sector_profile_tag == SectorProfileTag.NON_MAINSTREAM:
+            return False
+        if stock.stock_role_tag in {StockRoleTag.LEADER, StockRoleTag.FRONT} and (
+            stock.day_strength_tag in {DayStrengthTag.LIMIT_STRONG, DayStrengthTag.TREND_STRONG}
+        ):
             return True
-        if stock.stock_score >= self.WATCH_POOL_MIN_SCORE and stock.stock_strength_tag != StockStrengthTag.WEAK:
+        if stock.stock_role_tag == StockRoleTag.MID_CAPTAIN and stock.stock_score >= 88:
             return True
         return False
+
+    def _should_enter_trend_recognition(self, stock: StockOutput) -> bool:
+        """趋势辨识度观察池：不看谁最炸，看谁更耐打。"""
+        if stock.sector_profile_tag == SectorProfileTag.NON_MAINSTREAM:
+            return False
+        if stock.stock_role_tag not in {
+            StockRoleTag.LEADER,
+            StockRoleTag.FRONT,
+            StockRoleTag.MID_CAPTAIN,
+        }:
+            return False
+        if stock.structure_state_tag not in {
+            StructureStateTag.START,
+            StructureStateTag.DIVERGENCE,
+            StructureStateTag.REPAIR,
+        }:
+            return False
+        if stock.next_tradeability_tag in {
+            NextTradeabilityTag.CHASE_ONLY,
+            NextTradeabilityTag.NO_GOOD_ENTRY,
+        }:
+            return False
+        return stock.stock_continuity_tag != StockContinuityTag.CAUTION
+
+    def _should_enter_account_pool(
+        self,
+        stock: StockOutput,
+        account: Optional[AccountInput],
+        market_env,
+    ) -> tuple[bool, Optional[str], Optional[str]]:
+        """判断是否进入账户可参与池，并返回原因与仓位提示。"""
+        if stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE:
+            if stock.next_tradeability_tag in {
+                NextTradeabilityTag.CHASE_ONLY,
+                NextTradeabilityTag.NO_GOOD_ENTRY,
+            }:
+                return False, "只能追高或缺少舒服买点，不进账户可参与池。", None
+            if self._is_account_executable(stock, account):
+                return True, self._tradable_account_entry_reason(stock), self._tradable_position_hint(stock)
+            return False, "账户条件未通过，先观察不直接执行。", None
+
+        if stock.stock_tradeability_tag == StockTradeabilityTag.CAUTION:
+            if stock.next_tradeability_tag in {
+                NextTradeabilityTag.CHASE_ONLY,
+                NextTradeabilityTag.NO_GOOD_ENTRY,
+            }:
+                return False, "只能追高或缺少舒服买点，不进账户可参与池。", None
+            if stock.next_tradeability_tag not in {
+                NextTradeabilityTag.RETRACE_CONFIRM,
+                NextTradeabilityTag.LOW_SUCK,
+            }:
+                return False, "交易性仍偏谨慎，且没有明确回踩/低吸位，先观察。", None
+            if stock.sector_profile_tag not in {
+                SectorProfileTag.A_MAINLINE,
+                SectorProfileTag.B_SUB_MAINLINE,
+            }:
+                return False, "回踩位虽在，但不属主线/次主线，不进账户可参与池。", None
+            entry_ok, entry_reason, position_hint = self._has_comfortable_account_entry(stock)
+            if not entry_ok:
+                return False, entry_reason, None
+            if self._is_account_executable(stock, account):
+                return True, entry_reason, position_hint
+            return False, "账户条件未通过，先观察不直接执行。", None
+
+        defense_allowed, defense_reason, defense_position_hint = self._allow_defense_trial(
+            stock,
+            account,
+            market_env,
+        )
+        if defense_allowed:
+            return True, defense_reason, defense_position_hint
+        return False, "交易性或账户条件不足，暂不进入账户可参与池。", None
+
+    def _tradable_account_entry_reason(self, stock: StockOutput) -> str:
+        if stock.next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
+            return "交易性为可交易，且存在回踩确认位，可纳入账户可参与池。"
+        if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK:
+            return "交易性为可交易，且存在低吸预备位，可纳入账户可参与池。"
+        if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            return "交易性为可交易，且存在突破确认机会，可纳入账户可参与池。"
+        return "交易性为可交易，可纳入账户可参与池。"
+
+    def _tradable_position_hint(self, stock: StockOutput) -> str:
+        if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            return "只做确认突破，不做盘中盲追"
+        if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK:
+            return "优先轻仓低吸，不追单根拉升"
+        if stock.next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
+            return "优先等回踩确认后执行"
+        return "按计划仓位执行"
+
+    def _has_comfortable_account_entry(self, stock: StockOutput) -> tuple[bool, str, Optional[str]]:
+        """账户可参与池必须对应相对舒服、可执行的买入位置。"""
+        if stock.next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
+            return (
+                True,
+                "趋势回踩确认位较舒服，可纳入账户可参与池。",
+                "优先等回踩确认后执行",
+            )
+        if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK:
+            return (
+                True,
+                "存在低吸预备位，可纳入账户可参与池。",
+                "优先轻仓低吸，不追单根拉升",
+            )
+        if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            if (
+                stock.structure_state_tag in {StructureStateTag.DIVERGENCE, StructureStateTag.REPAIR}
+                and float(stock.turnover_rate or 0) < 15
+                and not self._has_upper_shadow_risk(stock)
+            ):
+                return (
+                    True,
+                    "分歧/修复段仍有确认承接位，可纳入账户可参与池。",
+                    "优先等回踩确认或分歧转强后执行",
+                )
+            if float(stock.change_pct or 0) > 6.5:
+                return False, "需要突破确认，但当日涨幅已偏大，不算舒服买点。", None
+            if float(stock.turnover_rate or 0) >= 15:
+                return False, "需要突破确认，但换手偏高，追价舒适度不足。", None
+            if self._has_upper_shadow_risk(stock):
+                return False, "盘中上影偏长，突破承接一般，不算舒服买点。", None
+            return (
+                True,
+                "突破位距离尚可，且承接没有明显走坏，可纳入账户可参与池。",
+                "只做放量确认突破，不做盲追",
+            )
+        return False, "当前缺少清晰、舒服的买入点，不进账户可参与池。", None
 
     def _build_sector_map(self, sector_scan) -> Dict:
         """构建板块映射（包含全部分类，确保个股都能找到所属板块）"""
@@ -467,6 +755,37 @@ class StockFilterService:
         comment = self._generate_stock_comment(
             strength_tag, continuity_tag, tradeability_tag, sector, stock.candidate_source_tag, bucket_tag
         )
+        sector_profile_tag = self._determine_sector_profile_tag(sector)
+        stock_role_tag = self._determine_stock_role_tag(
+            stock,
+            sector,
+            core_tag,
+            strength_score,
+        )
+        day_strength_tag = self._determine_day_strength_tag(stock, strength_tag)
+        structure_state_tag = self._determine_structure_state_tag(stock, bucket_tag)
+        next_tradeability_tag = self._determine_next_tradeability_tag(
+            stock,
+            bucket_tag,
+            tradeability_tag,
+        )
+        account_entry_score = self._calculate_account_entry_score(
+            stock,
+            strength_tag,
+            continuity_tag,
+            core_tag,
+            tradeability_tag,
+            sector_profile_tag,
+            structure_state_tag,
+            next_tradeability_tag,
+        )
+        pool_decision_summary = self._build_stock_decision_summary(
+            sector_profile_tag,
+            stock_role_tag,
+            day_strength_tag,
+            structure_state_tag,
+            next_tradeability_tag,
+        )
 
         return StockOutput(
             ts_code=stock.ts_code,
@@ -481,15 +800,26 @@ class StockFilterService:
             vol_ratio=stock.vol_ratio,
             turnover_rate=stock.turnover_rate,
             stock_score=strength_score,
+            account_entry_score=account_entry_score,
             candidate_source_tag=stock.candidate_source_tag,
             candidate_bucket_tag=bucket_tag,
+            volume=stock.volume,
+            avg_price=stock.avg_price,
+            quote_time=stock.quote_time,
+            data_source=stock.data_source,
             stock_strength_tag=strength_tag,
             stock_continuity_tag=continuity_tag,
             stock_tradeability_tag=tradeability_tag,
             stock_core_tag=core_tag,
             stock_pool_tag=pool_tag,
+            sector_profile_tag=sector_profile_tag,
+            stock_role_tag=stock_role_tag,
+            day_strength_tag=day_strength_tag,
+            structure_state_tag=structure_state_tag,
+            next_tradeability_tag=next_tradeability_tag,
             stock_falsification_cond=falsification,
-            stock_comment=comment
+            stock_comment=comment,
+            pool_decision_summary=pool_decision_summary,
         )
 
     def _calculate_strength_score(self, stock: StockInput, sector) -> float:
@@ -569,6 +899,76 @@ class StockFilterService:
                 score += 5
 
         return max(0, min(100, score))
+
+    def _calculate_account_entry_score(
+        self,
+        stock: StockInput,
+        strength_tag: StockStrengthTag,
+        continuity_tag: StockContinuityTag,
+        core_tag: StockCoreTag,
+        tradeability_tag: StockTradeabilityTag,
+        sector_profile_tag: SectorProfileTag,
+        structure_state_tag: StructureStateTag,
+        next_tradeability_tag: NextTradeabilityTag,
+    ) -> float:
+        """账户可参与池排序分，更强调买点舒适度。"""
+        score = {
+            NextTradeabilityTag.RETRACE_CONFIRM: 89.0,
+            NextTradeabilityTag.LOW_SUCK: 84.0,
+            NextTradeabilityTag.BREAKTHROUGH: 85.0,
+            NextTradeabilityTag.CHASE_ONLY: 16.0,
+            NextTradeabilityTag.NO_GOOD_ENTRY: 10.0,
+        }.get(next_tradeability_tag, 10.0)
+
+        if tradeability_tag == StockTradeabilityTag.TRADABLE:
+            score += 5
+        elif tradeability_tag == StockTradeabilityTag.CAUTION:
+            score -= 2
+
+        if sector_profile_tag == SectorProfileTag.A_MAINLINE:
+            score += 4
+        elif sector_profile_tag == SectorProfileTag.B_SUB_MAINLINE:
+            score += 2
+
+        if core_tag == StockCoreTag.CORE:
+            score += 4
+        elif core_tag == StockCoreTag.FOLLOW:
+            score += 1
+
+        if strength_tag == StockStrengthTag.STRONG:
+            score += 2
+        elif strength_tag == StockStrengthTag.WEAK:
+            score -= 8
+
+        if continuity_tag == StockContinuityTag.SUSTAINABLE:
+            score += 3
+        elif continuity_tag == StockContinuityTag.CAUTION:
+            score -= 6
+
+        if structure_state_tag in {StructureStateTag.DIVERGENCE, StructureStateTag.REPAIR}:
+            score += 4
+        elif structure_state_tag == StructureStateTag.ACCELERATE:
+            score -= 4
+
+        if self._has_upper_shadow_risk(stock):
+            score -= 8
+
+        change_pct = float(stock.change_pct or 0)
+        turnover_rate = float(stock.turnover_rate or 0)
+        if next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            if 4.5 <= change_pct <= 6.8:
+                score += 4
+            if change_pct > 6.5:
+                score -= min((change_pct - 6.5) * 4, 12)
+            if turnover_rate >= 15:
+                score -= 6
+        elif next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
+            if 1 <= change_pct <= 5.5:
+                score += 2
+        elif next_tradeability_tag == NextTradeabilityTag.LOW_SUCK and (stock.vol_ratio or 0) >= 2:
+            score += 2
+
+        return round(max(score, 0.0), 1)
 
     def _calculate_close_quality(self, stock: StockInput) -> float:
         """计算收盘位置，越接近最高越强。"""
@@ -672,6 +1072,177 @@ class StockFilterService:
             return StockTradeabilityTag.CAUTION
 
         return StockTradeabilityTag.CAUTION
+
+    def _determine_sector_profile_tag(self, sector) -> SectorProfileTag:
+        """板块属性画像。"""
+        if not sector:
+            return SectorProfileTag.NON_MAINSTREAM
+        if sector.sector_profile_tag if hasattr(sector, "sector_profile_tag") else None:
+            if str(sector.sector_profile_tag).startswith("A"):
+                return SectorProfileTag.A_MAINLINE
+            if str(sector.sector_profile_tag).startswith("B"):
+                return SectorProfileTag.B_SUB_MAINLINE
+        if sector.sector_mainline_tag == SectorMainlineTag.MAINLINE:
+            return SectorProfileTag.A_MAINLINE
+        if sector.sector_mainline_tag == SectorMainlineTag.SUB_MAINLINE:
+            return SectorProfileTag.B_SUB_MAINLINE
+        return SectorProfileTag.NON_MAINSTREAM
+
+    def _determine_stock_role_tag(
+        self,
+        stock: StockInput,
+        sector,
+        core_tag: StockCoreTag,
+        strength_score: float,
+    ) -> StockRoleTag:
+        """个股地位画像。"""
+        if core_tag == StockCoreTag.TRASH:
+            return StockRoleTag.TRASH
+        if core_tag == StockCoreTag.FOLLOW:
+            return StockRoleTag.FOLLOW
+        source = stock.candidate_source_tag or ""
+        if "涨停入选" in source and stock.change_pct >= 9:
+            return StockRoleTag.LEADER
+        if stock.amount >= 250000 and strength_score >= 70:
+            return StockRoleTag.MID_CAPTAIN
+        if stock.change_pct >= 5:
+            return StockRoleTag.FRONT
+        return StockRoleTag.FOLLOW
+
+    def _determine_day_strength_tag(
+        self,
+        stock: StockInput,
+        strength_tag: StockStrengthTag,
+    ) -> DayStrengthTag:
+        """当日强度画像。"""
+        if stock.change_pct >= 9:
+            return DayStrengthTag.LIMIT_STRONG
+        if (
+            strength_tag == StockStrengthTag.STRONG
+            and stock.change_pct >= 5
+            and self._calculate_close_quality(stock) >= 0.65
+            and not self._has_upper_shadow_risk(stock)
+        ):
+            return DayStrengthTag.TREND_STRONG
+        if (
+            stock.close > stock.open
+            and stock.close > stock.pre_close
+            and self._calculate_close_quality(stock) >= 0.55
+        ):
+            return DayStrengthTag.REBOUND_STRONG
+        if self._has_upper_shadow_risk(stock):
+            return DayStrengthTag.SPIKE_FADE
+        return DayStrengthTag.FOLLOW_RISE
+
+    def _determine_structure_state_tag(
+        self,
+        stock: StockInput,
+        bucket_tag: str,
+    ) -> StructureStateTag:
+        """结构状态画像。"""
+        stage = str(stock.stage_tag or "").strip()
+        if "启动" in stage:
+            return StructureStateTag.START
+        if "主升" in stage or "加速" in stage:
+            return StructureStateTag.ACCELERATE
+        if "回调" in stage or "分歧" in stage:
+            return StructureStateTag.DIVERGENCE
+        if "修复" in stage:
+            return StructureStateTag.REPAIR
+        if "高位" in stage:
+            return StructureStateTag.LATE_STAGE
+        if bucket_tag == "趋势回踩":
+            return StructureStateTag.REPAIR
+        if bucket_tag == "强势确认":
+            return StructureStateTag.ACCELERATE
+        if bucket_tag == "异动预备":
+            return StructureStateTag.START
+        return StructureStateTag.DIVERGENCE
+
+    def _determine_next_tradeability_tag(
+        self,
+        stock: StockInput,
+        bucket_tag: str,
+        tradeability_tag: StockTradeabilityTag,
+    ) -> NextTradeabilityTag:
+        """次日可交易性画像。"""
+        if tradeability_tag == StockTradeabilityTag.NOT_RECOMMENDED:
+            return NextTradeabilityTag.NO_GOOD_ENTRY
+        if stock.change_pct >= 9 or (
+            stock.change_pct >= 7 and stock.turnover_rate >= 18
+        ):
+            return NextTradeabilityTag.CHASE_ONLY
+        if bucket_tag == "趋势回踩":
+            return NextTradeabilityTag.RETRACE_CONFIRM
+        if bucket_tag == "强势确认":
+            return NextTradeabilityTag.BREAKTHROUGH
+        if bucket_tag == "异动预备":
+            return NextTradeabilityTag.LOW_SUCK
+        return NextTradeabilityTag.NO_GOOD_ENTRY
+
+    def _build_stock_decision_summary(
+        self,
+        sector_profile_tag: SectorProfileTag,
+        stock_role_tag: StockRoleTag,
+        day_strength_tag: DayStrengthTag,
+        structure_state_tag: StructureStateTag,
+        next_tradeability_tag: NextTradeabilityTag,
+    ) -> str:
+        """组合五项画像摘要。"""
+        return " / ".join(
+            [
+                sector_profile_tag.value,
+                stock_role_tag.value,
+                day_strength_tag.value,
+                structure_state_tag.value,
+                next_tradeability_tag.value,
+            ]
+        )
+
+    def _why_market_watch(self, stock: StockOutput) -> str:
+        return (
+            f"{stock.sector_profile_tag.value}里的{stock.stock_role_tag.value}，"
+            f"当日属于{stock.day_strength_tag.value}，更能代表今天最强偏好。"
+        )
+
+    def _why_trend_recognition(self, stock: StockOutput) -> str:
+        return (
+            f"{stock.stock_role_tag.value}结构更清晰，当前处于{stock.structure_state_tag.value}，"
+            f"且次日具备{stock.next_tradeability_tag.value}。"
+        )
+
+    def _build_not_other_pool_reasons(
+        self,
+        target_pool: StockPoolTag,
+        *,
+        market_ok: bool,
+        trend_ok: bool,
+        account_ok: bool,
+        account_reason: Optional[str] = None,
+    ) -> List[str]:
+        """生成未进入其他池的原因说明。"""
+        reasons: List[str] = []
+        if target_pool != StockPoolTag.MARKET_WATCH and not market_ok:
+            reasons.append("未进市场最强观察池：当天强度或辨识度还不够最强。")
+        elif target_pool == StockPoolTag.ACCOUNT_EXECUTABLE and market_ok:
+            reasons.append("若同时在观察池出现，也以执行清单优先。")
+
+        if target_pool != StockPoolTag.TREND_RECOGNITION and not trend_ok:
+            reasons.append("未进趋势辨识度观察池：结构或连续性还不足以长期跟踪。")
+
+        if target_pool != StockPoolTag.ACCOUNT_EXECUTABLE and not account_ok:
+            reasons.append(account_reason or "未进账户可参与池：账户、节奏或买点条件未同时满足。")
+        elif target_pool != StockPoolTag.ACCOUNT_EXECUTABLE and account_ok:
+            reasons.append("虽具备执行条件，但当前池更强调观察视角。")
+        return reasons
+
+    def _build_pool_summary(
+        self,
+        stock: StockOutput,
+        pool_tag: StockPoolTag,
+        why_this_pool: str,
+    ) -> str:
+        return f"{stock.stock_name}归入{pool_tag.value}：{why_this_pool}"
 
     def _determine_candidate_bucket(
         self,

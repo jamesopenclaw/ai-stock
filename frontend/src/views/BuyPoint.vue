@@ -24,18 +24,18 @@
             </div>
           </div>
 
-          <div class="overview-stats">
-            <div class="stat-card stat-buy">
-              <span class="stat-label">可买</span>
-              <strong class="stat-value">{{ buyData.available_buy_points?.length || 0 }}</strong>
-              <span class="stat-tip">可直接跟盘</span>
-            </div>
-            <div class="stat-card stat-watch">
-              <span class="stat-label">观察</span>
-              <strong class="stat-value">{{ buyData.observe_buy_points?.length || 0 }}</strong>
-              <span class="stat-tip">等确认再动</span>
-            </div>
-            <div class="stat-card stat-skip">
+            <div class="overview-stats">
+              <div class="stat-card stat-buy">
+              <span class="stat-label">主执行</span>
+              <strong class="stat-value">{{ primaryAvailablePoints.length }}</strong>
+              <span class="stat-tip">今天优先盯这几只</span>
+              </div>
+              <div class="stat-card stat-watch">
+              <span class="stat-label">备选可买</span>
+              <strong class="stat-value">{{ backupAvailablePoints.length }}</strong>
+              <span class="stat-tip">有空位再看</span>
+              </div>
+              <div class="stat-card stat-skip">
               <span class="stat-label">不买</span>
               <strong class="stat-value">{{ buyData.not_buy_points?.length || 0 }}</strong>
               <span class="stat-tip">今天先放弃</span>
@@ -52,17 +52,27 @@
         <el-tabs v-model="activeTab">
           <el-tab-pane name="available">
             <template #label>
-              <span>可买 <em class="tab-count">{{ buyData.available_buy_points?.length || 0 }}</em></span>
+              <span>可买 <em class="tab-count">{{ primaryAvailablePoints.length }}/{{ buyData.available_buy_points?.length || 0 }}</em></span>
             </template>
             <el-empty
               v-if="!buyData.available_buy_points?.length"
               :description="buyData.market_env_tag === '防守' ? '当前是防守环境，只有极少数试错票会出现在这里' : '暂无可买标的'"
             />
-            <div v-else class="signal-grid">
-              <article
-                v-for="point in buyData.available_buy_points"
-                :key="point.ts_code"
-                class="signal-card signal-card-buy"
+            <template v-else>
+              <div class="available-group-head">
+                <div>
+                  <div class="available-group-title">主执行名单</div>
+                  <div class="available-group-desc">
+                    按市场环境、板块分散和买法拥挤度压缩后，默认只保留最该下手的 {{ primaryAvailablePoints.length }} 只。
+                  </div>
+                </div>
+                <div class="available-group-meta">总可买 {{ buyData.available_buy_points?.length || 0 }} 只</div>
+              </div>
+	            <div class="signal-grid">
+	              <article
+	                v-for="point in primaryAvailablePoints"
+	                :key="point.ts_code"
+	                class="signal-card signal-card-buy"
               >
                 <div class="signal-card-header">
                   <div>
@@ -76,10 +86,11 @@
                   </div>
                 </div>
 
-                <div class="signal-meta">
-                  <span>{{ point.candidate_bucket_tag || '未分层' }}</span>
-                  <span>{{ point.candidate_source_tag || '无来源标记' }}</span>
-                </div>
+	                <div class="signal-meta">
+	                  <span>{{ poolTagLabel(point.stock_pool_tag) }}</span>
+	                  <span>{{ point.candidate_bucket_tag || '未分层' }}</span>
+	                  <span>{{ point.candidate_source_tag || '无来源标记' }}</span>
+	                </div>
 
                 <div class="signal-intent">
                   {{ primaryActionLine(point, buyData.market_env_tag) }}
@@ -91,6 +102,9 @@
                     <strong class="quote-price">{{ formatPrice(point.buy_current_price) }}</strong>
                     <span :class="['quote-change', priceClass(point.buy_current_change_pct)]">
                       {{ formatSignedPct(point.buy_current_change_pct) }}
+                    </span>
+                    <span class="quote-source" :class="{ 'quote-source-live': isRealtimeSource(point.buy_data_source) }">
+                      {{ quoteMetaLine(point.buy_data_source, point.buy_quote_time, displayDate) }}
                     </span>
                   </div>
                   <div class="quote-side">
@@ -105,75 +119,192 @@
                   </div>
                 </div>
 
-                <div class="price-strip">
-                  <div class="metric-card">
-                    <span class="metric-label">触发价</span>
-                    <strong class="metric-value">{{ formatPrice(point.buy_trigger_price) }}</strong>
-                  </div>
+	                <div class="price-strip">
+	                  <div class="metric-card">
+	                    <span class="metric-label">触发价</span>
+	                    <strong class="metric-value">{{ formatPrice(point.buy_trigger_price) }}</strong>
+	                  </div>
                   <div class="metric-card">
                     <span class="metric-label">失效价</span>
                     <strong class="metric-value">{{ formatPrice(point.buy_invalid_price) }}</strong>
                   </div>
                   <div class="metric-card">
                     <span class="metric-label">量比门槛</span>
-                    <strong class="metric-value">{{ formatRatio(point.buy_required_volume_ratio) }}</strong>
-                  </div>
-                </div>
+	                    <strong class="metric-value">{{ formatRatio(point.buy_required_volume_ratio) }}</strong>
+	                  </div>
+	                </div>
 
-                <div class="condition-section">
-                  <div class="section-kicker">执行清单</div>
-                  <div class="condition-panel-grid">
-                    <section class="condition-panel condition-panel-trigger">
-                      <div class="panel-head">
-                        <span class="panel-step">1</span>
-                        <div>
-                          <div class="panel-title">触发</div>
-                          <div class="panel-subtitle">先到这个位置再开始盯盘</div>
-                        </div>
-                      </div>
-                      <div class="panel-body">
-                        <div class="condition-title">{{ point.buy_trigger_cond }}</div>
-                      </div>
-                    </section>
+	                <div class="condition-section">
+	                  <div class="section-kicker">执行清单</div>
+	                  <div
+	                    v-if="!isCardExpanded(cardKey(point, 'available'))"
+	                    class="condition-summary-grid"
+	                  >
+	                    <section class="condition-summary-card condition-summary-trigger">
+	                      <div class="summary-card-head">
+	                        <span class="panel-step">1</span>
+	                        <div class="summary-card-copy">
+	                          <div class="panel-title">触发</div>
+	                          <div class="panel-subtitle">先到这个位置再开始盯盘</div>
+	                        </div>
+	                      </div>
+	                      <div class="summary-card-body">{{ point.buy_trigger_cond }}</div>
+	                    </section>
 
-                    <section class="condition-panel condition-panel-confirm">
-                      <div class="panel-head">
-                        <span class="panel-step">2</span>
-                        <div>
-                          <div class="panel-title">确认</div>
-                          <div class="panel-subtitle">下面条件没到齐，不算信号成立</div>
-                        </div>
-                      </div>
-                      <div class="panel-body">
-                        <ul class="condition-bullets">
-                          <li v-for="item in splitCond(point.buy_confirm_cond)" :key="item">{{ item }}</li>
-                        </ul>
-                      </div>
-                    </section>
+	                    <section class="condition-summary-card condition-summary-confirm">
+	                      <div class="summary-card-head">
+	                        <span class="panel-step">2</span>
+	                        <div class="summary-card-copy">
+	                          <div class="panel-title">确认</div>
+	                          <div class="panel-subtitle">条件没到齐，不算信号成立</div>
+	                        </div>
+	                        <span class="summary-count">{{ splitCond(point.buy_confirm_cond).length }}条</span>
+	                      </div>
+	                      <div class="summary-card-body">{{ summarizeCond(point.buy_confirm_cond) }}</div>
+	                    </section>
 
-                    <section class="condition-panel condition-panel-invalid">
-                      <div class="panel-head">
-                        <span class="panel-step">3</span>
-                        <div>
-                          <div class="panel-title">失效</div>
-                          <div class="panel-subtitle">出现下面任一条，就不要继续做</div>
-                        </div>
-                      </div>
-                      <div class="panel-body">
-                        <ul class="condition-bullets condition-bullets-risk">
-                          <li v-for="item in splitCond(point.buy_invalid_cond)" :key="item">{{ item }}</li>
-                        </ul>
-                      </div>
-                    </section>
-                  </div>
-                </div>
+	                    <section class="condition-summary-card condition-summary-invalid">
+	                      <div class="summary-card-head">
+	                        <span class="panel-step">3</span>
+	                        <div class="summary-card-copy">
+	                          <div class="panel-title">失效</div>
+	                          <div class="panel-subtitle">先记住最先认错的位置</div>
+	                        </div>
+	                        <span class="summary-count">{{ splitCond(point.buy_invalid_cond).length }}条</span>
+	                      </div>
+	                      <div class="summary-card-body">{{ summarizeCond(point.buy_invalid_cond) }}</div>
+	                    </section>
+	                  </div>
+
+	                  <div class="condition-expand-bar">
+	                    <el-button
+	                      type="primary"
+	                      link
+	                      size="small"
+	                      @click="toggleCardDetails(cardKey(point, 'available'))"
+	                    >
+	                      {{ isCardExpanded(cardKey(point, 'available')) ? '收起执行细节' : '展开执行细节' }}
+	                    </el-button>
+	                  </div>
+
+	                  <div
+	                    v-if="isCardExpanded(cardKey(point, 'available'))"
+	                    class="condition-panel-grid"
+	                  >
+	                    <section class="condition-panel condition-panel-trigger">
+	                      <div class="panel-head">
+	                        <span class="panel-step">1</span>
+	                        <div>
+	                          <div class="panel-title">触发</div>
+	                          <div class="panel-subtitle">先到这个位置再开始盯盘</div>
+	                        </div>
+	                      </div>
+	                      <div class="panel-body">
+	                        <div class="condition-title">{{ point.buy_trigger_cond }}</div>
+	                      </div>
+	                    </section>
+
+	                    <section class="condition-panel condition-panel-confirm">
+	                      <div class="panel-head">
+	                        <span class="panel-step">2</span>
+	                        <div>
+	                          <div class="panel-title">确认</div>
+	                          <div class="panel-subtitle">下面条件没到齐，不算信号成立</div>
+	                        </div>
+	                      </div>
+	                      <div class="panel-body">
+	                        <ul class="condition-bullets">
+	                          <li v-for="item in splitCond(point.buy_confirm_cond)" :key="item">{{ item }}</li>
+	                        </ul>
+	                      </div>
+	                    </section>
+
+	                    <section class="condition-panel condition-panel-invalid">
+	                      <div class="panel-head">
+	                        <span class="panel-step">3</span>
+	                        <div>
+	                          <div class="panel-title">失效</div>
+	                          <div class="panel-subtitle">出现下面任一条，就不要继续做</div>
+	                        </div>
+	                      </div>
+	                      <div class="panel-body">
+	                        <ul class="condition-bullets condition-bullets-risk">
+	                          <li v-for="item in splitCond(point.buy_invalid_cond)" :key="item">{{ item }}</li>
+	                        </ul>
+	                      </div>
+	                    </section>
+	                  </div>
+	                </div>
 
                 <div class="signal-footer">
                   <span>{{ point.buy_comment || '-' }}</span>
-                  <span v-if="point.buy_requires_sector_resonance" class="footer-flag">需要板块共振</span>
+                  <div class="footer-actions">
+                    <span v-if="point.buy_requires_sector_resonance" class="footer-flag">需要板块共振</span>
+                    <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                  </div>
                 </div>
               </article>
             </div>
+              <div v-if="backupAvailablePoints.length" class="available-group-head available-group-head-secondary">
+                <div>
+                  <div class="available-group-title">备选可买</div>
+                  <div class="available-group-desc">这些票仍符合可买条件，但优先级低于主执行名单，不必同时盯满。</div>
+                </div>
+                <div class="available-group-meta">{{ backupAvailablePoints.length }} 只</div>
+              </div>
+              <div v-if="backupAvailablePoints.length" class="signal-grid signal-grid-secondary">
+                <article
+                  v-for="point in backupAvailablePoints"
+                  :key="`backup-${point.ts_code}`"
+                  class="signal-card signal-card-watch"
+                >
+                  <div class="signal-card-header">
+                    <div>
+                      <div class="signal-stock">{{ point.stock_name }}</div>
+                      <div class="signal-code">{{ point.ts_code }}</div>
+                    </div>
+                    <div class="signal-badges">
+                      <el-tag size="small" type="warning">备选</el-tag>
+                      <el-tag size="small" type="primary">{{ point.buy_point_type }}</el-tag>
+                    </div>
+                  </div>
+
+                  <div class="signal-meta">
+                    <span>{{ poolTagLabel(point.stock_pool_tag) }}</span>
+                    <span>{{ point.candidate_bucket_tag || '未分层' }}</span>
+                    <span>{{ point.candidate_source_tag || '无来源标记' }}</span>
+                  </div>
+
+                  <div class="signal-intent signal-intent-watch">
+                    {{ primaryActionLine(point, buyData.market_env_tag) }}
+                  </div>
+
+                  <div class="quote-strip quote-strip-watch">
+                    <div class="quote-main">
+                      <span class="quote-label">最新价</span>
+                      <strong class="quote-price">{{ formatPrice(point.buy_current_price) }}</strong>
+                      <span :class="['quote-change', priceClass(point.buy_current_change_pct)]">
+                        {{ formatSignedPct(point.buy_current_change_pct) }}
+                      </span>
+                    </div>
+                    <div class="quote-side">
+                      <span class="quote-pair">
+                        距触发
+                        <strong :class="priceClass(point.buy_trigger_gap_pct)">{{ formatGap(point.buy_trigger_gap_pct) }}</strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="signal-footer">
+                    <span>{{ point.buy_comment || '优先级次于主执行名单。' }}</span>
+                    <div class="footer-actions">
+                      <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">SOP 详情</el-button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </template>
           </el-tab-pane>
 
           <el-tab-pane name="observe">
@@ -198,10 +329,11 @@
                   </div>
                 </div>
 
-                <div class="signal-meta">
-                  <span>{{ point.candidate_bucket_tag || '未分层' }}</span>
-                  <span>{{ point.candidate_source_tag || '无来源标记' }}</span>
-                </div>
+	                <div class="signal-meta">
+	                  <span>{{ poolTagLabel(point.stock_pool_tag) }}</span>
+	                  <span>{{ point.candidate_bucket_tag || '未分层' }}</span>
+	                  <span>{{ point.candidate_source_tag || '无来源标记' }}</span>
+	                </div>
 
                 <div class="signal-intent signal-intent-watch">
                   {{ observeActionLine(point, buyData.market_env_tag) }}
@@ -214,6 +346,9 @@
                     <span :class="['quote-change', priceClass(point.buy_current_change_pct)]">
                       {{ formatSignedPct(point.buy_current_change_pct) }}
                     </span>
+                    <span class="quote-source" :class="{ 'quote-source-live': isRealtimeSource(point.buy_data_source) }">
+                      {{ quoteMetaLine(point.buy_data_source, point.buy_quote_time, displayDate) }}
+                    </span>
                   </div>
                   <div class="quote-side">
                     <span class="quote-pair">
@@ -223,42 +358,88 @@
                   </div>
                 </div>
 
-                <div class="condition-section">
-                  <div class="section-kicker">观察重点</div>
-                  <div class="condition-panel-grid condition-panel-grid-watch">
-                    <section class="condition-panel condition-panel-trigger">
-                      <div class="panel-head">
-                        <span class="panel-step">1</span>
-                        <div>
-                          <div class="panel-title">先看</div>
-                          <div class="panel-subtitle">先等这个动作出现</div>
-                        </div>
-                      </div>
-                      <div class="panel-body">
-                        <div class="condition-title">{{ point.buy_trigger_cond }}</div>
-                      </div>
-                    </section>
+	                  <div class="condition-section">
+	                    <div class="section-kicker">观察重点</div>
+	                  <div
+	                    v-if="!isCardExpanded(cardKey(point, 'observe'))"
+	                    class="condition-summary-grid condition-summary-grid-watch"
+	                  >
+	                    <section class="condition-summary-card condition-summary-trigger">
+	                      <div class="summary-card-head">
+	                        <span class="panel-step">1</span>
+	                        <div class="summary-card-copy">
+	                          <div class="panel-title">先看</div>
+	                          <div class="panel-subtitle">先等这个动作出现</div>
+	                        </div>
+	                      </div>
+	                      <div class="summary-card-body">{{ point.buy_trigger_cond }}</div>
+	                    </section>
 
-                    <section class="condition-panel condition-panel-confirm">
-                      <div class="panel-head">
-                        <span class="panel-step">2</span>
-                        <div>
-                          <div class="panel-title">卡点</div>
-                          <div class="panel-subtitle">条件没到齐就继续观察</div>
-                        </div>
-                      </div>
-                      <div class="panel-body">
-                        <ul class="condition-bullets">
-                          <li v-for="item in splitCond(point.buy_confirm_cond)" :key="item">{{ item }}</li>
-                        </ul>
-                      </div>
-                    </section>
-                  </div>
-                </div>
+	                    <section class="condition-summary-card condition-summary-confirm">
+	                      <div class="summary-card-head">
+	                        <span class="panel-step">2</span>
+	                        <div class="summary-card-copy">
+	                          <div class="panel-title">卡点</div>
+	                          <div class="panel-subtitle">条件没到齐就继续观察</div>
+	                        </div>
+	                        <span class="summary-count">{{ splitCond(point.buy_confirm_cond).length }}条</span>
+	                      </div>
+	                      <div class="summary-card-body">{{ summarizeCond(point.buy_confirm_cond) }}</div>
+	                    </section>
+	                  </div>
+
+	                  <div class="condition-expand-bar">
+	                    <el-button
+	                      type="primary"
+	                      link
+	                      size="small"
+	                      @click="toggleCardDetails(cardKey(point, 'observe'))"
+	                    >
+	                      {{ isCardExpanded(cardKey(point, 'observe')) ? '收起观察细节' : '展开观察细节' }}
+	                    </el-button>
+	                  </div>
+
+	                  <div
+	                    v-if="isCardExpanded(cardKey(point, 'observe'))"
+	                    class="condition-panel-grid condition-panel-grid-watch"
+	                  >
+	                    <section class="condition-panel condition-panel-trigger">
+	                      <div class="panel-head">
+	                        <span class="panel-step">1</span>
+	                        <div>
+	                          <div class="panel-title">先看</div>
+	                          <div class="panel-subtitle">先等这个动作出现</div>
+	                        </div>
+	                      </div>
+	                      <div class="panel-body">
+	                        <div class="condition-title">{{ point.buy_trigger_cond }}</div>
+	                      </div>
+	                    </section>
+
+	                    <section class="condition-panel condition-panel-confirm">
+	                      <div class="panel-head">
+	                        <span class="panel-step">2</span>
+	                        <div>
+	                          <div class="panel-title">卡点</div>
+	                          <div class="panel-subtitle">条件没到齐就继续观察</div>
+	                        </div>
+	                      </div>
+	                      <div class="panel-body">
+	                        <ul class="condition-bullets">
+	                          <li v-for="item in splitCond(point.buy_confirm_cond)" :key="item">{{ item }}</li>
+	                        </ul>
+	                      </div>
+	                    </section>
+	                  </div>
+	                </div>
 
                 <div class="signal-footer">
                   <span>{{ point.buy_comment || '-' }}</span>
-                  <span class="footer-flag">未到执行位</span>
+                  <div class="footer-actions">
+                    <span class="footer-flag">未到执行位</span>
+                    <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                  </div>
                 </div>
               </article>
             </div>
@@ -272,25 +453,51 @@
             <div v-else class="skip-list">
               <div v-for="point in buyData.not_buy_points" :key="point.ts_code" class="skip-row">
                 <div class="skip-main">
-                  <strong>{{ point.stock_name }}</strong>
-                  <span class="signal-code">{{ point.ts_code }}</span>
-                  <span class="skip-meta">{{ point.candidate_bucket_tag || '未分层' }}</span>
-                  <span class="skip-meta">{{ point.buy_point_type }}</span>
+	                  <strong>{{ point.stock_name }}</strong>
+	                  <span class="signal-code">{{ point.ts_code }}</span>
+	                  <span class="skip-meta">{{ poolTagLabel(point.stock_pool_tag) }}</span>
+	                  <span class="skip-meta">{{ point.candidate_bucket_tag || '未分层' }}</span>
+	                  <span class="skip-meta">{{ point.buy_point_type }}</span>
+	                </div>
+                <div class="skip-quote">
+                  <strong>{{ formatPrice(point.buy_current_price) }}</strong>
+                  <span :class="priceClass(point.buy_current_change_pct)">{{ formatSignedPct(point.buy_current_change_pct) }}</span>
                 </div>
                 <div class="skip-reason">{{ skipReasonLine(point, buyData.market_env_tag) }}</div>
+                <div class="skip-actions">
+                  <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">SOP 详情</el-button>
+                  <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                </div>
               </div>
             </div>
           </el-tab-pane>
         </el-tabs>
       </template>
     </el-card>
+    <BuyAnalysisDrawer
+      v-model="buyAnalysisVisible"
+      :ts-code="buyAnalysisStock.tsCode"
+      :stock-name="buyAnalysisStock.stockName"
+      :trade-date="displayDate"
+      :current-price="buyAnalysisStock.currentPrice"
+      :current-change-pct="buyAnalysisStock.currentChangePct"
+    />
+    <StockCheckupDrawer
+      v-model="checkupVisible"
+      :ts-code="checkupStock.tsCode"
+      :stock-name="checkupStock.stockName"
+      :default-target="checkupStock.defaultTarget"
+      :trade-date="displayDate"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
+import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
+import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
 
 const loading = ref(false)
 const activeTab = ref('available')
@@ -300,6 +507,57 @@ const buyData = ref({
   available_buy_points: [],
   observe_buy_points: [],
   not_buy_points: [],
+})
+const buyAnalysisVisible = ref(false)
+const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentChangePct: null })
+const checkupVisible = ref(false)
+const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '交易型' })
+const expandedCards = ref({})
+
+const primaryAvailableLimit = computed(() => {
+  if (buyData.value.market_env_tag === '进攻') return 5
+  if (buyData.value.market_env_tag === '中性') return 3
+  return 2
+})
+
+const primaryAvailablePoints = computed(() => {
+  const points = [...(buyData.value.available_buy_points || [])]
+  const limit = primaryAvailableLimit.value
+  const maxSector = buyData.value.market_env_tag === '进攻' ? 2 : 1
+  const maxBreakthrough = buyData.value.market_env_tag === '进攻' ? 2 : 1
+  const selected = []
+  const sectorCount = new Map()
+  let breakthroughCount = 0
+  const skipped = []
+
+  for (const point of points) {
+    const sector = point.candidate_source_tag || point.stock_name || point.ts_code
+    const currentSectorCount = sectorCount.get(sector) || 0
+    const isBreakthrough = point.buy_point_type === '突破'
+    if (currentSectorCount >= maxSector || (isBreakthrough && breakthroughCount >= maxBreakthrough)) {
+      skipped.push(point)
+      continue
+    }
+    selected.push(point)
+    sectorCount.set(sector, currentSectorCount + 1)
+    if (isBreakthrough) breakthroughCount += 1
+    if (selected.length >= limit) break
+  }
+
+  if (selected.length < limit) {
+    for (const point of [...skipped, ...points]) {
+      if (selected.find((item) => item.ts_code === point.ts_code)) continue
+      selected.push(point)
+      if (selected.length >= limit) break
+    }
+  }
+
+  return selected
+})
+
+const backupAvailablePoints = computed(() => {
+  const selectedCodes = new Set(primaryAvailablePoints.value.map((point) => point.ts_code))
+  return (buyData.value.available_buy_points || []).filter((point) => !selectedCodes.has(point.ts_code))
 })
 
 const getLocalDate = () => {
@@ -374,12 +632,55 @@ const invalidGapClass = (value) => {
   return Number(value) <= 0 ? 'text-red' : 'text-neutral'
 }
 
+const isRealtimeSource = (source) => String(source || '').startsWith('realtime_')
+
+const quoteSourceLabel = (source) => {
+  if (!source) return '日线回退'
+  if (String(source).startsWith('realtime_')) return '盘中实时'
+  if (source === 'mock') return '模拟数据'
+  return '日线回退'
+}
+
+const quoteMetaLine = (source, quoteTime, fallbackDate) => {
+  const label = quoteSourceLabel(source)
+  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
+  if (fallbackDate) return `${label} ${fallbackDate}`
+  return label
+}
+
+const poolTagLabel = (tag) => {
+  if (tag === '账户可参与池') return '账户可参与池'
+  if (tag === '趋势辨识度观察池') return '趋势辨识度观察池'
+  if (tag === '市场最强观察池') return '市场最强观察池'
+  if (tag === '持仓处理池') return '持仓处理池'
+  return tag || '未入池'
+}
+
 const splitCond = (text) => {
   if (!text) return ['-']
   return String(text)
     .split('；')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+const summarizeCond = (text) => {
+  const items = splitCond(text)
+  if (!items.length) return '-'
+  const first = items[0]
+  if (items.length === 1) return first
+  return `${first} 等 ${items.length} 个条件`
+}
+
+const cardKey = (point, scope) => `${scope}:${point.ts_code}`
+
+const isCardExpanded = (key) => Boolean(expandedCards.value[key])
+
+const toggleCardDetails = (key) => {
+  expandedCards.value = {
+    ...expandedCards.value,
+    [key]: !expandedCards.value[key]
+  }
 }
 
 const envChecklist = (tag) => {
@@ -411,6 +712,25 @@ const skipReasonLine = (point, envTag) => {
     return `${point.buy_comment}，今天不作为正常开仓对象。`
   }
   return point.buy_comment || point.buy_invalid_cond || '不符合执行条件'
+}
+
+const openCheckup = (point, defaultTarget = '交易型') => {
+  checkupStock.value = {
+    tsCode: point.ts_code,
+    stockName: point.stock_name || point.ts_code,
+    defaultTarget
+  }
+  checkupVisible.value = true
+}
+
+const openBuyAnalysis = (point) => {
+  buyAnalysisStock.value = {
+    tsCode: point.ts_code,
+    stockName: point.stock_name || point.ts_code,
+    currentPrice: point.buy_current_price,
+    currentChangePct: point.buy_current_change_pct
+  }
+  buyAnalysisVisible.value = true
 }
 
 const loadData = async () => {
@@ -581,19 +901,57 @@ onMounted(() => {
   margin-left: 4px;
 }
 
+.available-group-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.available-group-head-secondary {
+  margin-top: 20px;
+}
+
+.available-group-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.available-group-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-sec);
+  line-height: 1.5;
+}
+
+.available-group-meta {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  white-space: nowrap;
+}
+
 .signal-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 16px;
 }
 
+.signal-grid-secondary {
+  margin-top: 0;
+}
+
 .signal-card {
   display: grid;
   gap: 14px;
   padding: 18px;
-  border-radius: 18px;
+  border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.05), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.015));
+  overflow: hidden;
 }
 
 .signal-card-buy {
@@ -614,6 +972,7 @@ onMounted(() => {
 .signal-stock {
   font-size: 1.05rem;
   font-weight: 700;
+  line-height: 1.2;
 }
 
 .signal-code {
@@ -640,14 +999,16 @@ onMounted(() => {
   padding: 5px 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .signal-intent {
-  padding: 12px 14px;
+  padding: 13px 14px;
   border-radius: 14px;
   background: rgba(68, 209, 159, 0.08);
   border: 1px solid rgba(68, 209, 159, 0.14);
-  line-height: 1.6;
+  line-height: 1.55;
+  font-size: 13px;
 }
 
 .signal-intent-watch {
@@ -692,6 +1053,16 @@ onMounted(() => {
   font-weight: 600;
 }
 
+.quote-source {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.quote-source-live {
+  color: #54d2a4;
+}
+
 .quote-side {
   display: flex;
   gap: 14px;
@@ -715,10 +1086,11 @@ onMounted(() => {
 
 .metric-card {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   padding: 12px;
   border-radius: 14px;
-  background: rgba(9, 14, 23, 0.35);
+  background: rgba(9, 14, 23, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .metric-label {
@@ -742,14 +1114,88 @@ onMounted(() => {
   color: var(--color-text-sec);
 }
 
+.condition-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.condition-summary-grid-watch {
+  grid-template-columns: 1fr;
+}
+
+.condition-summary-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 15px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-left-width: 3px;
+  background: rgba(255, 255, 255, 0.022);
+  min-width: 0;
+}
+
+.condition-summary-trigger {
+  border-left-color: rgba(68, 209, 159, 0.9);
+  background: linear-gradient(90deg, rgba(68, 209, 159, 0.08), rgba(255, 255, 255, 0.02) 42%);
+}
+
+.condition-summary-confirm {
+  border-left-color: rgba(92, 122, 255, 0.9);
+  background: linear-gradient(90deg, rgba(92, 122, 255, 0.08), rgba(255, 255, 255, 0.02) 42%);
+}
+
+.condition-summary-invalid {
+  border-left-color: rgba(255, 122, 127, 0.9);
+  background: linear-gradient(90deg, rgba(255, 122, 127, 0.1), rgba(255, 255, 255, 0.02) 42%);
+}
+
+.summary-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.summary-card-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.summary-count {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--color-text-sec);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.summary-card-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text-main);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.condition-expand-bar {
+  display: flex;
+  justify-content: flex-start;
+}
+
 .condition-panel-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 10px;
 }
 
 .condition-panel-grid-watch {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
 }
 
 .condition-panel {
@@ -812,7 +1258,7 @@ onMounted(() => {
 
 .condition-title {
   line-height: 1.6;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .condition-bullets {
@@ -820,7 +1266,8 @@ onMounted(() => {
   padding-left: 18px;
   display: grid;
   gap: 6px;
-  line-height: 1.6;
+  line-height: 1.55;
+  font-size: 13px;
 }
 
 .condition-bullets-risk li {
@@ -828,12 +1275,18 @@ onMounted(() => {
 }
 
 .signal-footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
+  display: grid;
+  gap: 10px;
   color: var(--color-text-sec);
   font-size: 13px;
+}
+
+.footer-actions,
+.skip-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .footer-flag {
@@ -862,6 +1315,18 @@ onMounted(() => {
   align-items: center;
 }
 
+.skip-quote {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.skip-quote strong {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
 .skip-meta {
   color: var(--color-text-sec);
   font-size: 13px;
@@ -870,6 +1335,34 @@ onMounted(() => {
 .skip-reason {
   color: var(--color-text-sec);
   line-height: 1.5;
+}
+
+@media (max-width: 820px) {
+  .signal-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quote-strip,
+  .signal-footer {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .quote-side {
+    justify-content: flex-start;
+  }
+
+  .price-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-card-header {
+    flex-direction: column;
+  }
+
+  .signal-badges {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 900px) {
@@ -907,6 +1400,10 @@ onMounted(() => {
   .signal-footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .footer-actions {
+    justify-content: flex-start;
   }
 }
 </style>

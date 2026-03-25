@@ -20,7 +20,7 @@ class AccountConfig(Base):
     llm_base_url = Column(String(255), nullable=False, default="")
     llm_api_key = Column(String(255), nullable=False, default="")
     llm_model = Column(String(120), nullable=False, default="")
-    llm_timeout_seconds = Column(Float, nullable=False, default=12.0)
+    llm_timeout_seconds = Column(Float, nullable=False, default=60.0)
     llm_temperature = Column(Float, nullable=False, default=0.2)
     llm_max_input_items = Column(Integer, nullable=False, default=8)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

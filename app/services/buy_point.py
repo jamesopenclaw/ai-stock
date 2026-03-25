@@ -1,8 +1,9 @@
 """
 买点分析服务
 """
-from typing import List, Optional
+from typing import Dict, List, Optional
 
+from app.data.tushare_client import normalize_ts_code, tushare_client
 from app.models.schemas import (
     StockInput,
     StockOutput,
@@ -75,6 +76,8 @@ class BuyPointService:
         pool_tag_by_code = {}
         for stock in stock_pools.market_watch_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.MARKET_WATCH
+        for stock in stock_pools.trend_recognition_pool:
+            pool_tag_by_code[stock.ts_code] = StockPoolTag.TREND_RECOGNITION
         for stock in stock_pools.account_executable_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.ACCOUNT_EXECUTABLE
         for stock in stock_pools.holding_process_pool:
@@ -85,6 +88,7 @@ class BuyPointService:
         observe = []    # 观察
         not_buy = []    # 不买
         analyzed_count = 0
+        display_quote_map = self._build_display_quote_map(trade_date, scored_stocks)
 
         for stock in scored_stocks:
             stock.stock_pool_tag = pool_tag_by_code.get(stock.ts_code, StockPoolTag.NOT_IN_POOL)
@@ -92,11 +96,22 @@ class BuyPointService:
                 continue
 
             buy_point = self._analyze_stock_buy_point(stock, market_env, account)
+            buy_point = self._apply_display_quote(buy_point, stock, display_quote_map)
             analyzed_count += 1
 
-            if buy_point.buy_signal_tag == BuySignalTag.CAN_BUY:
+            if (
+                buy_point.buy_signal_tag == BuySignalTag.CAN_BUY
+                and stock.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE
+            ):
                 available.append(buy_point)
-            elif buy_point.buy_signal_tag == BuySignalTag.OBSERVE:
+            elif (
+                buy_point.buy_signal_tag == BuySignalTag.OBSERVE
+                and stock.stock_pool_tag in {
+                StockPoolTag.MARKET_WATCH,
+                StockPoolTag.TREND_RECOGNITION,
+                StockPoolTag.ACCOUNT_EXECUTABLE,
+                }
+            ):
                 observe.append(buy_point)
             else:
                 not_buy.append(buy_point)
@@ -109,6 +124,47 @@ class BuyPointService:
             not_buy_points=not_buy[:10],           # 最多10只
             total_count=analyzed_count
         )
+
+    def _build_display_quote_map(
+        self,
+        trade_date: str,
+        stocks: List[StockOutput],
+    ) -> Dict[str, Dict]:
+        """为买点展示层批量准备实时行情，不改变三池/评分口径。"""
+        if not stocks or not tushare_client._should_use_realtime_quote(trade_date):
+            return {}
+        return tushare_client._fetch_realtime_quote_map([stock.ts_code for stock in stocks])
+
+    def _apply_display_quote(
+        self,
+        buy_point: BuyPointOutput,
+        stock: StockOutput,
+        display_quote_map: Dict[str, Dict],
+    ) -> BuyPointOutput:
+        """仅覆盖展示层的最新价、涨跌幅和时间戳。"""
+        realtime = display_quote_map.get(normalize_ts_code(stock.ts_code))
+        if not realtime:
+            return buy_point
+
+        current_price = round(realtime["close"], 2) if realtime.get("close") else None
+        current_change_pct = (
+            round(realtime["change_pct"], 2)
+            if realtime.get("change_pct") is not None
+            else None
+        )
+        buy_point.buy_current_price = current_price
+        buy_point.buy_current_change_pct = current_change_pct
+        buy_point.buy_quote_time = realtime.get("quote_time")
+        buy_point.buy_data_source = realtime.get("data_source")
+        buy_point.buy_trigger_gap_pct = self._price_gap_pct(
+            current_price,
+            buy_point.buy_trigger_price,
+        )
+        buy_point.buy_invalid_gap_pct = self._price_gap_pct(
+            current_price,
+            buy_point.buy_invalid_price,
+        )
+        return buy_point
 
     def _analyze_stock_buy_point(
         self,
@@ -133,11 +189,11 @@ class BuyPointService:
         signal_tag = self._determine_buy_signal(stock, market_env, buy_type, account)
 
         # 生成触发/确认/失效条件
-        trigger_cond = self._generate_trigger_cond(stock, buy_type)
-        confirm_cond = self._generate_confirm_cond(stock, buy_type)
-        invalid_cond = self._generate_invalid_cond(stock, buy_type)
         trigger_price = self._estimate_trigger_price(stock, buy_type)
         invalid_price = self._estimate_invalid_price(stock, buy_type)
+        trigger_cond = self._generate_trigger_cond(stock, buy_type, trigger_price)
+        confirm_cond = self._generate_confirm_cond(stock, buy_type)
+        invalid_cond = self._generate_invalid_cond(stock, buy_type)
         current_price = self._current_price(stock)
         current_change_pct = self._current_change_pct(stock)
         trigger_gap_pct = self._price_gap_pct(current_price, trigger_price)
@@ -159,6 +215,8 @@ class BuyPointService:
             stock_name=stock.stock_name,
             candidate_source_tag=stock.candidate_source_tag,
             candidate_bucket_tag=stock.candidate_bucket_tag,
+            stock_pool_tag=stock.stock_pool_tag.value if stock.stock_pool_tag else "",
+            pool_entry_reason=stock.pool_entry_reason or "",
             buy_signal_tag=signal_tag,
             buy_point_type=buy_type,
             buy_trigger_cond=trigger_cond,
@@ -166,6 +224,8 @@ class BuyPointService:
             buy_invalid_cond=invalid_cond,
             buy_current_price=current_price,
             buy_current_change_pct=current_change_pct,
+            buy_quote_time=stock.quote_time,
+            buy_data_source=stock.data_source,
             buy_trigger_price=trigger_price,
             buy_invalid_price=invalid_price,
             buy_trigger_gap_pct=trigger_gap_pct,
@@ -181,10 +241,16 @@ class BuyPointService:
         """确定买点类型"""
         # 强势股 -> 突破
         if stock.stock_strength_tag == StockStrengthTag.STRONG:
-            if stock.change_pct >= 5 and market_env.breakout_allowed:  # 涨幅较大，突破概率高
+            change_pct = float(stock.change_pct or 0)
+            if (
+                market_env.market_env_tag == MarketEnvTag.ATTACK
+                and market_env.breakout_allowed
+                and 5 <= change_pct < 7
+                and stock.stock_core_tag == StockCoreTag.CORE
+                and stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE
+            ):
                 return BuyPointType.BREAKTHROUGH
-            else:
-                return BuyPointType.RETRACE_SUPPORT
+            return BuyPointType.RETRACE_SUPPORT
 
         # 中等强度 -> 回踩承接
         if stock.stock_strength_tag == StockStrengthTag.MEDIUM:
@@ -225,6 +291,28 @@ class BuyPointService:
         if stock.stock_tradeability_tag.value == "不建议":
             return BuySignalTag.NOT_BUY
 
+        if account and account.available_cash < AccountAdapterService.AVAILABLE_CASH_MIN:
+            return BuySignalTag.NOT_BUY
+
+        constrained_account = bool(
+            account and (
+                account.total_position_ratio >= AccountAdapterService.POSITION_MEDIUM
+                or account.holding_count >= AccountAdapterService.HOLDING_COUNT_HIGH
+                or account.today_new_buy_count >= AccountAdapterService.NEW_BUY_COUNT_LIMIT
+            )
+        )
+
+        if stock.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE:
+            if (
+                buy_type == BuyPointType.RETRACE_SUPPORT
+                and stock.stock_tradeability_tag in {
+                    StockTradeabilityTag.TRADABLE,
+                    StockTradeabilityTag.CAUTION,
+                }
+            ):
+                if stock.stock_strength_tag in {StockStrengthTag.STRONG, StockStrengthTag.MEDIUM}:
+                    return BuySignalTag.OBSERVE if constrained_account else BuySignalTag.CAN_BUY
+
         if stock.stock_tradeability_tag.value == "谨慎":
             return BuySignalTag.OBSERVE
 
@@ -232,23 +320,32 @@ class BuyPointService:
         if stock.stock_core_tag.value == "核心" and stock.stock_strength_tag == StockStrengthTag.STRONG:
             if stock.stock_pool_tag == StockPoolTag.MARKET_WATCH:
                 return BuySignalTag.OBSERVE
-            if account and (
-                account.total_position_ratio >= AccountAdapterService.POSITION_MEDIUM
-                or account.holding_count >= AccountAdapterService.HOLDING_COUNT_HIGH
-                or account.today_new_buy_count >= AccountAdapterService.NEW_BUY_COUNT_LIMIT
-            ):
+            if stock.stock_pool_tag == StockPoolTag.TREND_RECOGNITION:
                 return BuySignalTag.OBSERVE
-            if account and account.available_cash < AccountAdapterService.AVAILABLE_CASH_MIN:
-                return BuySignalTag.NOT_BUY
+            if constrained_account:
+                return BuySignalTag.OBSERVE
             return BuySignalTag.CAN_BUY
 
         # 其他 -> 观察
         return BuySignalTag.OBSERVE
 
-    def _generate_trigger_cond(self, stock: StockOutput, buy_type: BuyPointType) -> str:
+    def _generate_trigger_cond(
+        self,
+        stock: StockOutput,
+        buy_type: BuyPointType,
+        trigger_price: Optional[float] = None,
+    ) -> str:
         """生成触发条件"""
         if buy_type == BuyPointType.BREAKTHROUGH:
-            return f"价格突破 {stock.change_pct + 1:.1f}% 关键位时触发"
+            ref_price = trigger_price or self._estimate_trigger_price(stock, buy_type)
+            day_high = stock.high or stock.close or stock.pre_close
+            if ref_price and day_high:
+                return (
+                    f"放量突破当日高点 {day_high:.2f} 并站上触发价 {ref_price:.2f} 时触发"
+                )
+            if ref_price:
+                return f"放量站上触发价 {ref_price:.2f} 时触发"
+            return "放量突破关键压力位并站稳时触发"
         elif buy_type == BuyPointType.RETRACE_SUPPORT:
             return "回踩至今日开盘价附近企稳时触发"
         else:

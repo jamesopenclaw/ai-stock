@@ -3,19 +3,26 @@ LLM 解释增强服务
 
 只对规则结果做人话解释和摘要，不改动交易结论。
 """
+import hashlib
+import json
 from typing import Dict, List, Optional
 
 from loguru import logger
 
+from app.core.config import settings
 from app.models.schemas import (
     LlmCallStatus,
     LlmPoolsSummary,
     LlmSellSummary,
+    LlmStockCheckupReport,
     SellPointResponse,
+    StockCheckupRuleSnapshot,
+    StockCheckupTarget,
     StockOutput,
     StockPoolsOutput,
 )
 from app.services.llm_client import llm_client
+from app.services.llm_cache_service import llm_cache_service
 
 
 class LlmExplainerService:
@@ -50,6 +57,21 @@ page_summary, action_summary, notes
 ts_code, action_sentence, trigger_sentence, risk_sentence
 """.strip()
 
+    STOCK_CHECKUP_SYSTEM_PROMPT = """
+你是 A 股短线交易系统里的个股全面体检助手。你的任务是基于已经给定的规则事实，输出一份结构化体检报告。
+
+严格遵守：
+1. 只能使用输入里已有事实，不得新增价格、涨跌、仓位、板块地位、资金流细节。
+2. 不能改变规则快照中的交易方向，只能解释、收敛和提炼。
+3. 输出必须是 JSON 对象，字段只允许：
+overall_summary, llm_report_sections, key_risks, one_line_conclusion
+4. llm_report_sections 必须是数组，每项字段只允许：
+key, title, content
+5. content 要短、直接、可执行，避免空话和套话。
+6. 对含有“[需确认]”的信息，要明确保守表达，不要脑补。
+7. 最终一句话结论要像交易员复盘语气，清楚表达“能不能看、能不能做、错了怎么看”。
+""".strip()
+
     async def is_enabled(self) -> bool:
         runtime = await llm_client.get_runtime_config()
         return bool(
@@ -62,6 +84,28 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
     async def _runtime_max_input_items(self) -> int:
         runtime = await llm_client.get_runtime_config()
         return max(1, int(runtime.get("max_input_items") or 8))
+
+    def _cache_key(
+        self,
+        *,
+        scene: str,
+        trade_date: str,
+        provider: str,
+        model: str,
+        payload: Dict,
+    ) -> str:
+        raw = json.dumps(
+            {
+                "scene": scene,
+                "trade_date": trade_date,
+                "provider": provider,
+                "model": model,
+                "payload": payload,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _serialize_pool_stock(self, stock: StockOutput, pool_kind: str) -> Dict:
         data = {
@@ -76,8 +120,16 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
             "stock_continuity_tag": getattr(stock.stock_continuity_tag, "value", stock.stock_continuity_tag),
             "stock_tradeability_tag": getattr(stock.stock_tradeability_tag, "value", stock.stock_tradeability_tag),
             "stock_core_tag": getattr(stock.stock_core_tag, "value", stock.stock_core_tag),
+            "sector_profile_tag": getattr(stock.sector_profile_tag, "value", stock.sector_profile_tag),
+            "stock_role_tag": getattr(stock.stock_role_tag, "value", stock.stock_role_tag),
+            "day_strength_tag": getattr(stock.day_strength_tag, "value", stock.day_strength_tag),
+            "structure_state_tag": getattr(stock.structure_state_tag, "value", stock.structure_state_tag),
+            "next_tradeability_tag": getattr(stock.next_tradeability_tag, "value", stock.next_tradeability_tag),
             "stock_comment": stock.stock_comment,
             "stock_falsification_cond": stock.stock_falsification_cond,
+            "why_this_pool": stock.why_this_pool,
+            "not_other_pools": stock.not_other_pools,
+            "pool_decision_summary": stock.pool_decision_summary,
         }
         if pool_kind == "account":
             data.update({
@@ -94,6 +146,33 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
             })
         return data
 
+    def _normalize_pool_empty_reason(self, value) -> str:
+        """兼容 LLM 返回的字符串、分池字典或数组。"""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            parts = []
+            for key, reason in value.items():
+                text = str(reason or "").strip()
+                if text:
+                    parts.append(f"{key}: {text}")
+            return "；".join(parts)
+        if isinstance(value, list):
+            return "；".join(str(item).strip() for item in value if str(item).strip())
+        if value is None:
+            return ""
+        return str(value)
+
+    def _normalize_pools_summary_payload(self, data: Dict) -> Dict:
+        """在模型校验前对三池摘要做最小兼容清洗。"""
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        normalized["pool_empty_reason"] = self._normalize_pool_empty_reason(
+            normalized.get("pool_empty_reason")
+        )
+        return normalized
+
     def _slice_pool_items(self, items: List[StockOutput], limit: int) -> List[StockOutput]:
         return list(items[: max(0, limit)])
 
@@ -101,10 +180,11 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
         available = {
             "holding": len(stock_pools.holding_process_pool),
             "account": len(stock_pools.account_executable_pool),
+            "trend": len(stock_pools.trend_recognition_pool),
             "market": len(stock_pools.market_watch_pool),
         }
-        limits = {"holding": 0, "account": 0, "market": 0}
-        order = ["holding", "account", "market"]
+        limits = {"holding": 0, "account": 0, "trend": 0, "market": 0}
+        order = ["holding", "account", "trend", "market"]
         remaining = max(1, total_limit)
 
         for key in order:
@@ -141,12 +221,17 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
             "market_comment": getattr(market_env, "market_comment", ""),
             "counts": {
                 "market_watch": len(stock_pools.market_watch_pool),
+                "trend_recognition": len(stock_pools.trend_recognition_pool),
                 "account_executable": len(stock_pools.account_executable_pool),
                 "holding_process": len(stock_pools.holding_process_pool),
             },
             "market_watch_pool": [
                 self._serialize_pool_stock(s, "market")
                 for s in self._slice_pool_items(stock_pools.market_watch_pool, limits["market"])
+            ],
+            "trend_recognition_pool": [
+                self._serialize_pool_stock(s, "trend")
+                for s in self._slice_pool_items(stock_pools.trend_recognition_pool, limits["trend"])
             ],
             "account_executable_pool": [
                 self._serialize_pool_stock(s, "account")
@@ -162,18 +247,35 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
         self,
         stock_pools: StockPoolsOutput,
         market_env,
+        *,
+        force_refresh: bool = False,
+        allow_live_request: bool = True,
     ) -> Optional[LlmPoolsSummary]:
         """生成三池页摘要，并回填个股人话说明。"""
-        summary, _status = await self.summarize_stock_pools_with_status(stock_pools, market_env)
+        summary, _status = await self.summarize_stock_pools_with_status(
+            stock_pools,
+            market_env,
+            force_refresh=force_refresh,
+            allow_live_request=allow_live_request,
+        )
         return summary
 
     async def summarize_stock_pools_with_status(
         self,
         stock_pools: StockPoolsOutput,
         market_env,
+        *,
+        force_refresh: bool = False,
+        allow_live_request: bool = True,
     ) -> tuple[Optional[LlmPoolsSummary], LlmCallStatus]:
         """生成三池页摘要，并返回调用状态。"""
-        if not await self.is_enabled():
+        runtime = await llm_client.get_runtime_config()
+        if not (
+            runtime.get("enabled")
+            and str(runtime.get("api_key") or "").strip()
+            and str(runtime.get("model") or "").strip()
+            and str(runtime.get("base_url") or "").strip()
+        ):
             return None, LlmCallStatus(
                 enabled=False,
                 success=False,
@@ -182,17 +284,70 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
             )
         max_items = min(await self._runtime_max_input_items(), 6)
         payload = self._build_pool_payload(stock_pools, market_env, max_items)
+        cache_key = self._cache_key(
+            scene="stock_pools",
+            trade_date=stock_pools.trade_date,
+            provider=str(runtime.get("provider") or ""),
+            model=str(runtime.get("model") or ""),
+            payload=payload,
+        )
 
-        data, status = await llm_client.chat_json_with_status(self.POOLS_SYSTEM_PROMPT, payload)
+        if not force_refresh:
+            cached = await llm_cache_service.get_cache(cache_key=cache_key)
+            if cached:
+                try:
+                    summary = LlmPoolsSummary.model_validate(
+                        self._normalize_pools_summary_payload(cached)
+                    )
+                    self.apply_pool_summary(stock_pools, summary)
+                    return summary, LlmCallStatus(
+                        enabled=True,
+                        success=True,
+                        status="cached",
+                        message="LLM 解读已命中缓存",
+                    )
+                except Exception as exc:
+                    logger.warning(f"LLM 三池缓存校验失败: {exc}")
+
+            if not allow_live_request:
+                return None, LlmCallStatus(
+                    enabled=True,
+                    success=False,
+                    status="cache_miss",
+                    message="LLM 摘要未命中缓存，已跳过实时生成以保证页面响应",
+                )
+
+        data, status = await llm_client.chat_json_with_status(
+            self.POOLS_SYSTEM_PROMPT,
+            payload,
+            scene="stock_pools",
+            trade_date=stock_pools.trade_date,
+        )
         if not data and status.status == "timeout":
             fallback_payload = self._build_pool_payload(stock_pools, market_env, 3)
-            data, status = await llm_client.chat_json_with_status(self.POOLS_SYSTEM_PROMPT, fallback_payload)
+            data, status = await llm_client.chat_json_with_status(
+                self.POOLS_SYSTEM_PROMPT,
+                fallback_payload,
+                scene="stock_pools",
+                trade_date=stock_pools.trade_date,
+            )
         if not data:
             return None, status
 
         try:
-            summary = LlmPoolsSummary.model_validate(data)
+            summary = LlmPoolsSummary.model_validate(
+                self._normalize_pools_summary_payload(data)
+            )
             self.apply_pool_summary(stock_pools, summary)
+            await llm_cache_service.upsert_cache(
+                scene="stock_pools",
+                cache_key=cache_key,
+                trade_date=stock_pools.trade_date,
+                provider=str(runtime.get("provider") or ""),
+                model=str(runtime.get("model") or ""),
+                payload=payload,
+                response=summary.model_dump(),
+            )
             return summary, status
         except Exception as exc:
             logger.warning(f"LLM 三池摘要校验失败: {exc}")
@@ -212,6 +367,7 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
         notes = {note.ts_code: note for note in summary.stock_notes}
         for group in (
             stock_pools.market_watch_pool,
+            stock_pools.trend_recognition_pool,
             stock_pools.account_executable_pool,
             stock_pools.holding_process_pool,
         ):
@@ -227,18 +383,32 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
         self,
         sell_points: SellPointResponse,
         market_env,
+        *,
+        force_refresh: bool = False,
     ) -> Optional[LlmSellSummary]:
         """生成卖点页摘要，并回填更可读的动作句。"""
-        summary, _status = await self.rewrite_sell_points_with_status(sell_points, market_env)
+        summary, _status = await self.rewrite_sell_points_with_status(
+            sell_points,
+            market_env,
+            force_refresh=force_refresh,
+        )
         return summary
 
     async def rewrite_sell_points_with_status(
         self,
         sell_points: SellPointResponse,
         market_env,
+        *,
+        force_refresh: bool = False,
     ) -> tuple[Optional[LlmSellSummary], LlmCallStatus]:
         """生成卖点页摘要，并返回调用状态。"""
-        if not await self.is_enabled():
+        runtime = await llm_client.get_runtime_config()
+        if not (
+            runtime.get("enabled")
+            and str(runtime.get("api_key") or "").strip()
+            and str(runtime.get("model") or "").strip()
+            and str(runtime.get("base_url") or "").strip()
+        ):
             return None, LlmCallStatus(
                 enabled=False,
                 success=False,
@@ -277,14 +447,50 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
                 for point in points[:max_items]
             ],
         }
+        cache_key = self._cache_key(
+            scene="sell_points",
+            trade_date=sell_points.trade_date,
+            provider=str(runtime.get("provider") or ""),
+            model=str(runtime.get("model") or ""),
+            payload=payload,
+        )
 
-        data, status = await llm_client.chat_json_with_status(self.SELL_SYSTEM_PROMPT, payload)
+        if not force_refresh:
+            cached = await llm_cache_service.get_cache(cache_key=cache_key)
+            if cached:
+                try:
+                    summary = LlmSellSummary.model_validate(cached)
+                    self.apply_sell_summary(sell_points, summary)
+                    return summary, LlmCallStatus(
+                        enabled=True,
+                        success=True,
+                        status="cached",
+                        message="LLM 解读已命中缓存",
+                    )
+                except Exception as exc:
+                    logger.warning(f"LLM 卖点缓存校验失败: {exc}")
+
+        data, status = await llm_client.chat_json_with_status(
+            self.SELL_SYSTEM_PROMPT,
+            payload,
+            scene="sell_points",
+            trade_date=sell_points.trade_date,
+        )
         if not data:
             return None, status
 
         try:
             summary = LlmSellSummary.model_validate(data)
             self.apply_sell_summary(sell_points, summary)
+            await llm_cache_service.upsert_cache(
+                scene="sell_points",
+                cache_key=cache_key,
+                trade_date=sell_points.trade_date,
+                provider=str(runtime.get("provider") or ""),
+                model=str(runtime.get("model") or ""),
+                payload=payload,
+                response=summary.model_dump(),
+            )
             return summary, status
         except Exception as exc:
             logger.warning(f"LLM 卖点摘要校验失败: {exc}")
@@ -293,6 +499,268 @@ ts_code, action_sentence, trigger_sentence, risk_sentence
                 success=False,
                 status="validation_error",
                 message=f"LLM 卖点摘要校验失败：{exc}",
+            )
+
+    def _build_checkup_payload(
+        self,
+        rule_snapshot: StockCheckupRuleSnapshot,
+        checkup_target: StockCheckupTarget,
+        trade_date: str,
+        *,
+        mode: str = "full",
+    ) -> Dict:
+        payload = {
+            "trade_date": trade_date,
+            "checkup_target": checkup_target.value,
+            "rule_snapshot": rule_snapshot.model_dump(mode="json"),
+        }
+        if mode == "full":
+            return payload
+
+        raw = rule_snapshot.model_dump(mode="json")
+        if mode == "compact":
+            compact_snapshot = {
+                "basic_info": {
+                    "ts_code": raw["basic_info"].get("ts_code"),
+                    "stock_name": raw["basic_info"].get("stock_name"),
+                    "sector_name": raw["basic_info"].get("sector_name"),
+                    "board": raw["basic_info"].get("board"),
+                    "special_tags": raw["basic_info"].get("special_tags", [])[:3],
+                },
+                "market_context": {
+                    "market_env_tag": raw["market_context"].get("market_env_tag"),
+                    "market_phase": raw["market_context"].get("market_phase"),
+                    "stock_market_alignment": raw["market_context"].get("stock_market_alignment"),
+                    "tolerance_comment": raw["market_context"].get("tolerance_comment"),
+                },
+                "direction_position": {
+                    "direction_name": raw["direction_position"].get("direction_name"),
+                    "sector_level": raw["direction_position"].get("sector_level"),
+                    "stock_role": raw["direction_position"].get("stock_role"),
+                    "relative_strength": raw["direction_position"].get("relative_strength"),
+                },
+                "daily_structure": {
+                    "ma_position_summary": raw["daily_structure"].get("ma_position_summary"),
+                    "stage_position": raw["daily_structure"].get("stage_position"),
+                    "range_position_20d": raw["daily_structure"].get("range_position_20d"),
+                    "range_position_60d": raw["daily_structure"].get("range_position_60d"),
+                    "structure_conclusion": raw["daily_structure"].get("structure_conclusion"),
+                },
+                "intraday_strength": {
+                    "change_pct": raw["intraday_strength"].get("change_pct"),
+                    "turnover_rate": raw["intraday_strength"].get("turnover_rate"),
+                    "vol_ratio": raw["intraday_strength"].get("vol_ratio"),
+                    "close_position": raw["intraday_strength"].get("close_position"),
+                    "strength_level": raw["intraday_strength"].get("strength_level"),
+                },
+                "fund_quality": {
+                    "cash_flow_quality": raw["fund_quality"].get("cash_flow_quality"),
+                    "note": raw["fund_quality"].get("note"),
+                },
+                "peer_comparison": {
+                    "relative_strength": raw["peer_comparison"].get("relative_strength"),
+                    "recognizability": raw["peer_comparison"].get("recognizability"),
+                    "peers": raw["peer_comparison"].get("peers", [])[:2],
+                },
+                "valuation_profile": {
+                    "valuation_level": raw["valuation_profile"].get("valuation_level"),
+                    "drive_type": raw["valuation_profile"].get("drive_type"),
+                    "pe": raw["valuation_profile"].get("pe"),
+                    "pb": raw["valuation_profile"].get("pb"),
+                    "ps": raw["valuation_profile"].get("ps"),
+                    "market_value": raw["valuation_profile"].get("market_value"),
+                },
+                "key_levels": {
+                    "pressure_levels": raw["key_levels"].get("pressure_levels", [])[:2],
+                    "support_levels": raw["key_levels"].get("support_levels", [])[:2],
+                    "defense_level": raw["key_levels"].get("defense_level"),
+                },
+                "buy_view": raw.get("buy_view"),
+                "sell_view": raw.get("sell_view"),
+                "strategy": {
+                    "current_characterization": raw["strategy"].get("current_characterization"),
+                    "current_role": raw["strategy"].get("current_role"),
+                    "current_strategy": raw["strategy"].get("current_strategy"),
+                    "strategy_reason": raw["strategy"].get("strategy_reason"),
+                    "risk_points": raw["strategy"].get("risk_points", [])[:3],
+                },
+                "final_conclusion": {
+                    "one_line_conclusion": raw["final_conclusion"].get("one_line_conclusion"),
+                },
+            }
+            return {
+                "trade_date": trade_date,
+                "checkup_target": checkup_target.value,
+                "rule_snapshot": compact_snapshot,
+                "payload_mode": "compact_retry",
+            }
+
+        ultra_snapshot = {
+            "basic_info": {
+                "ts_code": raw["basic_info"].get("ts_code"),
+                "stock_name": raw["basic_info"].get("stock_name"),
+                "sector_name": raw["basic_info"].get("sector_name"),
+            },
+            "market_context": {
+                "market_env_tag": raw["market_context"].get("market_env_tag"),
+                "stock_market_alignment": raw["market_context"].get("stock_market_alignment"),
+            },
+            "direction_position": {
+                "sector_level": raw["direction_position"].get("sector_level"),
+                "stock_role": raw["direction_position"].get("stock_role"),
+            },
+            "daily_structure": {
+                "stage_position": raw["daily_structure"].get("stage_position"),
+                "structure_conclusion": raw["daily_structure"].get("structure_conclusion"),
+            },
+            "intraday_strength": {
+                "change_pct": raw["intraday_strength"].get("change_pct"),
+                "strength_level": raw["intraday_strength"].get("strength_level"),
+            },
+            "fund_quality": {
+                "cash_flow_quality": raw["fund_quality"].get("cash_flow_quality"),
+            },
+            "valuation_profile": {
+                "valuation_level": raw["valuation_profile"].get("valuation_level"),
+                "drive_type": raw["valuation_profile"].get("drive_type"),
+            },
+            "key_levels": {
+                "pressure_levels": raw["key_levels"].get("pressure_levels", [])[:1],
+                "support_levels": raw["key_levels"].get("support_levels", [])[:1],
+                "defense_level": raw["key_levels"].get("defense_level"),
+            },
+            "strategy": {
+                "current_strategy": raw["strategy"].get("current_strategy"),
+                "strategy_reason": raw["strategy"].get("strategy_reason"),
+                "risk_points": raw["strategy"].get("risk_points", [])[:2],
+            },
+            "final_conclusion": {
+                "one_line_conclusion": raw["final_conclusion"].get("one_line_conclusion"),
+            },
+        }
+        return {
+            "trade_date": trade_date,
+            "checkup_target": checkup_target.value,
+            "rule_snapshot": ultra_snapshot,
+            "payload_mode": "ultra_compact_retry",
+        }
+
+    async def explain_stock_checkup_with_status(
+        self,
+        rule_snapshot: StockCheckupRuleSnapshot,
+        *,
+        trade_date: str,
+        checkup_target: StockCheckupTarget,
+        force_refresh: bool = False,
+    ) -> tuple[Optional[LlmStockCheckupReport], LlmCallStatus]:
+        runtime = await llm_client.get_runtime_config()
+        if not (
+            runtime.get("enabled")
+            and str(runtime.get("api_key") or "").strip()
+            and str(runtime.get("model") or "").strip()
+            and str(runtime.get("base_url") or "").strip()
+        ):
+            return None, LlmCallStatus(
+                enabled=False,
+                success=False,
+                status="disabled",
+                message="LLM 未启用或配置不完整",
+            )
+
+        base_timeout = float(
+            runtime.get("timeout_seconds") or settings.llm_timeout_seconds
+        )
+        checkup_http_timeout = max(
+            base_timeout,
+            float(settings.llm_stock_checkup_min_timeout_seconds),
+        )
+
+        payload = self._build_checkup_payload(
+            rule_snapshot,
+            checkup_target,
+            trade_date,
+        )
+        cache_key = self._cache_key(
+            scene="stock_checkup",
+            trade_date=trade_date,
+            provider=str(runtime.get("provider") or ""),
+            model=str(runtime.get("model") or ""),
+            payload=payload,
+        )
+        if not force_refresh:
+            cached = await llm_cache_service.get_cache(cache_key=cache_key)
+            if cached:
+                try:
+                    report = LlmStockCheckupReport.model_validate(cached)
+                    return report, LlmCallStatus(
+                        enabled=True,
+                        success=True,
+                        status="cached",
+                        message="LLM 个股体检已命中缓存",
+                    )
+                except Exception as exc:
+                    logger.warning(f"LLM 个股体检缓存校验失败: {exc}")
+
+        data, status = await llm_client.chat_json_with_status(
+            self.STOCK_CHECKUP_SYSTEM_PROMPT,
+            payload,
+            scene="stock_checkup",
+            trade_date=trade_date,
+            request_label="stock_checkup_full",
+            timeout_seconds=checkup_http_timeout,
+        )
+        if not data and status.status == "timeout":
+            fallback_payload = self._build_checkup_payload(
+                rule_snapshot,
+                checkup_target,
+                trade_date,
+                mode="compact",
+            )
+            data, status = await llm_client.chat_json_with_status(
+                self.STOCK_CHECKUP_SYSTEM_PROMPT,
+                fallback_payload,
+                scene="stock_checkup",
+                trade_date=trade_date,
+                request_label="stock_checkup_compact_retry",
+                timeout_seconds=checkup_http_timeout,
+            )
+        if not data and status.status == "timeout":
+            ultra_payload = self._build_checkup_payload(
+                rule_snapshot,
+                checkup_target,
+                trade_date,
+                mode="ultra_compact",
+            )
+            data, status = await llm_client.chat_json_with_status(
+                self.STOCK_CHECKUP_SYSTEM_PROMPT,
+                ultra_payload,
+                scene="stock_checkup",
+                trade_date=trade_date,
+                request_label="stock_checkup_ultra_compact_retry",
+                timeout_seconds=checkup_http_timeout,
+            )
+        if not data:
+            return None, status
+
+        try:
+            report = LlmStockCheckupReport.model_validate(data)
+            await llm_cache_service.upsert_cache(
+                scene="stock_checkup",
+                cache_key=cache_key,
+                trade_date=trade_date,
+                provider=str(runtime.get("provider") or ""),
+                model=str(runtime.get("model") or ""),
+                payload=payload,
+                response=report.model_dump(),
+            )
+            return report, status
+        except Exception as exc:
+            logger.warning(f"LLM 个股体检校验失败: {exc}")
+            return None, LlmCallStatus(
+                enabled=True,
+                success=False,
+                status="validation_error",
+                message=f"LLM 个股体检校验失败：{exc}",
             )
 
     def apply_sell_summary(

@@ -135,6 +135,8 @@ class SellPointService:
             ts_code=position.ts_code,
             stock_name=position.stock_name,
             market_price=position.market_price,
+            quote_time=position.quote_time,
+            data_source=position.data_source,
             cost_price=position.cost_price,
             pnl_pct=position.pnl_pct,
             holding_qty=position.holding_qty,

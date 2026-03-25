@@ -25,14 +25,31 @@ export const sectorApi = {
 // Stock API
 export const stockApi = {
   filter: (tradeDate, limit) => api.get('/stock/filter', { params: { trade_date: tradeDate, limit } }),
-  pools: (tradeDate, limit) => api.get('/stock/pools', { params: { trade_date: tradeDate, limit } }),
-  detail: (tsCode, tradeDate) => api.get(`/stock/detail/${tsCode}`, { params: { trade_date: tradeDate } })
+  pools: (tradeDate, limit, options = {}) => api.get('/stock/pools', {
+    params: { trade_date: tradeDate, limit, force_llm_refresh: Boolean(options.forceLlmRefresh) }
+  }),
+  detail: (tsCode, tradeDate) => api.get(`/stock/detail/${tsCode}`, { params: { trade_date: tradeDate } }),
+  buyAnalysis: (tsCode, tradeDate) => api.get(`/stock/buy-analysis/${encodeURIComponent(tsCode)}`, {
+    params: { trade_date: tradeDate }
+  }),
+  sellAnalysis: (tsCode, tradeDate) => api.get(`/stock/sell-analysis/${encodeURIComponent(tsCode)}`, {
+    params: { trade_date: tradeDate }
+  }),
+  checkup: (tsCode, tradeDate, checkupTarget, options = {}) => api.get(`/stock/checkup/${encodeURIComponent(tsCode)}`, {
+    params: {
+      trade_date: tradeDate,
+      checkup_target: checkupTarget,
+      force_llm_refresh: Boolean(options.forceLlmRefresh)
+    }
+  })
 }
 
 // Decision API
 export const decisionApi = {
   buyPoint: (tradeDate, limit) => api.get('/decision/buy-point', { params: { trade_date: tradeDate, limit } }),
-  sellPoint: (tradeDate) => api.get('/decision/sell-point', { params: { trade_date: tradeDate } }),
+  sellPoint: (tradeDate, options = {}) => api.get('/decision/sell-point', {
+    params: { trade_date: tradeDate, force_llm_refresh: Boolean(options.forceLlmRefresh) }
+  }),
   summary: (tradeDate) => api.get('/decision/summary', { params: { trade_date: tradeDate } }),
   analyze: (tradeDate) => api.post('/decision/analyze', { trade_date: tradeDate }),
   reviewStats: (limitDays = 10) => api.get('/decision/review-stats', { params: { limit_days: limitDays } })
@@ -51,6 +68,10 @@ export const accountApi = {
   updatePosition: (tsCode, payload) =>
     api.put(`/account/positions/${encodeURIComponent(tsCode)}`, payload),
   deletePosition: (positionId) => api.delete(`/account/positions/${positionId}`)
+}
+
+export const systemApi = {
+  llmLogs: (params = {}) => api.get('/system/llm/logs', { params })
 }
 
 export default api

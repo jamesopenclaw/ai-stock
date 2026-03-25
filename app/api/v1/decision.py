@@ -4,6 +4,7 @@
 from fastapi import APIRouter, Query, Body
 from typing import Optional
 from datetime import datetime
+import logging
 
 from app.models.schemas import (
     AccountInput,
@@ -26,6 +27,7 @@ from app.services.review_snapshot import review_snapshot_service
 from app.services.llm_explainer import llm_explainer_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def get_holdings_from_db(trade_date: Optional[str] = None) -> list:
@@ -71,7 +73,8 @@ def build_risk_alerts(market_env, account: AccountInput, buy_analysis, holdings)
 
 @router.get("/sell-point", response_model=ApiResponse)
 async def analyze_sell_point(
-    trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天")
+    trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
+    force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 解读缓存"),
 ) -> ApiResponse:
     """
     卖点分析
@@ -101,6 +104,7 @@ async def analyze_sell_point(
         llm_summary, llm_status = await llm_explainer_service.rewrite_sell_points_with_status(
             result,
             context.market_env,
+            force_refresh=force_llm_refresh,
         )
 
         return ApiResponse(
@@ -229,6 +233,14 @@ async def analyze_buy_point(
             scored_stocks=scored_stocks,
             stock_pools=stock_pools,
         )
+        try:
+            await review_snapshot_service.save_analysis_snapshot(
+                trade_date,
+                stock_pools=stock_pools,
+                buy_analysis=result,
+            )
+        except Exception as exc:
+            logger.warning("买点页快照写入失败: %s", exc)
 
         return ApiResponse(
             data={

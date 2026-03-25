@@ -22,6 +22,10 @@
       <template v-else>
         <el-empty v-if="!reviewData?.bucket_stats?.length" description="暂无复盘快照" />
         <template v-else>
+          <div v-if="reviewData?.stats_mode === 'pool'" class="mode-tip">
+            当前展示的是三池快照统计；打开买点页或跑完整决策分析后，会逐步补齐买点复盘数据。
+          </div>
+
           <div class="summary-strip">
             <div class="summary-item">
               <div class="label">覆盖交易日</div>
@@ -107,6 +111,16 @@ onMounted(() => {
   display: flex;
   gap: 16px;
   margin-bottom: 20px;
+}
+
+.mode-tip {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 196, 64, 0.08);
+  border: 1px solid rgba(255, 196, 64, 0.16);
+  color: var(--color-text-main);
+  font-size: 13px;
 }
 
 .summary-item {

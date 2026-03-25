@@ -44,6 +44,8 @@ async def startup_event():
         from app.core.database import engine
         from app.core.database import Base
         import app.models.holding  # noqa: F401  # register Holding metadata
+        import app.models.llm_call_log  # noqa: F401  # register LlmCallLog metadata
+        import app.models.llm_cache_entry  # noqa: F401  # register LlmCacheEntry metadata
         import app.models.review_snapshot  # noqa: F401  # register ReviewSnapshot metadata
         from app.models.account_config import AccountConfig
         from sqlalchemy import select, text
@@ -129,6 +131,7 @@ async def health_check():
 
 # 导入并注册路由
 from app.api.v1 import market, sector, stock, decision, account, task
+from app.api.v1 import system as system_api
 
 app.include_router(market.router, prefix=settings.api_v1_prefix, tags=["市场环境"])
 app.include_router(sector.router, prefix=settings.api_v1_prefix, tags=["板块扫描"])
@@ -136,6 +139,7 @@ app.include_router(stock.router, prefix=settings.api_v1_prefix, tags=["个股筛
 app.include_router(decision.router, prefix=settings.api_v1_prefix, tags=["决策分析"])
 app.include_router(account.router, prefix=settings.api_v1_prefix, tags=["账户适配"])
 app.include_router(task.router, prefix=settings.api_v1_prefix, tags=["任务管理"])
+app.include_router(system_api.router, prefix=settings.api_v1_prefix, tags=["系统设置"])
 
 # 兼容前端按业务分组的路径：/api/v1/market/* /api/v1/decision/* 等
 app.include_router(market.router, prefix=f"{settings.api_v1_prefix}/market", tags=["市场环境"])
@@ -144,6 +148,7 @@ app.include_router(stock.router, prefix=f"{settings.api_v1_prefix}/stock", tags=
 app.include_router(decision.router, prefix=f"{settings.api_v1_prefix}/decision", tags=["决策分析"])
 app.include_router(account.router, prefix=f"{settings.api_v1_prefix}/account", tags=["账户适配"])
 app.include_router(task.router, prefix=f"{settings.api_v1_prefix}/task", tags=["任务管理"])
+app.include_router(system_api.router, prefix=f"{settings.api_v1_prefix}/system", tags=["系统设置"])
 
 
 if __name__ == "__main__":

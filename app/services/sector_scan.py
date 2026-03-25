@@ -6,12 +6,18 @@ from loguru import logger
 from datetime import datetime, timedelta
 
 from app.models.schemas import (
+    MarketEnvOutput,
+    MarketEnvTag,
     SectorOutput,
     SectorMainlineTag,
     SectorContinuityTag,
     SectorTradeabilityTag,
+    SectorTierTag,
+    SectorActionHint,
+    SectorDimensionScores,
+    SectorLeaderStock,
     SectorScanResponse,
-    LeaderSectorResponse
+    LeaderSectorResponse,
 )
 from app.data.tushare_client import tushare_client
 
@@ -27,6 +33,11 @@ class SectorScanService:
     INDUSTRY_ONLY_MAINLINE_THRESHOLD = 1.0   # 仅行业均值时，适度放宽阈值
     INDUSTRY_ONLY_SUB_MAINLINE_THRESHOLD = 0.6
     INDUSTRY_ONLY_FOLLOW_THRESHOLD = 0.2
+    LIMITUP_INDUSTRY_MAINLINE_THRESHOLD = 1.8
+    LIMITUP_INDUSTRY_SUB_MAINLINE_THRESHOLD = 0.9
+    LIMITUP_INDUSTRY_FOLLOW_THRESHOLD = 0.3
+    ATTACK_THRESHOLD_DELTA = -0.2
+    DEFENSE_THRESHOLD_DELTA = 0.3
 
     # 连续性判定
     CONTINUITY_DAYS_STRONG = 3  # 连续 3 天以上强势
@@ -35,7 +46,12 @@ class SectorScanService:
     def __init__(self):
         self.client = tushare_client
 
-    def scan(self, trade_date: str, limit_output: bool = True) -> SectorScanResponse:
+    def scan(
+        self,
+        trade_date: str,
+        limit_output: bool = True,
+        market_env: Optional[MarketEnvOutput] = None,
+    ) -> SectorScanResponse:
         """
         扫描当日板块
 
@@ -56,13 +72,17 @@ class SectorScanService:
         )
         sector_data = sector_payload["rows"]
         sector_data_mode = sector_payload["sector_data_mode"]
-        threshold_profile = "relaxed" if sector_data_mode == "industry_only" else "strict"
+        threshold_profile = self._resolve_threshold_profile(
+            sector_data_mode,
+            market_env,
+        )
 
         # 排序并打分
         scored_sectors = self._score_sectors(
             sector_data,
             resolved_trade_date_fmt,
             data_mode=sector_data_mode,
+            market_env=market_env,
         )
 
         # 分类输出
@@ -91,6 +111,8 @@ class SectorScanService:
             trade_date=trade_date,
             resolved_trade_date=resolved_trade_date_fmt,
             sector_data_mode=sector_data_mode,
+            concept_data_status=sector_payload.get("concept_data_status"),
+            concept_data_message=sector_payload.get("concept_data_message"),
             threshold_profile=threshold_profile,
             mainline_sectors=mainline,
             sub_mainline_sectors=sub_mainline,
@@ -99,7 +121,11 @@ class SectorScanService:
             total_sectors=len(scored_sectors)
         )
 
-    def get_leader(self, trade_date: str) -> LeaderSectorResponse:
+    def get_leader(
+        self,
+        trade_date: str,
+        market_env: Optional[MarketEnvOutput] = None,
+    ) -> LeaderSectorResponse:
         """
         获取当日主线板块
 
@@ -109,7 +135,11 @@ class SectorScanService:
         Returns:
             最重要的主线板块
         """
-        scan_result = self.scan(trade_date, limit_output=False)
+        scan_result = self.scan(
+            trade_date,
+            limit_output=False,
+            market_env=market_env,
+        )
 
         if scan_result.mainline_sectors:
             leader = scan_result.mainline_sectors[0]
@@ -136,23 +166,42 @@ class SectorScanService:
             trade_date=trade_date,
             resolved_trade_date=scan_result.resolved_trade_date,
             sector_data_mode=scan_result.sector_data_mode,
-            sector=leader
+            threshold_profile=scan_result.threshold_profile,
+            concept_data_status=scan_result.concept_data_status,
+            concept_data_message=scan_result.concept_data_message,
+            sector=leader,
+            leader_stocks=self._pick_leader_stocks(trade_date, leader),
         )
 
     def _get_sector_data(self, trade_date: str) -> Dict[str, object]:
         """
-        获取板块数据：题材概念（涨停 theme 聚合）优先，申万行业均值补充，按 sector_name 去重。
+        获取板块数据：题材概念（涨停 theme 聚合）优先；
+        若无 theme，则退回涨停行业聚合；最后再用申万行业均值补充。
         """
         try:
             compact = trade_date.replace("-", "")
             industry_meta = self.client.get_sector_data_with_meta(compact)
             actual_trade_date = str(industry_meta.get("data_trade_date") or compact)
             industry_rows = industry_meta.get("rows") or []
-            concept_rows = self.client.get_concept_sectors_from_limitup(actual_trade_date)
+            concept_meta = self.client.get_concept_sectors_from_limitup_with_meta(actual_trade_date)
+            concept_rows = concept_meta.get("rows") or []
+            limitup_industry_meta = None
+            limitup_industry_rows: List[Dict] = []
+            if not concept_rows and concept_meta.get("status") == "missing_theme":
+                limitup_industry_meta = self.client.get_limitup_industry_sectors_with_meta(
+                    actual_trade_date
+                )
+                limitup_industry_rows = limitup_industry_meta.get("rows") or []
+
             concept_rows = [{**r, "sector_source_type": "concept"} for r in concept_rows]
+            limitup_industry_rows = [
+                {**r, "sector_source_type": "limitup_industry"}
+                for r in limitup_industry_rows
+            ]
             industry_rows = [{**r, "sector_source_type": "industry"} for r in industry_rows]
-            seen_names = {r.get("sector_name", "") for r in concept_rows}
-            merged: List[Dict] = list(concept_rows)
+            primary_rows = concept_rows or limitup_industry_rows
+            seen_names = {r.get("sector_name", "") for r in primary_rows}
+            merged: List[Dict] = list(primary_rows)
             for r in industry_rows:
                 name = r.get("sector_name", "")
                 if name and name not in seen_names:
@@ -163,16 +212,40 @@ class SectorScanService:
                     return {
                         "rows": self.client._mock_sector_data(),
                         "sector_data_mode": "mock",
+                        "concept_data_status": self._resolve_concept_status(
+                            concept_meta, limitup_industry_meta
+                        ),
+                        "concept_data_message": self._resolve_concept_message(
+                            concept_meta, limitup_industry_meta
+                        ),
                         "data_trade_date": actual_trade_date,
                     }
                 return {
                     "rows": [],
                     "sector_data_mode": "empty",
+                    "concept_data_status": self._resolve_concept_status(
+                        concept_meta, limitup_industry_meta
+                    ),
+                    "concept_data_message": self._resolve_concept_message(
+                        concept_meta, limitup_industry_meta
+                    ),
                     "data_trade_date": actual_trade_date,
                 }
+            if concept_rows:
+                sector_data_mode = "hybrid"
+            elif limitup_industry_rows:
+                sector_data_mode = "limitup_industry_hybrid"
+            else:
+                sector_data_mode = "industry_only"
             return {
                 "rows": merged,
-                "sector_data_mode": "hybrid" if concept_rows else "industry_only",
+                "sector_data_mode": sector_data_mode,
+                "concept_data_status": self._resolve_concept_status(
+                    concept_meta, limitup_industry_meta
+                ),
+                "concept_data_message": self._resolve_concept_message(
+                    concept_meta, limitup_industry_meta
+                ),
                 "data_trade_date": actual_trade_date,
             }
         except Exception as e:
@@ -180,14 +253,254 @@ class SectorScanService:
             return {
                 "rows": self.client._mock_sector_data(),
                 "sector_data_mode": "mock",
+                "concept_data_status": "error",
+                "concept_data_message": f"板块扫描降级为 mock：{e}",
                 "data_trade_date": compact,
             }
+
+    def _resolve_concept_status(
+        self,
+        concept_meta: Dict[str, object],
+        limitup_industry_meta: Optional[Dict[str, object]] = None,
+    ) -> Optional[str]:
+        """汇总题材/涨停行业聚合状态，供前端展示。"""
+        if concept_meta.get("status") == "ok":
+            return "ok"
+        if limitup_industry_meta and limitup_industry_meta.get("status") == "ok":
+            return "limitup_industry_ok"
+        return str(concept_meta.get("status") or "")
+
+    def _resolve_concept_message(
+        self,
+        concept_meta: Dict[str, object],
+        limitup_industry_meta: Optional[Dict[str, object]] = None,
+    ) -> Optional[str]:
+        """汇总题材/涨停行业聚合说明，供前端展示。"""
+        if concept_meta.get("status") == "ok":
+            return str(concept_meta.get("message") or "")
+        if limitup_industry_meta and limitup_industry_meta.get("status") == "ok":
+            return "涨停列表未提供 theme 字段，已改为按涨停 industry 字段聚合，并用行业均值补充。"
+        return str(concept_meta.get("message") or "")
+
+    def _resolve_threshold_profile(
+        self,
+        data_mode: str,
+        market_env: Optional[MarketEnvOutput] = None,
+    ) -> str:
+        """根据口径与市场环境返回当前阈值档位。"""
+        env_tag = market_env.market_env_tag if market_env else None
+        if env_tag == MarketEnvTag.DEFENSE:
+            return "defensive"
+        if env_tag == MarketEnvTag.ATTACK and data_mode != "industry_only":
+            return "attack"
+        if data_mode == "industry_only":
+            return "relaxed"
+        return "strict"
+
+    def _build_threshold_config(
+        self,
+        data_mode: str,
+        market_env: Optional[MarketEnvOutput] = None,
+    ) -> Dict[str, float]:
+        """按板块口径与市场环境生成主线判定阈值。"""
+        if data_mode == "industry_only":
+            config = {
+                "mainline_threshold": self.INDUSTRY_ONLY_MAINLINE_THRESHOLD,
+                "sub_mainline_threshold": self.INDUSTRY_ONLY_SUB_MAINLINE_THRESHOLD,
+                "follow_threshold": self.INDUSTRY_ONLY_FOLLOW_THRESHOLD,
+                "mainline_score": 65.0,
+                "sub_mainline_score": 45.0,
+            }
+        elif data_mode == "limitup_industry_hybrid":
+            config = {
+                "mainline_threshold": self.LIMITUP_INDUSTRY_MAINLINE_THRESHOLD,
+                "sub_mainline_threshold": self.LIMITUP_INDUSTRY_SUB_MAINLINE_THRESHOLD,
+                "follow_threshold": self.LIMITUP_INDUSTRY_FOLLOW_THRESHOLD,
+                "mainline_score": 65.0,
+                "sub_mainline_score": 45.0,
+            }
+        else:
+            config = {
+                "mainline_threshold": self.MAINLINE_CHANGE_THRESHOLD,
+                "sub_mainline_threshold": self.SUB_MAINLINE_THRESHOLD,
+                "follow_threshold": self.FOLLOW_THRESHOLD,
+                "mainline_score": 70.0,
+                "sub_mainline_score": 50.0,
+            }
+
+        env_tag = market_env.market_env_tag if market_env else None
+        if env_tag == MarketEnvTag.ATTACK:
+            config["mainline_threshold"] = max(
+                0.3,
+                config["mainline_threshold"] + self.ATTACK_THRESHOLD_DELTA,
+            )
+            config["sub_mainline_threshold"] = max(
+                0.2,
+                config["sub_mainline_threshold"] + self.ATTACK_THRESHOLD_DELTA,
+            )
+            config["follow_threshold"] = max(
+                0.0,
+                config["follow_threshold"] + self.ATTACK_THRESHOLD_DELTA / 2,
+            )
+            config["mainline_score"] = max(55.0, config["mainline_score"] - 5)
+            config["sub_mainline_score"] = max(40.0, config["sub_mainline_score"] - 5)
+        elif env_tag == MarketEnvTag.DEFENSE:
+            config["mainline_threshold"] += self.DEFENSE_THRESHOLD_DELTA
+            config["sub_mainline_threshold"] += self.DEFENSE_THRESHOLD_DELTA / 2
+            config["follow_threshold"] += self.DEFENSE_THRESHOLD_DELTA / 3
+            config["mainline_score"] += 5
+            config["sub_mainline_score"] += 5
+
+        return config
+
+    def _pick_leader_stocks(
+        self,
+        trade_date: str,
+        sector: SectorOutput,
+        count: int = 3,
+    ) -> List[SectorLeaderStock]:
+        """为主线板块挑选 1-3 只风向标个股。"""
+        compact_trade_date = trade_date.replace("-", "")
+        try:
+            if sector.sector_source_type == "concept":
+                payload = self.client.get_expanded_stock_list_with_meta(
+                    compact_trade_date,
+                    top_gainers=150,
+                )
+                rows = payload.get("rows") or []
+                matched = [
+                    row for row in rows
+                    if str(row.get("sector_name") or "") == sector.sector_name
+                ]
+                matched.sort(
+                    key=lambda row: (
+                        "涨停入选" in str(row.get("candidate_source_tag") or ""),
+                        float(row.get("amount") or 0),
+                        float(row.get("change_pct") or 0),
+                    ),
+                    reverse=True,
+                )
+                return [
+                    SectorLeaderStock(
+                        ts_code=str(row.get("ts_code") or ""),
+                        stock_name=str(row.get("stock_name") or row.get("ts_code") or ""),
+                        change_pct=round(float(row.get("change_pct") or 0), 2),
+                        amount=round(float(row.get("amount") or 0), 2),
+                        candidate_source_tag=row.get("candidate_source_tag"),
+                        leader_reason="题材辨识度高，且在候选池中居前",
+                        quote_time=row.get("quote_time"),
+                        data_source=row.get("data_source"),
+                    )
+                    for row in matched[:count]
+                    if row.get("ts_code")
+                ]
+
+            if sector.sector_source_type == "limitup_industry" and getattr(
+                self.client,
+                "pro",
+                None,
+            ):
+                effective_trade_date = self.client._resolve_trade_date(
+                    compact_trade_date,
+                )
+                df_up = self.client.pro.limit_list_d(
+                    trade_date=effective_trade_date,
+                    limit_type="U",
+                )
+                if df_up is not None and not df_up.empty:
+                    work = df_up.copy()
+                    work = work[
+                        work["industry"].fillna("").astype(str).str.strip()
+                        == sector.sector_name
+                    ]
+                    if not work.empty:
+                        work["pct_chg"] = work["pct_chg"].fillna(0)
+                        work["amount"] = work["amount"].fillna(0)
+                        work["open_times"] = work["open_times"].fillna(99)
+                        work = work.sort_values(
+                            ["open_times", "amount", "pct_chg"],
+                            ascending=[True, False, False],
+                        )
+                        return [
+                            SectorLeaderStock(
+                                ts_code=str(row.get("ts_code") or ""),
+                                stock_name=str(
+                                    row.get("name") or row.get("ts_code") or ""
+                                ),
+                                change_pct=round(
+                                    float(row.get("pct_chg") or 0),
+                                    2,
+                                ),
+                                amount=round(float(row.get("amount") or 0), 2),
+                                candidate_source_tag="涨停前排",
+                                leader_reason="涨停行业前排，炸板次数更少且成交额居前",
+                                data_source="limit_list_d",
+                            )
+                            for _, row in work.head(count).iterrows()
+                            if row.get("ts_code")
+                        ]
+
+            payload = self.client._fetch_recent_stock_daily_df(compact_trade_date)
+            df = payload.get("df")
+            if df is None or df.empty:
+                return []
+
+            stock_meta_map = self.client._get_stock_basic_snapshot_map()
+            daily_basic_df = None
+            daily_basic = getattr(getattr(self.client, "pro", None), "daily_basic", None)
+            if callable(daily_basic):
+                data_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
+                try:
+                    daily_basic_df = daily_basic(
+                        trade_date=data_trade_date,
+                        fields="ts_code,turnover_rate,volume_ratio",
+                    )
+                except TypeError:
+                    daily_basic_df = daily_basic(trade_date=data_trade_date)
+
+            work = self.client._build_daily_stock_source_df(
+                df,
+                stock_meta_map,
+                daily_basic_df=daily_basic_df,
+            )
+            if work is None or work.empty:
+                return []
+
+            work = work[work["industry"].fillna("") == sector.sector_name]
+            if work.empty:
+                return []
+
+            work["pct_change"] = work["pct_change"].fillna(0)
+            work["amount"] = work["amount"].fillna(0)
+            work["turnover_rate"] = work["turnover_rate"].fillna(0)
+            work = work.sort_values(
+                ["pct_change", "amount", "turnover_rate"],
+                ascending=False,
+            )
+
+            return [
+                SectorLeaderStock(
+                    ts_code=str(row.get("ts_code") or ""),
+                    stock_name=str(row.get("stock_name") or row.get("ts_code") or ""),
+                    change_pct=round(float(row.get("pct_change") or 0), 2),
+                    amount=round(float(row.get("amount") or 0), 2),
+                    candidate_source_tag="行业前排",
+                    leader_reason="行业前排股，涨幅与成交额居前",
+                    data_source="daily",
+                )
+                for _, row in work.head(count).iterrows()
+                if row.get("ts_code")
+            ]
+        except Exception as e:
+            logger.warning(f"挑选板块风向标失败: {e}")
+            return []
 
     def _score_sectors(
         self,
         sectors: List[Dict],
         trade_date: Optional[str] = None,
         data_mode: str = "hybrid",
+        market_env: Optional[MarketEnvOutput] = None,
     ) -> List[SectorOutput]:
         """
         对板块进行评分和分类
@@ -223,7 +536,12 @@ class SectorScanService:
             strength_score = self._calculate_strength_score(change_pct, source_rank, source_total)
 
             # 确定主线标签
-            mainline_tag = self._determine_mainline_tag(change_pct, strength_score, data_mode)
+            mainline_tag = self._determine_mainline_tag(
+                change_pct,
+                strength_score,
+                data_mode,
+                market_env=market_env,
+            )
 
             # 确定连续性标签（简化版，实际需要历史数据）
             continuity_days = continuity_days_map.get(
@@ -234,7 +552,31 @@ class SectorScanService:
 
             # 确定交易性标签
             tradeability_tag = self._determine_tradeability_tag(
-                mainline_tag, continuity_tag, change_pct
+                mainline_tag,
+                continuity_tag,
+                change_pct,
+                market_env=market_env,
+            )
+            dimension_scores = self._calculate_dimension_scores(
+                sector=sector,
+                source_rank=source_rank,
+                source_total=source_total,
+                continuity_days=continuity_days,
+                continuity_tag=continuity_tag,
+                mainline_tag=mainline_tag,
+                tradeability_tag=tradeability_tag,
+                market_env=market_env,
+            )
+            sector_tier = self._determine_sector_tier(
+                dimension_scores=dimension_scores,
+                mainline_tag=mainline_tag,
+            )
+            action_hint = self._determine_action_hint(
+                sector_tier=sector_tier,
+                tradeability_tag=tradeability_tag,
+                continuity_tag=continuity_tag,
+                market_env=market_env,
+                change_pct=change_pct,
             )
 
             reason_tags = self._build_sector_reason_tags(
@@ -246,6 +588,9 @@ class SectorScanService:
                 continuity_days=continuity_days,
                 mainline_tag=mainline_tag,
                 tradeability_tag=tradeability_tag,
+                dimension_scores=dimension_scores,
+                sector_tier=sector_tier,
+                action_hint=action_hint,
                 data_mode=data_mode,
             )
 
@@ -268,6 +613,14 @@ class SectorScanService:
                 sector_stock_count=sector.get("stock_count"),
                 sector_reason_tags=reason_tags,
                 sector_comment=comment,
+                sector_dimension_scores=dimension_scores,
+                sector_tier=sector_tier,
+                sector_action_hint=action_hint,
+                sector_summary_reason=self._build_sector_summary_reason(
+                    dimension_scores=dimension_scores,
+                    sector_tier=sector_tier,
+                    action_hint=action_hint,
+                ),
                 sector_news_summary=sector.get("sector_news_summary"),
                 sector_falsification=sector.get("sector_falsification")
             )
@@ -305,7 +658,7 @@ class SectorScanService:
             grouped.setdefault(source_type, []).append(sector)
 
         ranked: List[Dict] = []
-        for source_type in ["concept", "industry", "mock"]:
+        for source_type in ["concept", "limitup_industry", "industry", "mock"]:
             rows = grouped.pop(source_type, [])
             rows.sort(
                 key=lambda s: (
@@ -355,21 +708,20 @@ class SectorScanService:
         change_pct: float,
         strength_score: float,
         data_mode: str = "hybrid",
+        market_env: Optional[MarketEnvOutput] = None,
     ) -> SectorMainlineTag:
         """确定板块主线标签"""
-        if data_mode == "industry_only":
-            mainline_threshold = self.INDUSTRY_ONLY_MAINLINE_THRESHOLD
-            sub_mainline_threshold = self.INDUSTRY_ONLY_SUB_MAINLINE_THRESHOLD
-            follow_threshold = self.INDUSTRY_ONLY_FOLLOW_THRESHOLD
-        else:
-            mainline_threshold = self.MAINLINE_CHANGE_THRESHOLD
-            sub_mainline_threshold = self.SUB_MAINLINE_THRESHOLD
-            follow_threshold = self.FOLLOW_THRESHOLD
+        config = self._build_threshold_config(data_mode, market_env)
+        mainline_threshold = config["mainline_threshold"]
+        sub_mainline_threshold = config["sub_mainline_threshold"]
+        follow_threshold = config["follow_threshold"]
+        mainline_score = config["mainline_score"]
+        sub_mainline_score = config["sub_mainline_score"]
 
         # 涨幅和强度都高才是主线
-        if change_pct >= mainline_threshold and strength_score >= 70:
+        if change_pct >= mainline_threshold and strength_score >= mainline_score:
             return SectorMainlineTag.MAINLINE
-        elif change_pct >= sub_mainline_threshold and strength_score >= 50:
+        elif change_pct >= sub_mainline_threshold and strength_score >= sub_mainline_score:
             return SectorMainlineTag.SUB_MAINLINE
         elif change_pct >= follow_threshold:
             return SectorMainlineTag.FOLLOW
@@ -405,6 +757,7 @@ class SectorScanService:
         lookback_dates = self._get_recent_effective_trade_dates(trade_date, count=5)
         industry_history: List[Dict[str, float]] = []
         concept_history: List[Dict[str, float]] = []
+        limitup_industry_history: List[Dict[str, float]] = []
         for d in lookback_dates:
             try:
                 industry_rows = self.client.get_sector_data(d)
@@ -422,10 +775,23 @@ class SectorScanService:
                 })
             except Exception:
                 concept_history.append({})
+            try:
+                limitup_industry_rows = self.client.get_limitup_industry_sectors(d)
+                limitup_industry_history.append({
+                    r.get("sector_name", ""): float(r.get("sector_change_pct", 0) or 0)
+                    for r in limitup_industry_rows
+                })
+            except Exception:
+                limitup_industry_history.append({})
 
         for source_type, name in list(continuity_map.keys()):
             count = 0
-            history = concept_history if source_type == "concept" else industry_history
+            if source_type == "concept":
+                history = concept_history
+            elif source_type == "limitup_industry":
+                history = limitup_industry_history
+            else:
+                history = industry_history
             for day_map in history:
                 if day_map.get(name, -999) > 0:
                     count += 1
@@ -454,12 +820,21 @@ class SectorScanService:
         self,
         mainline_tag: SectorMainlineTag,
         continuity_tag: SectorContinuityTag,
-        change_pct: float
+        change_pct: float,
+        market_env: Optional[MarketEnvOutput] = None,
     ) -> SectorTradeabilityTag:
         """确定板块交易性标签"""
+        env_tag = market_env.market_env_tag if market_env else None
         # 主线且可持续，可以交易
         if mainline_tag in [SectorMainlineTag.MAINLINE, SectorMainlineTag.SUB_MAINLINE]:
             if continuity_tag == SectorContinuityTag.SUSTAINABLE:
+                return SectorTradeabilityTag.TRADABLE
+            elif (
+                continuity_tag == SectorContinuityTag.OBSERVABLE
+                and env_tag == MarketEnvTag.ATTACK
+                and mainline_tag == SectorMainlineTag.MAINLINE
+                and change_pct <= 6.5
+            ):
                 return SectorTradeabilityTag.TRADABLE
             elif continuity_tag == SectorContinuityTag.OBSERVABLE:
                 return SectorTradeabilityTag.CAUTION
@@ -467,12 +842,179 @@ class SectorScanService:
         # 跟风板块谨慎
         if mainline_tag == SectorMainlineTag.FOLLOW:
             # 涨幅过大可能是末端
-            if change_pct > 5:
+            if change_pct > 5 or env_tag == MarketEnvTag.DEFENSE:
                 return SectorTradeabilityTag.NOT_RECOMMENDED
             return SectorTradeabilityTag.CAUTION
 
         # 杂毛不建议
         return SectorTradeabilityTag.NOT_RECOMMENDED
+
+    def _turnover_score(self, turnover: float) -> float:
+        """将成交额映射为 0-100 分。"""
+        if turnover >= 500:
+            return 100.0
+        if turnover >= 300:
+            return 85.0
+        if turnover >= 150:
+            return 70.0
+        if turnover >= 50:
+            return 55.0
+        if turnover >= 20:
+            return 40.0
+        return 20.0
+
+    def _calculate_dimension_scores(
+        self,
+        sector: Dict,
+        source_rank: int,
+        source_total: int,
+        continuity_days: int,
+        continuity_tag: SectorContinuityTag,
+        mainline_tag: SectorMainlineTag,
+        tradeability_tag: SectorTradeabilityTag,
+        market_env: Optional[MarketEnvOutput] = None,
+    ) -> SectorDimensionScores:
+        """基于现有字段生成五维评分。"""
+        stock_count = int(sector.get("stock_count", 0) or 0)
+        turnover = float(sector.get("sector_turnover", 0) or 0)
+        change_pct = float(sector.get("sector_change_pct", 0) or 0)
+        percentile = 1.0
+        if source_total > 1:
+            percentile = 1 - (source_rank / max(source_total - 1, 1))
+
+        linkage_score = min(
+            100.0,
+            min(stock_count, 10) / 10 * 55
+            + percentile * 25
+            + max(0.0, min(100.0, (change_pct + 1.0) / 4.5 * 100)) * 0.2,
+        )
+        capital_score = min(
+            100.0,
+            self._turnover_score(turnover) * 0.75 + percentile * 25,
+        )
+
+        continuity_score = 35.0
+        if continuity_days >= self.CONTINUITY_DAYS_STRONG:
+            continuity_score = 90.0
+        elif continuity_days >= self.CONTINUITY_DAYS_MODERATE:
+            continuity_score = 75.0
+        elif continuity_days == 1:
+            continuity_score = 55.0
+        elif continuity_tag == SectorContinuityTag.OBSERVABLE:
+            continuity_score = 45.0
+
+        resilience_score = (
+            continuity_score * 0.45
+            + linkage_score * 0.3
+            + capital_score * 0.25
+        )
+        if change_pct > 8:
+            resilience_score -= 10
+        if market_env and market_env.market_env_tag == MarketEnvTag.DEFENSE:
+            resilience_score -= 5
+        resilience_score = max(0.0, min(100.0, resilience_score))
+
+        tradeability_score = {
+            SectorTradeabilityTag.TRADABLE: 85.0,
+            SectorTradeabilityTag.CAUTION: 60.0,
+            SectorTradeabilityTag.NOT_RECOMMENDED: 25.0,
+        }[tradeability_tag]
+        if 2.0 <= change_pct <= 6.5:
+            tradeability_score += 10
+        if change_pct > 8:
+            tradeability_score -= 15
+        if mainline_tag == SectorMainlineTag.MAINLINE:
+            tradeability_score += 5
+        tradeability_score = max(0.0, min(100.0, tradeability_score))
+
+        return SectorDimensionScores(
+            linkage_score=round(linkage_score, 1),
+            capital_score=round(capital_score, 1),
+            continuity_score=round(continuity_score, 1),
+            resilience_score=round(resilience_score, 1),
+            tradeability_score=round(tradeability_score, 1),
+        )
+
+    def _determine_sector_tier(
+        self,
+        dimension_scores: SectorDimensionScores,
+        mainline_tag: SectorMainlineTag,
+    ) -> SectorTierTag:
+        """将五维评分映射为 A/B/C。"""
+        if (
+            mainline_tag in [SectorMainlineTag.MAINLINE, SectorMainlineTag.SUB_MAINLINE]
+            and dimension_scores.linkage_score >= 65
+            and dimension_scores.capital_score >= 60
+            and dimension_scores.continuity_score >= 55
+            and dimension_scores.resilience_score >= 60
+            and dimension_scores.tradeability_score >= 65
+        ):
+            return SectorTierTag.A
+
+        avg_score = (
+            dimension_scores.linkage_score
+            + dimension_scores.capital_score
+            + dimension_scores.continuity_score
+            + dimension_scores.resilience_score
+            + dimension_scores.tradeability_score
+        ) / 5
+        if mainline_tag != SectorMainlineTag.TRASH and avg_score >= 50:
+            return SectorTierTag.B
+        return SectorTierTag.C
+
+    def _determine_action_hint(
+        self,
+        sector_tier: SectorTierTag,
+        tradeability_tag: SectorTradeabilityTag,
+        continuity_tag: SectorContinuityTag,
+        market_env: Optional[MarketEnvOutput],
+        change_pct: float,
+    ) -> SectorActionHint:
+        """根据分级与交易性映射为执行建议。"""
+        if (
+            sector_tier == SectorTierTag.A
+            and tradeability_tag == SectorTradeabilityTag.TRADABLE
+            and not (
+                market_env
+                and market_env.market_env_tag == MarketEnvTag.DEFENSE
+                and continuity_tag != SectorContinuityTag.SUSTAINABLE
+            )
+            and change_pct <= 7.0
+        ):
+            return SectorActionHint.EXECUTABLE
+        if sector_tier in [SectorTierTag.A, SectorTierTag.B]:
+            return SectorActionHint.OBSERVE
+        return SectorActionHint.AVOID
+
+    def _build_sector_summary_reason(
+        self,
+        dimension_scores: SectorDimensionScores,
+        sector_tier: SectorTierTag,
+        action_hint: SectorActionHint,
+    ) -> str:
+        """输出一句话主线总结，便于前端流程头部展示。"""
+        reasons: List[str] = []
+        if dimension_scores.linkage_score >= 65:
+            reasons.append("联动强")
+        elif dimension_scores.linkage_score >= 50:
+            reasons.append("联动尚可")
+
+        if dimension_scores.capital_score >= 65:
+            reasons.append("资金承接强")
+        elif dimension_scores.capital_score >= 50:
+            reasons.append("资金介入中等")
+
+        if dimension_scores.continuity_score >= 70:
+            reasons.append("持续性较好")
+        elif dimension_scores.continuity_score >= 50:
+            reasons.append("延续性待确认")
+
+        if dimension_scores.resilience_score >= 60:
+            reasons.append("抗分化较强")
+
+        reasons.append(f"{sector_tier.value}类")
+        reasons.append(action_hint.value)
+        return "，".join(reasons[:5])
 
     def _generate_sector_comment(
         self,
@@ -520,12 +1062,20 @@ class SectorScanService:
         continuity_days: int,
         mainline_tag: SectorMainlineTag,
         tradeability_tag: SectorTradeabilityTag,
+        dimension_scores: SectorDimensionScores,
+        sector_tier: SectorTierTag,
+        action_hint: SectorActionHint,
         data_mode: str,
     ) -> List[str]:
         """构建结构化解释标签，便于前端展示与复盘。"""
         tags: List[str] = []
 
-        tags.append("题材口径" if source_type == "concept" else "行业口径")
+        if source_type == "concept":
+            tags.append("题材口径")
+        elif source_type == "limitup_industry":
+            tags.append("涨停行业口径")
+        else:
+            tags.append("行业口径")
         tags.append(f"涨幅{float(sector.get('sector_change_pct', 0) or 0):.2f}%")
         tags.append(f"评分{strength_score:.1f}")
 
@@ -563,6 +1113,16 @@ class SectorScanService:
         elif mainline_tag == SectorMainlineTag.SUB_MAINLINE:
             tags.append("次主线候选")
 
+        if dimension_scores.linkage_score >= 65:
+            tags.append("联动强")
+        elif dimension_scores.linkage_score >= 50:
+            tags.append("联动尚可")
+
+        if dimension_scores.capital_score >= 65:
+            tags.append("资金强")
+        elif dimension_scores.capital_score >= 50:
+            tags.append("资金中等")
+
         if tradeability_tag == SectorTradeabilityTag.TRADABLE:
             tags.append("可交易")
         elif tradeability_tag == SectorTradeabilityTag.CAUTION:
@@ -570,6 +1130,8 @@ class SectorScanService:
         else:
             tags.append("暂不参与")
 
+        tags.append(f"{sector_tier.value}类")
+        tags.append(action_hint.value)
         return tags
 
 

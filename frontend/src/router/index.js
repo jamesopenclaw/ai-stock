@@ -54,6 +54,12 @@ const routes = [
     name: 'SystemSettings',
     meta: { title: '系统设置' },
     component: () => import('../views/SystemSettings.vue')
+  },
+  {
+    path: '/llm-logs',
+    name: 'LlmLogs',
+    meta: { title: 'LLM调用记录' },
+    component: () => import('../views/LlmLogs.vue')
   }
 ]
 

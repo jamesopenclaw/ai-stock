@@ -43,6 +43,20 @@ class SectorTradeabilityTag(str, Enum):
     NOT_RECOMMENDED = "不建议"  # 不建议
 
 
+class SectorTierTag(str, Enum):
+    """板块交易分级"""
+    A = "A"
+    B = "B"
+    C = "C"
+
+
+class SectorActionHint(str, Enum):
+    """板块执行建议"""
+    EXECUTABLE = "可执行"
+    OBSERVE = "只观察"
+    AVOID = "不碰"
+
+
 # ========== 市场环境相关 ==========
 
 class MarketEnvInput(BaseModel):
@@ -82,6 +96,8 @@ class IndexQuote(BaseModel):
     volume: float
     amount: float
     trade_date: str
+    quote_time: Optional[str] = None
+    data_source: Optional[str] = None
 
 
 # ========== 板块相关 ==========
@@ -95,6 +111,27 @@ class SectorInput(BaseModel):
     sector_continuity_days: Optional[int] = Field(None, description="连续活跃天数")
     sector_news_summary: Optional[str] = Field(None, description="板块催化摘要")
     sector_falsification: Optional[str] = Field(None, description="板块证伪线索")
+
+
+class SectorDimensionScores(BaseModel):
+    """板块五维评分"""
+    linkage_score: float = Field(0.0, description="联动度")
+    capital_score: float = Field(0.0, description="资金强度")
+    continuity_score: float = Field(0.0, description="持续性")
+    resilience_score: float = Field(0.0, description="抗分化能力")
+    tradeability_score: float = Field(0.0, description="可交易性")
+
+
+class SectorLeaderStock(BaseModel):
+    """板块风向标个股"""
+    ts_code: str
+    stock_name: str
+    change_pct: float
+    amount: float = Field(0.0, description="成交额(万元)")
+    candidate_source_tag: Optional[str] = Field(None, description="候选来源")
+    leader_reason: Optional[str] = Field(None, description="风向标说明")
+    quote_time: Optional[str] = None
+    data_source: Optional[str] = None
 
 
 class SectorOutput(BaseModel):
@@ -112,6 +149,16 @@ class SectorOutput(BaseModel):
     sector_stock_count: Optional[int] = Field(None, description="板块成分股数量")
     sector_reason_tags: List[str] = Field(default_factory=list, description="板块判定原因")
     sector_comment: str = ""
+    sector_dimension_scores: Optional[SectorDimensionScores] = Field(
+        None,
+        description="五维评分",
+    )
+    sector_tier: Optional[SectorTierTag] = Field(None, description="A/B/C 分级")
+    sector_action_hint: Optional[SectorActionHint] = Field(
+        None,
+        description="执行建议",
+    )
+    sector_summary_reason: Optional[str] = Field(None, description="主线总结")
     sector_news_summary: Optional[str] = None
     sector_falsification: Optional[str] = None
 
@@ -126,6 +173,8 @@ class SectorScanResponse(BaseModel):
     trade_date: str
     resolved_trade_date: Optional[str] = Field(None, description="实际使用的交易日")
     sector_data_mode: Optional[str] = Field(None, description="板块数据口径")
+    concept_data_status: Optional[str] = Field(None, description="题材聚合状态")
+    concept_data_message: Optional[str] = Field(None, description="题材聚合说明")
     threshold_profile: Optional[str] = Field(None, description="阈值档位")
     mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="主线板块")
     sub_mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="次主线板块")
@@ -139,7 +188,14 @@ class LeaderSectorResponse(BaseModel):
     trade_date: str
     resolved_trade_date: Optional[str] = Field(None, description="实际使用的交易日")
     sector_data_mode: Optional[str] = Field(None, description="板块数据口径")
+    threshold_profile: Optional[str] = Field(None, description="阈值档位")
+    concept_data_status: Optional[str] = Field(None, description="题材聚合状态")
+    concept_data_message: Optional[str] = Field(None, description="题材聚合说明")
     sector: SectorOutput
+    leader_stocks: List[SectorLeaderStock] = Field(
+        default_factory=list,
+        description="板块风向标",
+    )
 
 
 # ========== 个股相关 ==========
@@ -175,9 +231,53 @@ class StockCoreTag(str, Enum):
 class StockPoolTag(str, Enum):
     """个股所属池"""
     MARKET_WATCH = "市场最强观察池"
+    TREND_RECOGNITION = "趋势辨识度观察池"
     ACCOUNT_EXECUTABLE = "账户可参与池"
     HOLDING_PROCESS = "持仓处理池"
     NOT_IN_POOL = "不入池"
+
+
+class SectorProfileTag(str, Enum):
+    """板块属性画像"""
+    A_MAINLINE = "A类主线"
+    B_SUB_MAINLINE = "B类次主线"
+    NON_MAINSTREAM = "非主流方向"
+
+
+class StockRoleTag(str, Enum):
+    """个股地位画像"""
+    LEADER = "龙头"
+    FRONT = "前排"
+    MID_CAPTAIN = "中军"
+    FOLLOW = "跟风"
+    TRASH = "杂毛"
+
+
+class DayStrengthTag(str, Enum):
+    """当日强度画像"""
+    LIMIT_STRONG = "涨停级别强"
+    TREND_STRONG = "趋势大阳强"
+    REBOUND_STRONG = "分歧转强"
+    FOLLOW_RISE = "只是跟涨"
+    SPIKE_FADE = "冲高回落"
+
+
+class StructureStateTag(str, Enum):
+    """结构状态画像"""
+    START = "启动"
+    ACCELERATE = "加速"
+    DIVERGENCE = "分歧"
+    REPAIR = "修复"
+    LATE_STAGE = "高位末端"
+
+
+class NextTradeabilityTag(str, Enum):
+    """次日可交易性画像"""
+    LOW_SUCK = "有低吸点"
+    RETRACE_CONFIRM = "有回踩确认点"
+    BREAKTHROUGH = "有突破点"
+    CHASE_ONLY = "只能追高"
+    NO_GOOD_ENTRY = "基本没法做"
 
 
 class StockInput(BaseModel):
@@ -199,6 +299,11 @@ class StockInput(BaseModel):
     news_catalyst: Optional[str] = Field(None, description="消息催化")
     news_risk: Optional[str] = Field(None, description="风险/证伪信息")
     candidate_source_tag: str = Field(default="", description="候选来源标签")
+    volume: Optional[float] = Field(None, description="成交量")
+    avg_price: Optional[float] = Field(None, description="盘中均价/VWAP")
+    intraday_volume_ratio: Optional[float] = Field(None, description="盘中实时相对放量")
+    quote_time: Optional[str] = Field(None, description="行情时间")
+    data_source: Optional[str] = Field(None, description="行情来源")
 
 
 class StockOutput(BaseModel):
@@ -215,18 +320,32 @@ class StockOutput(BaseModel):
     vol_ratio: Optional[float] = None
     turnover_rate: float = 0.0
     stock_score: float = Field(0.0, description="综合评分")
+    account_entry_score: float = Field(0.0, description="账户执行优先级分")
     candidate_source_tag: str = Field(default="", description="候选来源标签")
     candidate_bucket_tag: str = Field(default="", description="候选分层标签")
+    volume: Optional[float] = None
+    avg_price: Optional[float] = None
+    intraday_volume_ratio: Optional[float] = None
+    quote_time: Optional[str] = Field(None, description="行情时间")
+    data_source: Optional[str] = Field(None, description="行情来源")
     # 评分标签
     stock_strength_tag: StockStrengthTag
     stock_continuity_tag: StockContinuityTag
     stock_tradeability_tag: StockTradeabilityTag
     stock_core_tag: StockCoreTag
     stock_pool_tag: StockPoolTag
+    sector_profile_tag: Optional[SectorProfileTag] = None
+    stock_role_tag: Optional[StockRoleTag] = None
+    day_strength_tag: Optional[DayStrengthTag] = None
+    structure_state_tag: Optional[StructureStateTag] = None
+    next_tradeability_tag: Optional[NextTradeabilityTag] = None
     # 证伪条件
     stock_falsification_cond: str = ""
     # 简评
     stock_comment: str = ""
+    why_this_pool: Optional[str] = None
+    not_other_pools: List[str] = Field(default_factory=list)
+    pool_decision_summary: Optional[str] = None
     # 持仓上下文（仅持仓处理池使用）
     holding_qty: Optional[int] = None
     cost_price: Optional[float] = None
@@ -258,6 +377,7 @@ class StockPoolsOutput(BaseModel):
     trade_date: str
     resolved_trade_date: Optional[str] = Field(None, description="实际使用的候选行情交易日")
     market_watch_pool: List[StockOutput] = Field(default_factory=list, description="市场最强观察池")
+    trend_recognition_pool: List[StockOutput] = Field(default_factory=list, description="趋势辨识度观察池")
     account_executable_pool: List[StockOutput] = Field(default_factory=list, description="账户可参与池")
     holding_process_pool: List[StockOutput] = Field(default_factory=list, description="持仓处理池")
     total_count: int
@@ -286,6 +406,8 @@ class BuyPointOutput(BaseModel):
     stock_name: str
     candidate_source_tag: str = Field(default="", description="候选来源标签")
     candidate_bucket_tag: str = Field(default="", description="候选分层标签")
+    stock_pool_tag: str = Field(default="", description="来源池标签")
+    pool_entry_reason: str = Field(default="", description="入池原因")
     # 买点信号
     buy_signal_tag: BuySignalTag
     buy_point_type: BuyPointType
@@ -295,6 +417,8 @@ class BuyPointOutput(BaseModel):
     buy_invalid_cond: str = Field(..., description="失效条件")
     buy_current_price: Optional[float] = Field(None, description="最新可用价格")
     buy_current_change_pct: Optional[float] = Field(None, description="最新涨跌幅")
+    buy_quote_time: Optional[str] = Field(None, description="行情时间")
+    buy_data_source: Optional[str] = Field(None, description="行情来源")
     buy_trigger_price: Optional[float] = Field(None, description="触发价格")
     buy_invalid_price: Optional[float] = Field(None, description="失效价格")
     buy_trigger_gap_pct: Optional[float] = Field(None, description="距触发价百分比")
@@ -322,6 +446,90 @@ class BuyPointResponse(BaseModel):
     observe_buy_points: List[BuyPointOutput] = Field(default_factory=list, description="观察候选")
     not_buy_points: List[BuyPointOutput] = Field(default_factory=list, description="不建议买")
     total_count: int
+
+
+class BuyPointSopBasicInfo(BaseModel):
+    """单股买点分析基础信息"""
+    ts_code: str
+    stock_name: str
+    sector_name: str
+    market_env_tag: str = ""
+    stable_market_env_tag: str = ""
+    realtime_market_env_tag: str = ""
+    buy_signal_tag: str = ""
+    buy_point_type: str = ""
+    candidate_bucket_tag: str = ""
+    quote_time: Optional[str] = None
+    data_source: Optional[str] = None
+
+
+class BuyPointSopAccountContext(BaseModel):
+    """账户语境"""
+    position_status: str = ""
+    same_direction_exposure: str = ""
+    current_use: str = ""
+    market_suitability: str = ""
+    account_conclusion: str = ""
+
+
+class BuyPointSopDailyJudgement(BaseModel):
+    """日线买点级别"""
+    current_stage: str = ""
+    buy_signal: str = ""
+    buy_point_level: str = ""
+    reason: str = ""
+    risk_items: List[str] = Field(default_factory=list)
+    reference_levels: List[str] = Field(default_factory=list)
+
+
+class BuyPointSopIntradayJudgement(BaseModel):
+    """分时执行判断"""
+    price_vs_avg_line: str = ""
+    intraday_structure: str = ""
+    volume_quality: str = ""
+    key_level_status: str = ""
+    conclusion: str = ""
+    note: str = ""
+
+
+class BuyPointSopOrderPlan(BaseModel):
+    """挂单计划"""
+    low_absorb_price: str = ""
+    breakout_price: str = ""
+    retrace_confirm_price: str = ""
+    give_up_price: str = ""
+    trigger_condition: str = ""
+    invalid_condition: str = ""
+    above_no_chase: str = ""
+    below_no_buy: str = ""
+
+
+class BuyPointSopPositionAdvice(BaseModel):
+    """仓位建议"""
+    suggestion: str = ""
+    reason: str = ""
+    invalidation_level: str = ""
+    invalidation_action: str = ""
+
+
+class BuyPointSopExecution(BaseModel):
+    """一句话执行"""
+    action: str = ""
+    reason: str = ""
+
+
+class BuyPointSopResponse(BaseModel):
+    """单股买点分析 SOP 响应"""
+    trade_date: str
+    resolved_trade_date: Optional[str] = None
+    stock_found_in_candidates: bool = False
+    basic_info: BuyPointSopBasicInfo
+    account_context: BuyPointSopAccountContext
+    daily_judgement: BuyPointSopDailyJudgement
+    intraday_judgement: BuyPointSopIntradayJudgement
+    order_plan: BuyPointSopOrderPlan
+    position_advice: BuyPointSopPositionAdvice
+    execution: BuyPointSopExecution
 
 
 # ========== 卖点相关 ==========
@@ -354,6 +562,8 @@ class SellPointOutput(BaseModel):
     ts_code: str
     stock_name: str
     market_price: Optional[float] = Field(None, description="当前价格")
+    quote_time: Optional[str] = Field(None, description="行情时间")
+    data_source: Optional[str] = Field(None, description="行情来源")
     cost_price: Optional[float] = Field(None, description="成本价")
     pnl_pct: Optional[float] = Field(None, description="浮盈亏比例")
     holding_qty: Optional[int] = Field(None, description="持仓数量")
@@ -384,6 +594,78 @@ class SellPointResponse(BaseModel):
     total_count: int
 
 
+class SellPointSopBasicInfo(BaseModel):
+    """单股卖点分析基础信息"""
+    ts_code: str
+    stock_name: str
+    market_env_tag: str = ""
+    stable_market_env_tag: str = ""
+    realtime_market_env_tag: str = ""
+    sell_signal_tag: str = ""
+    sell_point_type: str = ""
+    quote_time: Optional[str] = None
+    data_source: Optional[str] = None
+
+
+class SellPointSopAccountContext(BaseModel):
+    """卖点账户语境"""
+    position_status: str = ""
+    pnl_status: str = ""
+    role: str = ""
+    priority: str = ""
+    context_summary: str = ""
+
+
+class SellPointSopDailyJudgement(BaseModel):
+    """日线卖点级别"""
+    current_stage: str = ""
+    sell_signal: str = ""
+    sell_point_level: str = ""
+    reason: str = ""
+
+
+class SellPointSopIntradayJudgement(BaseModel):
+    """分时执行判断"""
+    price_vs_avg_line: str = ""
+    intraday_structure: str = ""
+    volume_quality: str = ""
+    conclusion: str = ""
+    note: str = ""
+
+
+class SellPointSopOrderPlan(BaseModel):
+    """卖点挂单计划"""
+    proactive_take_profit_price: str = ""
+    rebound_sell_price: str = ""
+    break_stop_price: str = ""
+    observe_level: str = ""
+    take_profit_condition: str = ""
+    rebound_condition: str = ""
+    stop_condition: str = ""
+    hold_condition: str = ""
+
+
+class SellPointSopExecution(BaseModel):
+    """卖点一句话执行"""
+    action: str = ""
+    partial_plan: str = ""
+    key_level: str = ""
+    reason: str = ""
+
+
+class SellPointSopResponse(BaseModel):
+    """单股卖点 SOP 响应"""
+    trade_date: str
+    resolved_trade_date: Optional[str] = None
+    stock_found_in_holdings: bool = False
+    basic_info: SellPointSopBasicInfo
+    account_context: SellPointSopAccountContext
+    daily_judgement: SellPointSopDailyJudgement
+    intraday_judgement: SellPointSopIntradayJudgement
+    order_plan: SellPointSopOrderPlan
+    execution: SellPointSopExecution
+
+
 # ========== 账户相关 ==========
 
 class AccountPosition(BaseModel):
@@ -403,6 +685,9 @@ class AccountPosition(BaseModel):
     holding_days: int = 0
     pnl_amount: float = 0.0
     today_pnl_amount: float = 0.0
+    avg_price: Optional[float] = None
+    quote_time: Optional[str] = None
+    data_source: Optional[str] = None
 
 
 class AccountInput(BaseModel):
@@ -508,6 +793,205 @@ class LlmSellSummary(BaseModel):
     notes: List[LlmSellNote] = Field(default_factory=list)
 
 
+class StockCheckupTarget(str, Enum):
+    """个股体检目标"""
+    OBSERVE = "观察型"
+    HOLDING = "持仓型"
+    TRADING = "交易型"
+
+
+class StockCheckupBasicInfo(BaseModel):
+    """个股体检基础信息"""
+    ts_code: str
+    stock_name: str
+    sector_name: str
+    board: str = ""
+    special_tags: List[str] = Field(default_factory=list)
+    data_source: Optional[str] = None
+    quote_time: Optional[str] = None
+
+
+class StockCheckupMarketContext(BaseModel):
+    """体检中的市场环境结论"""
+    market_env_tag: str
+    market_phase: str = ""
+    market_comment: str = ""
+    stock_market_alignment: str = ""
+    tolerance_comment: str = ""
+
+
+class StockCheckupDirectionPosition(BaseModel):
+    """方向与地位"""
+    direction_name: str = ""
+    sector_level: str = ""
+    sector_trend: str = ""
+    sector_linkage: str = ""
+    stock_role: str = ""
+    relative_strength: str = ""
+
+
+class StockCheckupDailyStructure(BaseModel):
+    """日线结构体检"""
+    ma5: Optional[float] = None
+    ma10: Optional[float] = None
+    ma20: Optional[float] = None
+    ma60: Optional[float] = None
+    ma_position_summary: str = ""
+    stage_position: str = ""
+    range_position_20d: str = ""
+    range_position_60d: str = ""
+    pattern_integrity: str = ""
+    structure_conclusion: str = ""
+
+
+class StockCheckupIntradayStrength(BaseModel):
+    """短线强度"""
+    change_pct: Optional[float] = None
+    turnover_rate: Optional[float] = None
+    vol_ratio: Optional[float] = None
+    close_position: str = ""
+    candle_label: str = ""
+    volume_state: str = ""
+    strength_level: str = ""
+
+
+class StockCheckupFundQuality(BaseModel):
+    """资金质量"""
+    recent_fund_flow: str = ""
+    big_order_status: str = ""
+    volume_behavior: str = ""
+    cash_flow_quality: str = ""
+    note: str = ""
+
+
+class StockCheckupPeerItem(BaseModel):
+    """同类对比条目"""
+    ts_code: str
+    stock_name: str
+    sector_name: str = ""
+    change_pct: Optional[float] = None
+    turnover_rate: Optional[float] = None
+    amount: Optional[float] = None
+    role_hint: str = ""
+    relative_note: str = ""
+
+
+class StockCheckupPeerComparison(BaseModel):
+    """同类横向对比"""
+    peers: List[StockCheckupPeerItem] = Field(default_factory=list)
+    relative_strength: str = ""
+    recognizability: str = ""
+    note: str = ""
+
+
+class StockCheckupValuationProfile(BaseModel):
+    """估值与属性"""
+    pe: Optional[float] = None
+    pb: Optional[float] = None
+    ps: Optional[float] = None
+    market_value: Optional[float] = None
+    valuation_level: str = ""
+    drive_type: str = ""
+    note: str = ""
+
+
+class StockCheckupKeyLevels(BaseModel):
+    """关键位"""
+    pressure_levels: List[float] = Field(default_factory=list)
+    support_levels: List[float] = Field(default_factory=list)
+    defense_level: Optional[float] = None
+    note: str = ""
+
+
+class StockCheckupBuyView(BaseModel):
+    """买点相关视角"""
+    buy_signal_tag: Optional[str] = None
+    buy_point_type: Optional[str] = None
+    buy_trigger_cond: str = ""
+    buy_confirm_cond: str = ""
+    buy_invalid_cond: str = ""
+    buy_comment: str = ""
+
+
+class StockCheckupSellView(BaseModel):
+    """卖点相关视角"""
+    sell_signal_tag: Optional[str] = None
+    sell_point_type: Optional[str] = None
+    sell_trigger_cond: str = ""
+    sell_reason: str = ""
+    sell_comment: str = ""
+    can_sell_today: Optional[bool] = None
+
+
+class StockCheckupStrategy(BaseModel):
+    """策略适配结论"""
+    current_characterization: str = ""
+    current_role: str = ""
+    current_strategy: str = ""
+    strategy_reason: str = ""
+    risk_points: List[str] = Field(default_factory=list)
+
+
+class StockCheckupFinalConclusion(BaseModel):
+    """一句话体检结论"""
+    one_line_conclusion: str = ""
+    summary_note: str = ""
+
+
+class StockCheckupRuleSnapshot(BaseModel):
+    """个股体检规则快照"""
+    basic_info: StockCheckupBasicInfo
+    market_context: StockCheckupMarketContext
+    direction_position: StockCheckupDirectionPosition
+    daily_structure: StockCheckupDailyStructure
+    intraday_strength: StockCheckupIntradayStrength
+    fund_quality: StockCheckupFundQuality
+    peer_comparison: StockCheckupPeerComparison
+    valuation_profile: StockCheckupValuationProfile
+    key_levels: StockCheckupKeyLevels
+    buy_view: Optional[StockCheckupBuyView] = None
+    sell_view: Optional[StockCheckupSellView] = None
+    strategy: StockCheckupStrategy
+    final_conclusion: StockCheckupFinalConclusion
+
+
+class LlmStockCheckupSection(BaseModel):
+    """LLM 体检章节"""
+    key: str
+    title: str
+    content: str = ""
+
+
+class LlmStockCheckupReport(BaseModel):
+    """单股体检 LLM 报告"""
+    overall_summary: str = ""
+    llm_report_sections: List[LlmStockCheckupSection] = Field(default_factory=list)
+    key_risks: List[str] = Field(default_factory=list)
+    one_line_conclusion: str = ""
+
+
+class StockCheckupRequest(BaseModel):
+    """个股体检请求"""
+    ts_code: str = Field(..., description="股票代码")
+    trade_date: str = Field(..., description="交易日")
+    checkup_target: StockCheckupTarget = Field(
+        default=StockCheckupTarget.OBSERVE,
+        description="体检目标",
+    )
+    force_llm_refresh: bool = Field(False, description="是否强制刷新 LLM 缓存")
+
+
+class StockCheckupResponse(BaseModel):
+    """个股体检响应"""
+    trade_date: str
+    resolved_trade_date: Optional[str] = None
+    checkup_target: StockCheckupTarget
+    stock_found_in_candidates: bool = False
+    rule_snapshot: StockCheckupRuleSnapshot
+    llm_report: Optional[LlmStockCheckupReport] = None
+    llm_status: "LlmCallStatus"
+
+
 class LlmCallStatus(BaseModel):
     """LLM 调用状态"""
     enabled: bool = False
@@ -523,3 +1007,6 @@ class ApiResponse(BaseModel):
     code: int = 200
     message: str = "success"
     data: Optional[dict] = None
+
+
+StockCheckupResponse.model_rebuild()

@@ -1,6 +1,7 @@
 """
 LLM 解释增强测试
 """
+# flake8: noqa: E501
 import asyncio
 import os
 import sys
@@ -9,9 +10,10 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.models.schemas import (
+from app.models.schemas import (  # noqa: E402
     LlmPoolsSummary,
     LlmSellSummary,
+    LlmStockCheckupReport,
     MarketEnvTag,
     SellPointOutput,
     SellPointResponse,
@@ -21,12 +23,26 @@ from app.models.schemas import (
     StockContinuityTag,
     StockCoreTag,
     StockOutput,
+    StockCheckupBasicInfo,
+    StockCheckupDailyStructure,
+    StockCheckupDirectionPosition,
+    StockCheckupFinalConclusion,
+    StockCheckupFundQuality,
+    StockCheckupIntradayStrength,
+    StockCheckupKeyLevels,
+    StockCheckupMarketContext,
+    StockCheckupPeerComparison,
+    StockCheckupRuleSnapshot,
+    StockCheckupStrategy,
+    StockCheckupTarget,
+    StockCheckupValuationProfile,
     StockPoolTag,
     StockPoolsOutput,
     StockStrengthTag,
     StockTradeabilityTag,
 )
-from app.services.llm_explainer import LlmExplainerService
+from app.services.llm_explainer import LlmExplainerService  # noqa: E402
+from app.services.llm_explainer import llm_client, llm_cache_service  # noqa: E402
 
 
 class TestLlmExplainer:
@@ -85,6 +101,68 @@ class TestLlmExplainer:
             reduce_positions=[point],
             sell_positions=[],
             total_count=1,
+        )
+
+    @pytest.fixture
+    def sample_checkup_snapshot(self):
+        return StockCheckupRuleSnapshot(
+            basic_info=StockCheckupBasicInfo(
+                ts_code="000539.SZ",
+                stock_name="粤电力A",
+                sector_name="电力",
+                board="主板",
+                special_tags=["主板"],
+            ),
+            market_context=StockCheckupMarketContext(
+                market_env_tag="进攻",
+                market_phase="进攻",
+                market_comment="市场偏强",
+                stock_market_alignment="顺市场",
+                tolerance_comment="容错率尚可",
+            ),
+            direction_position=StockCheckupDirectionPosition(
+                direction_name="电力",
+                sector_level="主线",
+                stock_role="前排",
+            ),
+            daily_structure=StockCheckupDailyStructure(
+                ma_position_summary="站上MA5，站上MA10",
+                stage_position="修复",
+                structure_conclusion="当前日线结构更像弱修复，仍需确认。",
+            ),
+            intraday_strength=StockCheckupIntradayStrength(
+                change_pct=4.5,
+                turnover_rate=12.3,
+                vol_ratio=1.8,
+                strength_level="偏强",
+            ),
+            fund_quality=StockCheckupFundQuality(
+                recent_fund_flow="近3-5日量能偏强 [需确认]",
+                cash_flow_quality="有分歧，但还能接受",
+            ),
+            peer_comparison=StockCheckupPeerComparison(
+                relative_strength="板块内相对强",
+                recognizability="具备辨识度",
+            ),
+            valuation_profile=StockCheckupValuationProfile(
+                valuation_level="估值正常",
+                drive_type="题材情绪",
+            ),
+            key_levels=StockCheckupKeyLevels(
+                pressure_levels=[6.35],
+                support_levels=[5.98],
+                defense_level=5.98,
+            ),
+            strategy=StockCheckupStrategy(
+                current_characterization="修复",
+                current_role="前排",
+                current_strategy="观察",
+                strategy_reason="等修复确认后再决定是否参与。",
+                risk_points=["跌破支撑"],
+            ),
+            final_conclusion=StockCheckupFinalConclusion(
+                one_line_conclusion="这票能看，但不舒服追。",
+            ),
         )
 
     def test_apply_pool_summary_only_adds_human_notes(self, service, sample_stock_pools):
@@ -154,3 +232,384 @@ class TestLlmExplainer:
         assert status.enabled is False
         assert status.success is False
         assert status.status == "disabled"
+
+    def test_summarize_stock_pools_uses_cache_before_calling_model(self, service, sample_stock_pools, monkeypatch):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.DEFENSE
+            market_comment = "市场偏弱"
+
+        async def fake_runtime():
+            return {
+                "enabled": True,
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://example.com/v1",
+                "provider": "openai",
+                "max_input_items": 8,
+            }
+
+        async def fake_cache_get(*, cache_key):
+            return {
+                "page_summary": "命中缓存的三池摘要。",
+                "top_focus_summary": "先看账户可参与池。",
+                "pool_empty_reason": "",
+                "stock_notes": [
+                    {
+                        "ts_code": "000539.SZ",
+                        "plain_note": "缓存说明：先等买点确认。",
+                        "risk_note": "缓存说明：承接转弱就放弃。",
+                    }
+                ],
+            }
+
+        async def fail_if_called(*args, **kwargs):
+            raise AssertionError("命中缓存后不应再调用模型")
+
+        monkeypatch.setattr(llm_client, "get_runtime_config", fake_runtime)
+        monkeypatch.setattr(llm_cache_service, "get_cache", fake_cache_get)
+        monkeypatch.setattr(llm_client, "chat_json_with_status", fail_if_called)
+
+        summary, status = asyncio.run(service.summarize_stock_pools_with_status(sample_stock_pools, MockMarketEnv()))
+
+        assert summary is not None
+        assert summary.page_summary == "命中缓存的三池摘要。"
+        assert status.success is True
+        assert status.status == "cached"
+        assert sample_stock_pools.account_executable_pool[0].llm_plain_note == "缓存说明：先等买点确认。"
+
+    def test_summarize_stock_pools_normalizes_pool_empty_reason_dict(self, service, sample_stock_pools, monkeypatch):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.DEFENSE
+            market_comment = "市场偏弱"
+
+        async def fake_runtime():
+            return {
+                "enabled": True,
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://example.com/v1",
+                "provider": "openai",
+                "max_input_items": 8,
+            }
+
+        async def fake_cache_get(*, cache_key):
+            return None
+
+        async def fake_cache_upsert(**kwargs):
+            return None
+
+        async def fake_chat(*args, **kwargs):
+            status = type(
+                "Status",
+                (),
+                {
+                    "enabled": True,
+                    "success": True,
+                    "status": "fresh",
+                    "message": "ok",
+                },
+            )()
+            return (
+                {
+                    "page_summary": "今天以观察为主。",
+                    "top_focus_summary": "先看账户可参与池。",
+                    "pool_empty_reason": {
+                        "trend_recognition_pool": "趋势辨识度不足。",
+                        "account_executable_pool": "账户可参与条件未满足。",
+                    },
+                    "stock_notes": [],
+                },
+                status,
+            )
+
+        monkeypatch.setattr(llm_client, "get_runtime_config", fake_runtime)
+        monkeypatch.setattr(llm_cache_service, "get_cache", fake_cache_get)
+        monkeypatch.setattr(llm_cache_service, "upsert_cache", fake_cache_upsert)
+        monkeypatch.setattr(llm_client, "chat_json_with_status", fake_chat)
+
+        summary, status = asyncio.run(service.summarize_stock_pools_with_status(sample_stock_pools, MockMarketEnv()))
+
+        assert summary is not None
+        assert "trend_recognition_pool: 趋势辨识度不足。" in summary.pool_empty_reason
+        assert "account_executable_pool: 账户可参与条件未满足。" in summary.pool_empty_reason
+        assert status.success is True
+
+    def test_summarize_stock_pools_cache_miss_can_skip_live_request(self, service, sample_stock_pools, monkeypatch):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.DEFENSE
+            market_comment = "市场偏弱"
+
+        async def fake_runtime():
+            return {
+                "enabled": True,
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://example.com/v1",
+                "provider": "openai",
+                "max_input_items": 8,
+            }
+
+        async def fake_cache_get(*, cache_key):
+            return None
+
+        async def fail_if_called(*args, **kwargs):
+            raise AssertionError("仅缓存模式未命中时不应发起实时模型请求")
+
+        monkeypatch.setattr(llm_client, "get_runtime_config", fake_runtime)
+        monkeypatch.setattr(llm_cache_service, "get_cache", fake_cache_get)
+        monkeypatch.setattr(llm_client, "chat_json_with_status", fail_if_called)
+
+        summary, status = asyncio.run(
+            service.summarize_stock_pools_with_status(
+                sample_stock_pools,
+                MockMarketEnv(),
+                allow_live_request=False,
+            )
+        )
+
+        assert summary is None
+        assert status.enabled is True
+        assert status.success is False
+        assert status.status == "cache_miss"
+
+    def test_rewrite_sell_points_force_refresh_bypasses_cache(self, service, sample_sell_response, monkeypatch):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.DEFENSE
+            market_comment = "市场偏弱"
+
+        calls = {"model": 0, "cache_write": 0}
+
+        async def fake_runtime():
+            return {
+                "enabled": True,
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://example.com/v1",
+                "provider": "openai",
+                "max_input_items": 8,
+            }
+
+        async def fake_cache_get(*, cache_key):
+            return {
+                "page_summary": "旧缓存摘要",
+                "action_summary": "旧缓存动作",
+                "notes": [
+                    {
+                        "ts_code": "601012.SH",
+                        "action_sentence": "旧缓存动作句",
+                        "trigger_sentence": "旧缓存触发句",
+                        "risk_sentence": "旧缓存风险句",
+                    }
+                ],
+            }
+
+        async def fake_chat_json_with_status(*args, **kwargs):
+            calls["model"] += 1
+            return (
+                {
+                    "page_summary": "强制刷新后的卖点摘要",
+                    "action_summary": "先减仓，再看修复。",
+                    "notes": [
+                        {
+                            "ts_code": "601012.SH",
+                            "action_sentence": "先减一部分，把仓位降下来。",
+                            "trigger_sentence": "盘中冲高但量跟不上时就动手。",
+                            "risk_sentence": "继续拖着不动，弱市里回撤会放大。",
+                        }
+                    ],
+                },
+                type(
+                    "_Status",
+                    (),
+                    {
+                        "enabled": True,
+                        "success": True,
+                        "status": "success",
+                        "message": "LLM 解释增强已生效",
+                    },
+                )(),
+            )
+
+        async def fake_cache_upsert(**kwargs):
+            calls["cache_write"] += 1
+
+        monkeypatch.setattr(llm_client, "get_runtime_config", fake_runtime)
+        monkeypatch.setattr(llm_cache_service, "get_cache", fake_cache_get)
+        monkeypatch.setattr(llm_client, "chat_json_with_status", fake_chat_json_with_status)
+        monkeypatch.setattr(llm_cache_service, "upsert_cache", fake_cache_upsert)
+
+        summary, status = asyncio.run(
+            service.rewrite_sell_points_with_status(
+                sample_sell_response,
+                MockMarketEnv(),
+                force_refresh=True,
+            )
+        )
+
+        assert summary is not None
+        assert summary.page_summary == "强制刷新后的卖点摘要"
+        assert status.success is True
+        assert calls["model"] == 1
+        assert calls["cache_write"] == 1
+        assert sample_sell_response.reduce_positions[0].llm_action_sentence == "先减一部分，把仓位降下来。"
+
+    def test_explain_stock_checkup_returns_disabled_status_when_llm_disabled(self, service, sample_checkup_snapshot):
+        report, status = asyncio.run(
+            service.explain_stock_checkup_with_status(
+                sample_checkup_snapshot,
+                trade_date="2026-03-20",
+                checkup_target=StockCheckupTarget.OBSERVE,
+            )
+        )
+
+        assert report is None
+        assert status.enabled is False
+        assert status.status == "disabled"
+
+    def test_explain_stock_checkup_uses_cache_before_model(self, service, sample_checkup_snapshot, monkeypatch):
+        async def fake_runtime():
+            return {
+                "enabled": True,
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://example.com/v1",
+                "provider": "openai",
+                "max_input_items": 8,
+            }
+
+        async def fake_cache_get(*, cache_key):
+            return {
+                "overall_summary": "命中缓存的个股体检摘要。",
+                "llm_report_sections": [
+                    {"key": "strategy", "title": "10）策略结论", "content": "先等修复确认。"}
+                ],
+                "key_risks": ["跌破支撑"],
+                "one_line_conclusion": "这票能看，但不舒服追。",
+            }
+
+        async def fail_if_called(*args, **kwargs):
+            raise AssertionError("命中缓存后不应再调用模型")
+
+        monkeypatch.setattr(llm_client, "get_runtime_config", fake_runtime)
+        monkeypatch.setattr(llm_cache_service, "get_cache", fake_cache_get)
+        monkeypatch.setattr(llm_client, "chat_json_with_status", fail_if_called)
+
+        report, status = asyncio.run(
+            service.explain_stock_checkup_with_status(
+                sample_checkup_snapshot,
+                trade_date="2026-03-20",
+                checkup_target=StockCheckupTarget.OBSERVE,
+            )
+        )
+
+        assert isinstance(report, LlmStockCheckupReport)
+        assert report.overall_summary == "命中缓存的个股体检摘要。"
+        assert report.one_line_conclusion == "这票能看，但不舒服追。"
+        assert status.success is True
+        assert status.status == "cached"
+
+    def test_explain_stock_checkup_retries_with_compact_and_ultra_payloads_after_timeout(
+        self,
+        service,
+        sample_checkup_snapshot,
+        monkeypatch,
+    ):
+        calls = []
+
+        async def fake_runtime():
+            return {
+                "enabled": True,
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://example.com/v1",
+                "provider": "openai",
+                "max_input_items": 8,
+            }
+
+        async def fake_cache_get(*, cache_key):
+            return None
+
+        async def fake_chat_json_with_status(system_prompt, payload, **kwargs):
+            calls.append(payload)
+            if len(calls) == 1:
+                return (
+                    None,
+                    type(
+                        "_Status",
+                        (),
+                        {
+                            "enabled": True,
+                            "success": False,
+                            "status": "timeout",
+                            "message": "模型请求超时",
+                        },
+                    )(),
+                )
+            if len(calls) == 2:
+                return (
+                    None,
+                    type(
+                        "_Status",
+                        (),
+                        {
+                            "enabled": True,
+                            "success": False,
+                            "status": "timeout",
+                            "message": "模型请求超时 [stock_checkup_compact_retry]",
+                        },
+                    )(),
+                )
+            return (
+                {
+                    "overall_summary": "精简后成功返回。",
+                    "llm_report_sections": [
+                        {
+                            "key": "strategy",
+                            "title": "10）策略结论",
+                            "content": "先等确认。",
+                        }
+                    ],
+                    "key_risks": ["跌破支撑"],
+                    "one_line_conclusion": "这票能看，但不舒服追。",
+                },
+                type(
+                    "_Status",
+                    (),
+                    {
+                        "enabled": True,
+                        "success": True,
+                        "status": "success",
+                        "message": "LLM 解释增强已生效",
+                    },
+                )(),
+            )
+
+        async def fake_cache_upsert(**kwargs):
+            return None
+
+        monkeypatch.setattr(llm_client, "get_runtime_config", fake_runtime)
+        monkeypatch.setattr(llm_cache_service, "get_cache", fake_cache_get)
+        monkeypatch.setattr(
+            llm_client,
+            "chat_json_with_status",
+            fake_chat_json_with_status,
+        )
+        monkeypatch.setattr(llm_cache_service, "upsert_cache", fake_cache_upsert)
+
+        report, status = asyncio.run(
+            service.explain_stock_checkup_with_status(
+                sample_checkup_snapshot,
+                trade_date="2026-03-20",
+                checkup_target=StockCheckupTarget.OBSERVE,
+            )
+        )
+
+        assert report is not None
+        assert report.overall_summary == "精简后成功返回。"
+        assert status.success is True
+        assert len(calls) == 3
+        assert calls[0].get("payload_mode") is None
+        assert calls[1].get("payload_mode") == "compact_retry"
+        assert calls[2].get("payload_mode") == "ultra_compact_retry"
+        assert len(calls[1]["rule_snapshot"]["peer_comparison"]["peers"]) <= 2
+        assert "peer_comparison" not in calls[2]["rule_snapshot"]
