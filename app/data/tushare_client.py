@@ -1,6 +1,7 @@
 """
 Tushare 数据客户端
 """
+import copy
 import os
 import time as time_module
 from datetime import datetime, time
@@ -40,6 +41,7 @@ class TushareClient:
     REALTIME_VOLUME_RATIO_CACHE_TTL_SECONDS = 60
     REALTIME_MARKET_MIN_TOTAL = 3000
     STOCK_BASIC_CACHE_TTL_SECONDS = 6 * 60 * 60
+    EXPANDED_STOCK_LIST_CACHE_TTL_SECONDS = 5 * 60
 
     def __init__(self, token: Optional[str] = None):
         self.token = token or settings.tushare_token
@@ -68,6 +70,7 @@ class TushareClient:
             "mapping": {},
         }
         self._ths_member_by_stock_cache = {}
+        self._expanded_stock_list_cache = {}
 
     def _now_sh(self) -> datetime:
         """获取上海时区当前时间。"""
@@ -1812,26 +1815,36 @@ class TushareClient:
         pct_floor: float = -5.0,
     ) -> Dict[str, object]:
         """扩展候选池，并返回实际使用的数据交易日。"""
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        cache_key = f"{compact_trade_date}:{int(top_gainers)}:{float(vol_ratio_min):.4f}:{float(pct_floor):.4f}"
+        cached = self._get_cached_expanded_stock_list(cache_key)
+        if cached is not None:
+            return cached
+
         if not self.token:
-            return {
+            payload = {
                 "rows": self._mock_stock_list(),
                 "data_trade_date": trade_date,
                 "used_mock": True,
             }
+            self._cache_expanded_stock_list(cache_key, payload, compact_trade_date, str(trade_date))
+            return payload
 
         try:
-            payload = self._fetch_recent_stock_daily_df(trade_date)
+            payload = self._fetch_recent_stock_daily_df(compact_trade_date)
             df = payload.get("df")
-            effective_trade_date = str(payload.get("data_trade_date") or trade_date)
+            effective_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
             if df is None or df.empty:
                 logger.warning(
                     f"扩展候选池无可用个股数据（截至 {effective_trade_date}）"
                 )
-                return {
+                result = {
                     "rows": [],
                     "data_trade_date": effective_trade_date,
                     "used_mock": False,
                 }
+                self._cache_expanded_stock_list(cache_key, result, compact_trade_date, effective_trade_date)
+                return result
 
             stock_meta_map = self._get_stock_basic_snapshot_map()
             daily_basic_df = None
@@ -1854,11 +1867,13 @@ class TushareClient:
                 logger.warning(
                     f"扩展候选池无可用个股数据（截至 {effective_trade_date}）"
                 )
-                return {
+                result = {
                     "rows": [],
                     "data_trade_date": effective_trade_date,
                     "used_mock": False,
                 }
+                self._cache_expanded_stock_list(cache_key, result, compact_trade_date, effective_trade_date)
+                return result
 
             by_code = source_df.set_index("ts_code", drop=False)
             merged: Dict[str, Dict] = {}
@@ -1980,18 +1995,61 @@ class TushareClient:
                 f"扩展个股候选（{effective_trade_date}）: 共 {len(result)} 只 "
                 f"(涨幅前{top_n}+涨停+量比≥{vol_ratio_min})"
             )
-            return {
+            response = {
                 "rows": result,
                 "data_trade_date": effective_trade_date,
                 "used_mock": False,
             }
+            self._cache_expanded_stock_list(cache_key, response, compact_trade_date, effective_trade_date)
+            return copy.deepcopy(response)
         except Exception as e:
             logger.error(f"获取扩展个股列表失败: {e}")
-            return {
+            result = {
                 "rows": [],
-                "data_trade_date": trade_date,
+                "data_trade_date": compact_trade_date,
                 "used_mock": False,
             }
+            self._cache_expanded_stock_list(cache_key, result, compact_trade_date, compact_trade_date)
+            return result
+
+    def _get_cached_expanded_stock_list(self, cache_key: str) -> Optional[Dict[str, object]]:
+        cache = getattr(self, "_expanded_stock_list_cache", None)
+        if cache is None:
+            cache = {}
+            self._expanded_stock_list_cache = cache
+        cached = cache.get(cache_key)
+        if not cached:
+            return None
+        if time_module.time() - float(cached.get("fetched_at") or 0) > float(cached.get("ttl") or 0):
+            cache.pop(cache_key, None)
+            return None
+        return copy.deepcopy(cached.get("payload") or {})
+
+    def _cache_expanded_stock_list(
+        self,
+        cache_key: str,
+        payload: Dict[str, object],
+        request_trade_date: str,
+        resolved_trade_date: str,
+    ) -> None:
+        cache = getattr(self, "_expanded_stock_list_cache", None)
+        if cache is None:
+            cache = {}
+            self._expanded_stock_list_cache = cache
+        ttl = (
+            self.REALTIME_VOLUME_RATIO_CACHE_TTL_SECONDS
+            if self._should_use_realtime_quote(request_trade_date)
+            else self.EXPANDED_STOCK_LIST_CACHE_TTL_SECONDS
+        )
+        entry = {
+            "fetched_at": time_module.time(),
+            "ttl": ttl,
+            "payload": copy.deepcopy(payload),
+        }
+        cache[cache_key] = entry
+        compact_resolved_trade_date = str(resolved_trade_date).replace("-", "").strip()[:8]
+        alias_key = cache_key.replace(f"{request_trade_date}:", f"{compact_resolved_trade_date}:")
+        cache[alias_key] = entry
 
     def get_stock_detail(self, ts_code: str, trade_date: str) -> Dict:
         """
@@ -2079,6 +2137,94 @@ class TushareClient:
         except Exception as e:
             logger.error(f"获取个股详情失败: {e}")
             return self._overlay_realtime_detail(detail, trade_date)
+
+    def get_stock_quote_map(self, ts_codes: List[str], trade_date: str) -> Dict[str, Dict]:
+        """批量获取个股行情详情，供持仓页等需要快速刷新现价的场景使用。"""
+        normalized_codes = []
+        for code in ts_codes:
+            normalized = normalize_ts_code(code)
+            if normalized and normalized not in normalized_codes:
+                normalized_codes.append(normalized)
+
+        if not normalized_codes:
+            return {}
+
+        compact_trade_date = str(trade_date).replace("-", "").strip()
+
+        if not self.token:
+            result = {
+                code: self._overlay_realtime_detail(self._mock_stock_detail(code), compact_trade_date)
+                for code in normalized_codes
+            }
+            return result
+
+        try:
+            payload = self._fetch_recent_stock_daily_df(compact_trade_date)
+            daily_df = payload.get("df")
+            effective_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
+            stock_meta_map = self._get_stock_basic_snapshot_map()
+
+            daily_basic_df = None
+            daily_basic = getattr(self.pro, "daily_basic", None)
+            if callable(daily_basic):
+                try:
+                    daily_basic_df = daily_basic(
+                        trade_date=effective_trade_date,
+                        fields="ts_code,turnover_rate,volume_ratio",
+                    )
+                except TypeError:
+                    daily_basic_df = daily_basic(trade_date=effective_trade_date)
+
+            source_df = self._build_daily_stock_source_df(
+                daily_df,
+                stock_meta_map,
+                daily_basic_df=daily_basic_df,
+            )
+            source_map: Dict[str, Dict] = {}
+            if source_df is not None and not source_df.empty:
+                filtered_df = source_df[source_df["ts_code"].isin(normalized_codes)]
+                for _, row in filtered_df.iterrows():
+                    source_map[str(row["ts_code"])] = {
+                        "ts_code": str(row["ts_code"]),
+                        "stock_name": str(row.get("stock_name") or row["ts_code"]),
+                        "sector_name": str(row.get("industry") or "未知") or "未知",
+                        "close": float(row.get("close") or 0),
+                        "change_pct": float(row.get("pct_change") or 0),
+                        "turnover_rate": float(row.get("turnover_rate") or 0),
+                        "amount": float(row.get("amount") or 0),
+                        "vol_ratio": float(row.get("volume_ratio") or 1),
+                        "high": float(row.get("high") or 0),
+                        "low": float(row.get("low") or 0),
+                        "open": float(row.get("open") or 0),
+                        "pre_close": float(row.get("pre_close") or 0),
+                        "quote_time": None,
+                        "data_source": "daily",
+                    }
+
+            for code in normalized_codes:
+                if code in source_map:
+                    continue
+                stock_meta = stock_meta_map.get(code) or {}
+                source_map[code] = {
+                    **self._mock_stock_detail(code),
+                    "stock_name": str(stock_meta.get("stock_name") or code),
+                    "sector_name": str(stock_meta.get("industry") or "未知") or "未知",
+                    "data_source": "daily_fallback",
+                }
+
+            rows = list(source_map.values())
+            self._apply_realtime_overlay_to_stocks(rows, compact_trade_date)
+            return {
+                normalize_ts_code(row.get("ts_code", "")): row
+                for row in rows
+                if normalize_ts_code(row.get("ts_code", ""))
+            }
+        except Exception as e:
+            logger.error(f"批量获取个股行情失败: {e}")
+            return {
+                code: self.get_stock_detail(code, compact_trade_date)
+                for code in normalized_codes
+            }
 
     def _overlay_realtime_detail(self, detail: Dict, trade_date: str) -> Dict:
         """对单只股票详情做盘中价格覆盖。"""

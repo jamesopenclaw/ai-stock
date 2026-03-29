@@ -56,6 +56,7 @@ class _FakeSession:
 @pytest_asyncio.fixture
 async def client(monkeypatch):
     monkeypatch.setattr(Settings, "validate_runtime", lambda _self: None)
+    monkeypatch.setattr(settings, "auth_enabled", False)
     monkeypatch.setattr(
         "app.core.database.async_session_factory",
         lambda: _FakeSession(SimpleNamespace(id=1)),
@@ -65,6 +66,7 @@ async def client(monkeypatch):
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as test_client:
         yield test_client
     await app.router.shutdown()
+    monkeypatch.setattr(settings, "auth_enabled", True)
 
 
 @pytest.mark.asyncio
@@ -80,7 +82,7 @@ async def test_root_and_health_routes(client):
 
 @pytest.mark.asyncio
 async def test_account_config_route_via_testclient(client, monkeypatch):
-    async def fake_get_config():
+    async def fake_get_config(account_id=None):
         return {
             "total_asset": 500000.0,
             "llm_enabled": False,
@@ -102,6 +104,54 @@ async def test_account_config_route_via_testclient(client, monkeypatch):
     payload = response.json()
     assert payload["code"] == 200
     assert payload["data"]["total_asset"] == 500000.0
+
+
+@pytest.mark.asyncio
+async def test_account_overview_route_via_testclient(client, monkeypatch):
+    async def fake_build_overview(_current_account):
+        return {
+            "profile": {
+                "account_id": "account-1",
+                "account_name": "默认账户",
+                "total_asset": 500000.0,
+                "available_cash": 320000.0,
+                "market_value": 180000.0,
+                "total_position_ratio": 0.36,
+                "holding_count": 2,
+                "t1_locked_count": 1,
+                "can_trade": True,
+                "action": "控制仓位",
+                "priority": "观察为主",
+            },
+            "status": {
+                "account_id": "account-1",
+                "account_name": "默认账户",
+                "can_trade": True,
+                "action": "控制仓位",
+                "priority": "观察为主",
+                "position_ratio": 0.36,
+                "available_cash": 320000.0,
+                "holding_count": 2,
+            },
+            "positions": [
+                {
+                    "ts_code": "000001.SZ",
+                    "stock_name": "平安银行",
+                    "holding_qty": 100,
+                }
+            ],
+            "total": 1,
+        }
+
+    monkeypatch.setattr(account, "build_account_overview_payload", fake_build_overview)
+
+    response = await client.get("/api/v1/account/overview")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == 200
+    assert payload["data"]["profile"]["account_name"] == "默认账户"
+    assert payload["data"]["positions"][0]["ts_code"] == "000001.SZ"
 
 
 @pytest.mark.asyncio
@@ -144,6 +194,12 @@ async def test_buy_point_route_via_testclient(client, monkeypatch):
     async def fake_build_candidate_analysis(*args, **kwargs):
         return bundle
 
+    async def fake_get_page_snapshot(*args, **kwargs):
+        return None
+
+    async def fake_get_review_bias_profile(*args, **kwargs):
+        return {"exact": {}, "bucket": {}}
+
     def fake_buy_analyze(*args, **kwargs):
         return BuyPointResponse(
             trade_date="2026-03-28",
@@ -170,9 +226,23 @@ async def test_buy_point_route_via_testclient(client, monkeypatch):
     async def fake_save_snapshot(*args, **kwargs):
         return 1
 
+    async def fake_save_page_snapshot(*args, **kwargs):
+        return 1
+
     monkeypatch.setattr(decision.decision_flow_service, "build_candidate_analysis", fake_build_candidate_analysis)
+    monkeypatch.setattr(decision.review_snapshot_service, "get_stock_pools_page_snapshot", fake_get_page_snapshot)
+    monkeypatch.setattr(decision.review_snapshot_service, "get_review_bias_profile_safe", fake_get_review_bias_profile)
     monkeypatch.setattr(decision.buy_point_service, "analyze", fake_buy_analyze)
     monkeypatch.setattr(decision.review_snapshot_service, "save_analysis_snapshot_safe", fake_save_snapshot)
+    monkeypatch.setattr(decision.review_snapshot_service, "save_stock_pools_page_snapshot_safe", fake_save_page_snapshot)
+    async def fake_resolve_snapshot_lookup_trade_date(trade_date):
+        return trade_date
+
+    monkeypatch.setattr(
+        decision,
+        "resolve_snapshot_lookup_trade_date",
+        fake_resolve_snapshot_lookup_trade_date,
+    )
 
     response = await client.get("/api/v1/decision/buy-point", params={"trade_date": "2026-03-28", "limit": 20})
 

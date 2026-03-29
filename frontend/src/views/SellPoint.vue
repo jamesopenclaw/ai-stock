@@ -173,7 +173,7 @@
                   <span>{{ point.llm_risk_sentence || point.sell_comment || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
-                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
                 </div>
@@ -275,7 +275,7 @@
                   <span>{{ point.llm_risk_sentence || point.sell_comment || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
-                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
                 </div>
@@ -377,7 +377,7 @@
                   <span>{{ point.llm_risk_sentence || point.sell_reason || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
-                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
                 </div>

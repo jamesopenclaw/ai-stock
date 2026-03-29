@@ -57,10 +57,14 @@ class PortfolioService:
 
     async def get_holdings_from_db(
         self,
+        account_id: Optional[str] = None,
         trade_date: Optional[str] = None,
     ) -> List[dict]:
         async with async_session_factory() as session:
-            result = await session.execute(select(Holding))
+            stmt = select(Holding)
+            if account_id:
+                stmt = stmt.where(Holding.account_id == account_id)
+            result = await session.execute(stmt)
             holdings = [h.to_dict() for h in result.scalars().all()]
 
         self.refresh_holdings_price(holdings, trade_date=trade_date)
@@ -77,13 +81,16 @@ class PortfolioService:
             return
 
         compact_date = (trade_date or datetime.now().strftime("%Y-%m-%d")).replace("-", "")
+        quote_map = tushare_client.get_stock_quote_map(
+            [holding.get("ts_code") or "" for holding in holdings],
+            compact_date,
+        )
         for holding in holdings:
             ts_code = normalize_ts_code(holding.get("ts_code") or "")
             if not ts_code:
                 continue
-            try:
-                detail = tushare_client.get_stock_detail(ts_code, compact_date)
-            except Exception:
+            detail = quote_map.get(ts_code)
+            if not detail:
                 continue
 
             price = _safe_float(detail.get("close"), 0.0)
@@ -128,6 +135,7 @@ class PortfolioService:
     async def build_account_input_from_holdings(
         self,
         holdings: List[dict],
+        account_id: Optional[str] = None,
         trade_date: Optional[str] = None,
     ) -> AccountInput:
         market_value = sum(
@@ -135,7 +143,7 @@ class PortfolioService:
             or (h.get("holding_qty", 0) * h.get("market_price", 0))
             for h in holdings
         )
-        total_asset = await get_total_asset()
+        total_asset = await get_total_asset(account_id=account_id)
         available_cash = max(total_asset - market_value, 0)
         total_position_ratio = market_value / total_asset if total_asset > 0 else 0
 

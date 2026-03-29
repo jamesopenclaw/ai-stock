@@ -1,6 +1,8 @@
 """
 市场环境分析服务
 """
+import time
+from threading import RLock
 from typing import Dict, Optional
 from collections import Counter
 from loguru import logger
@@ -31,9 +33,13 @@ class MarketEnvService:
     SENTIMENT_EXCELLENT = 80  # 情绪评分 > 80
     SENTIMENT_GOOD = 60      # 情绪评分 > 60
     SENTIMENT_BAD = 40       # 情绪评分 < 40
+    MARKET_ENV_CACHE_TTL_SECONDS = 5 * 60
+    REALTIME_MARKET_ENV_CACHE_TTL_SECONDS = 30
 
     def __init__(self):
         self.client = market_data_gateway
+        self._env_cache = {}
+        self._env_cache_lock = RLock()
 
     def analyze(self, market_data: MarketEnvInput) -> MarketEnvOutput:
         """
@@ -78,6 +84,9 @@ class MarketEnvService:
             当前市场环境
         """
         compact_trade_date = trade_date.replace("-", "")
+        cached = self._get_cached_env(compact_trade_date)
+        if cached:
+            return cached
 
         index_payload = self.client.get_index_quote_with_meta(compact_trade_date)
         limit_payload = self.client.get_limit_stats_with_meta(compact_trade_date)
@@ -118,7 +127,46 @@ class MarketEnvService:
             risk_appetite_tag="中性"
         )
 
-        return self.analyze(market_data)
+        result = self.analyze(market_data)
+        self._cache_env(compact_trade_date, resolved_trade_date, result)
+        return result
+
+    def _cache_ttl_seconds(self, compact_trade_date: str, resolved_trade_date: str) -> int:
+        if (
+            compact_trade_date == self.client.now_trade_date().replace("-", "")
+            and self.client.should_use_realtime_quote(compact_trade_date)
+        ):
+            return self.REALTIME_MARKET_ENV_CACHE_TTL_SECONDS
+        if compact_trade_date != resolved_trade_date:
+            return self.MARKET_ENV_CACHE_TTL_SECONDS
+        return self.MARKET_ENV_CACHE_TTL_SECONDS
+
+    def _get_cached_env(self, compact_trade_date: str) -> Optional[MarketEnvOutput]:
+        now_ts = time.monotonic()
+        with self._env_cache_lock:
+            cached = self._env_cache.get(compact_trade_date)
+            if not cached:
+                return None
+            if now_ts - float(cached.get("fetched_at") or 0) > float(cached.get("ttl") or 0):
+                self._env_cache.pop(compact_trade_date, None)
+                return None
+            return cached.get("value")
+
+    def _cache_env(self, compact_trade_date: str, resolved_trade_date: str, result: MarketEnvOutput) -> None:
+        now_ts = time.monotonic()
+        ttl = self._cache_ttl_seconds(compact_trade_date, resolved_trade_date)
+        entry = {
+            "fetched_at": now_ts,
+            "ttl": ttl,
+            "value": result,
+        }
+        alias_keys = {compact_trade_date}
+        if resolved_trade_date:
+            alias_keys.add(str(resolved_trade_date).replace("-", "")[:8])
+        with self._env_cache_lock:
+            for key in alias_keys:
+                if key:
+                    self._env_cache[key] = entry
 
     def _calculate_index_score(self, data: MarketEnvInput) -> float:
         """计算指数评分 (0-100)"""

@@ -60,19 +60,26 @@
             </div>
           </div>
           <div v-if="reviewInsight" class="review-bridge">
-            <div class="review-bridge-title">复盘怎么影响今天买点选择</div>
+            <div class="review-bridge-head">
+              <div>
+                <div class="review-bridge-title">复盘怎么影响今天买点选择</div>
+                <div class="review-bridge-subtitle">{{ reviewInsight.summary }}</div>
+              </div>
+              <div class="review-bridge-summary-chip">复盘只调优先级，不替代触发确认</div>
+            </div>
             <div class="review-bridge-grid">
-              <div class="review-bridge-card review-bridge-card-do">
-                <div class="review-bridge-label">优先看</div>
-                <div class="review-bridge-text">{{ reviewInsight.doText }}</div>
-              </div>
-              <div class="review-bridge-card review-bridge-card-watch">
-                <div class="review-bridge-label">先观察</div>
-                <div class="review-bridge-text">{{ reviewInsight.watchText }}</div>
-              </div>
-              <div class="review-bridge-card review-bridge-card-avoid">
-                <div class="review-bridge-label">暂时少做</div>
-                <div class="review-bridge-text">{{ reviewInsight.avoidText }}</div>
+              <div
+                v-for="card in reviewInsight.cards"
+                :key="card.label"
+                :class="['review-bridge-card', card.cardClass]"
+              >
+                <div class="review-bridge-card-head">
+                  <div class="review-bridge-label">{{ card.label }}</div>
+                  <div class="review-bridge-metric">{{ card.metric }}</div>
+                </div>
+                <div class="review-bridge-card-title">{{ card.title }}</div>
+                <div class="review-bridge-card-action">{{ card.action }}</div>
+                <div class="review-bridge-card-note">{{ card.note }}</div>
               </div>
             </div>
           </div>
@@ -277,7 +284,7 @@
                   <span>{{ point.buy_comment || '-' }}</span>
                   <div class="footer-actions">
                     <span v-if="point.buy_requires_sector_resonance" class="footer-flag">需要板块共振</span>
-                    <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
                 </div>
@@ -339,7 +346,7 @@
                   <div class="signal-footer">
                     <span>{{ point.buy_comment || '优先级次于主执行名单。' }}</span>
                     <div class="footer-actions">
-                      <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">SOP 详情</el-button>
+                      <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                     </div>
                   </div>
                 </article>
@@ -485,7 +492,7 @@
                   <span>{{ point.buy_comment || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">未到执行位</span>
-                    <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">SOP 详情</el-button>
+                    <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
                 </div>
@@ -513,7 +520,7 @@
                 </div>
                 <div class="skip-reason">{{ skipReasonLine(point, buyData.market_env_tag) }}</div>
                 <div class="skip-actions">
-                  <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">SOP 详情</el-button>
+                  <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                   <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                 </div>
               </div>
@@ -544,6 +551,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { decisionApi } from '../api'
+import { authState } from '../auth'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
@@ -568,6 +576,7 @@ const BUY_POINT_TIMEOUT = 90000
 const loadError = ref('')
 const route = useRoute()
 const router = useRouter()
+const BUY_POINT_CACHE_PREFIX = 'ai_stock_buy_point'
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const focusOnly = ref(false)
 
@@ -661,6 +670,41 @@ const reviewActionableRows = computed(() => (
     .sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0))
 ))
 
+const resolveReviewWindow = (row) => {
+  if (!row) return { days: 0, count: 0, avg: 0, winRate: 0 }
+  if (Number(row.resolved_5d_count || 0) > 0) {
+    return {
+      days: 5,
+      count: Number(row.resolved_5d_count || 0),
+      avg: Number(row.avg_return_5d || 0),
+      winRate: Number(row.win_rate_5d || 0)
+    }
+  }
+  if (Number(row.resolved_3d_count || 0) > 0) {
+    return {
+      days: 3,
+      count: Number(row.resolved_3d_count || 0),
+      avg: Number(row.avg_return_3d || 0),
+      winRate: Number(row.win_rate_3d || 0)
+    }
+  }
+  if (Number(row.resolved_1d_count || 0) > 0) {
+    return {
+      days: 1,
+      count: Number(row.resolved_1d_count || 0),
+      avg: Number(row.avg_return_1d || 0),
+      winRate: Number(row.win_rate_1d || 0)
+    }
+  }
+  return { days: 0, count: 0, avg: 0, winRate: 0 }
+}
+
+const formatReviewMetric = (row) => {
+  const metric = resolveReviewWindow(row)
+  if (!metric.days || !metric.count) return '样本补齐中'
+  return `${metric.days}日均值 ${metric.avg.toFixed(1)}% · 胜率 ${metric.winRate.toFixed(0)}% · ${metric.count}条`
+}
+
 const reviewInsight = computed(() => {
   const best = reviewActionableRows.value[0]
   const weakest = [...reviewActionableRows.value].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))[0]
@@ -668,15 +712,47 @@ const reviewInsight = computed(() => {
   if (!best && !weakest && !watch) return null
 
   return {
-    doText: best
-      ? `最近 ${best.shortLabel} 的后续表现更稳，今天在可买列表里遇到同类结构时，可以先给更高优先级。`
-      : '当前复盘样本还不够，今天先按触发价、确认条件和市场环境执行。',
-    watchText: watch
-      ? `${watch.shortLabel} 最近更适合先观察，确认条件没到齐之前，不要把它当成已经成立的买点。`
-      : '观察类信号仍然只负责提醒，不负责替代执行确认。',
-    avoidText: weakest
-      ? `${weakest.shortLabel} 最近兑现度偏弱，今天即使触发，也要更看重量能和失效位，别主动放大仓位。`
-      : '暂时没有明确需要整体回避的一类信号。'
+    summary: best
+      ? '先按复盘给出的优先级排序，再回到触发价、确认条件和失效位做执行判断。'
+      : '当前没有形成稳定样本，复盘只做辅助提醒，今天仍按买点条件本身执行。',
+    cards: [
+      {
+        label: '优先看',
+        cardClass: 'review-bridge-card-do',
+        title: best ? best.shortLabel : '暂无稳定加分类型',
+        metric: formatReviewMetric(best),
+        action: best
+          ? '遇到同类结构时，先往前排，再决定是否纳入主执行名单。'
+          : '先按当日强弱和确认条件排序，不额外放大任何类型。',
+        note: best
+          ? '这类结构最近更稳，但仍要先等触发价和确认条件到位。'
+          : '复盘还没形成稳定偏好，不建议提前下注。'
+      },
+      {
+        label: '先观察',
+        cardClass: 'review-bridge-card-watch',
+        title: watch ? watch.shortLabel : '观察类信号',
+        metric: formatReviewMetric(watch),
+        action: watch
+          ? '先放进观察名单，确认条件不到齐，不要直接当成成立买点。'
+          : '观察票继续只负责提醒，不替代正式执行条件。',
+        note: watch
+          ? '适合先跟踪，不适合抢先手。'
+          : '没有额外的复盘观察倾向，维持当前规则。'
+      },
+      {
+        label: '暂时少做',
+        cardClass: 'review-bridge-card-avoid',
+        title: weakest ? weakest.shortLabel : '暂无明确弱项',
+        metric: formatReviewMetric(weakest),
+        action: weakest
+          ? '即使盘中触发，也要更看重量能、承接和失效位，不主动放大仓位。'
+          : '暂时没有需要整体回避的结构，继续按规则筛选。',
+        note: weakest
+          ? '这类结构最近兑现度偏弱，优先级应下调。'
+          : '没有明显拖后腿的一类结构。'
+      }
+    ]
   }
 })
 
@@ -686,6 +762,60 @@ const getLocalDate = () => {
   const m = String(now.getMonth() + 1).padStart(2, '0')
   const d = String(now.getDate()).padStart(2, '0')
   return `${y}-${m}-${d}`
+}
+
+const resolveCacheKey = (tradeDate) => {
+  const accountId = authState.account?.id || 'guest'
+  return `${BUY_POINT_CACHE_PREFIX}:${accountId}:${tradeDate}`
+}
+
+const applyBuyData = (payload) => {
+  buyData.value = payload || {
+    market_env_tag: '',
+    available_buy_points: [],
+    observe_buy_points: [],
+    not_buy_points: [],
+  }
+  if (buyData.value.available_buy_points?.length) activeTab.value = 'available'
+  else if (buyData.value.observe_buy_points?.length) activeTab.value = 'observe'
+  else activeTab.value = 'skip'
+}
+
+const persistBuyPointCache = () => {
+  if (typeof window === 'undefined' || !displayDate.value) return
+  const payload = {
+    displayDate: displayDate.value,
+    buyData: buyData.value,
+    reviewStatsData: reviewStatsData.value,
+    updatedAt: Date.now(),
+  }
+  window.sessionStorage.setItem(resolveCacheKey(displayDate.value), JSON.stringify(payload))
+}
+
+const hydrateBuyPointCache = (tradeDate) => {
+  if (typeof window === 'undefined') return false
+  const raw = window.sessionStorage.getItem(resolveCacheKey(tradeDate))
+  if (!raw) return false
+  try {
+    const payload = JSON.parse(raw)
+    displayDate.value = payload.displayDate || tradeDate
+    applyBuyData(payload.buyData)
+    reviewStatsData.value = payload.reviewStatsData || null
+    return true
+  } catch (error) {
+    window.sessionStorage.removeItem(resolveCacheKey(tradeDate))
+    return false
+  }
+}
+
+const scheduleReviewInsightLoad = () => {
+  if (typeof window === 'undefined') {
+    loadReviewInsight()
+    return
+  }
+  window.setTimeout(() => {
+    loadReviewInsight()
+  }, 180)
 }
 
 const envChipClass = (tag) => {
@@ -867,17 +997,15 @@ const clearFocusSector = () => {
 
 const hardFilterLine = (point) => point.hard_filter_summary || '硬过滤状态未返回'
 
-const loadData = async () => {
-  loading.value = true
+const loadData = async ({ silent = false } = {}) => {
+  if (!silent) loading.value = true
   loadError.value = ''
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
     const res = await decisionApi.buyPoint(tradeDate, 30, { timeout: BUY_POINT_TIMEOUT })
-    buyData.value = res.data.data
-    if (buyData.value.available_buy_points?.length) activeTab.value = 'available'
-    else if (buyData.value.observe_buy_points?.length) activeTab.value = 'observe'
-    else activeTab.value = 'skip'
+    applyBuyData(res.data.data)
+    persistBuyPointCache()
   } catch (error) {
     loadError.value = '买点数据加载失败，请刷新重试。'
     ElMessage.error('加载失败')
@@ -890,15 +1018,18 @@ const loadReviewInsight = async () => {
   try {
     const res = await decisionApi.reviewStats(10, { timeout: REVIEW_STATS_TIMEOUT })
     reviewStatsData.value = res.data.data || null
+    persistBuyPointCache()
   } catch (error) {
     reviewStatsData.value = null
   }
 }
 
 onMounted(() => {
-  displayDate.value = getLocalDate()
-  loadData()
-  loadReviewInsight()
+  const tradeDate = getLocalDate()
+  displayDate.value = tradeDate
+  const hydrated = hydrateBuyPointCache(tradeDate)
+  loadData({ silent: hydrated })
+  scheduleReviewInsightLoad()
 })
 </script>
 
@@ -1030,27 +1161,55 @@ onMounted(() => {
 }
 
 .review-bridge {
-  padding: 16px;
-  border-radius: 14px;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 16px;
   background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.04));
   border: 1px solid rgba(255,255,255,0.06);
+}
+
+.review-bridge-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .review-bridge-title {
   font-size: 15px;
   font-weight: 700;
-  margin-bottom: 12px;
+}
+
+.review-bridge-subtitle {
+  margin-top: 6px;
+  max-width: 720px;
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.review-bridge-summary-chip {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #8fdcb7;
+  background: rgba(60, 188, 125, 0.1);
+  border: 1px solid rgba(60, 188, 125, 0.18);
 }
 
 .review-bridge-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
 }
 
 .review-bridge-card {
-  padding: 14px;
-  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  min-height: 178px;
+  padding: 16px;
+  border-radius: 14px;
   border: 1px solid var(--color-border);
   background: rgba(255,255,255,0.02);
 }
@@ -1067,15 +1226,44 @@ onMounted(() => {
   box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
 }
 
-.review-bridge-label {
-  font-size: 12px;
-  color: var(--color-text-sec);
-  margin-bottom: 8px;
+.review-bridge-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
-.review-bridge-text {
-  line-height: 1.7;
+.review-bridge-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--color-text-sec);
+  text-transform: uppercase;
+}
+
+.review-bridge-metric {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.review-bridge-card-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.review-bridge-card-action {
+  font-size: 15px;
+  line-height: 1.65;
   color: var(--color-text-main);
+}
+
+.review-bridge-card-note {
+  margin-top: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-sec);
 }
 
 .rule-chip {

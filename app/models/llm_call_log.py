@@ -15,6 +15,7 @@ class LlmCallLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     scene = Column(String(60), nullable=False, index=True, default="")
+    account_id = Column(String(64), nullable=False, index=True, default="")
     trade_date = Column(String(20), nullable=False, index=True, default="")
     provider = Column(String(40), nullable=False, default="")
     model = Column(String(120), nullable=False, default="")

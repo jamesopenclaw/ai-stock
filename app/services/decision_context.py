@@ -18,8 +18,34 @@ from app.services.stock_filter import merge_holdings_into_candidate_stocks
 
 
 @dataclass
+class SharedDecisionContext:
+    """与账户无关、可跨账户复用的市场共享上下文。"""
+
+    trade_date: str
+    selection_trade_date: str
+    resolved_stock_trade_date: Optional[str]
+    sector_scan_trade_date: Optional[str]
+    sector_scan_resolved_trade_date: Optional[str]
+    market_env: object
+    realtime_market_env: object
+    sector_scan: object
+    stocks: List[StockInput]
+
+
+@dataclass
+class AccountDecisionContext:
+    """与账户强相关的私有上下文。"""
+
+    trade_date: str
+    account_id: Optional[str]
+    holdings_list: List[dict]
+    holdings: List[AccountPosition]
+    account: AccountInput
+
+
+@dataclass
 class DecisionContext:
-    """单次决策请求共享的数据上下文。"""
+    """单次决策请求的完整上下文，由共享层和账户层组合而成。"""
 
     trade_date: str
     resolved_stock_trade_date: Optional[str]
@@ -32,6 +58,8 @@ class DecisionContext:
     holdings_list: List[dict]
     holdings: List[AccountPosition]
     account: AccountInput
+    shared_context: SharedDecisionContext
+    account_context: AccountDecisionContext
 
 
 class DecisionContextService:
@@ -59,19 +87,22 @@ class DecisionContextService:
 
     async def get_holdings_from_db(
         self,
+        account_id: Optional[str] = None,
         trade_date: Optional[str] = None,
     ) -> List[dict]:
         """从数据库获取持仓，并按目标交易日刷新价格。"""
-        return await portfolio_service.get_holdings_from_db(trade_date)
+        return await portfolio_service.get_holdings_from_db(account_id, trade_date)
 
     async def build_account_input_from_holdings(
         self,
         holdings: List[dict],
+        account_id: Optional[str] = None,
         trade_date: Optional[str] = None,
     ) -> AccountInput:
         """根据持仓动态构建账户信息。"""
         return await portfolio_service.build_account_input_from_holdings(
             holdings,
+            account_id,
             trade_date,
         )
 
@@ -129,6 +160,97 @@ class DecisionContextService:
 
         return stocks, resolved_trade_date_fmt
 
+    async def build_shared_context(
+        self,
+        trade_date: str,
+        top_gainers: int = 100,
+    ) -> SharedDecisionContext:
+        """构建只依赖市场与板块数据的共享上下文。"""
+        selection_trade_date = await self._resolve_selection_trade_date(trade_date)
+        market_env = market_env_service.get_current_env(selection_trade_date)
+        realtime_market_env = (
+            market_env
+            if selection_trade_date == trade_date
+            else market_env_service.get_current_env(trade_date)
+        )
+        sector_scan = await sector_scan_snapshot_service.get_snapshot(selection_trade_date)
+        if not sector_scan:
+            sector_scan = sector_scan_service.scan(
+                selection_trade_date,
+                limit_output=False,
+                market_env=market_env,
+            )
+        stocks, resolved_stock_trade_date = self.get_candidate_stocks(
+            selection_trade_date,
+            top_gainers=top_gainers,
+            holdings_list=None,
+            include_holdings=False,
+        )
+        return SharedDecisionContext(
+            trade_date=trade_date,
+            selection_trade_date=selection_trade_date,
+            resolved_stock_trade_date=resolved_stock_trade_date,
+            sector_scan_trade_date=getattr(sector_scan, "trade_date", None),
+            sector_scan_resolved_trade_date=getattr(sector_scan, "resolved_trade_date", None),
+            market_env=market_env,
+            realtime_market_env=realtime_market_env,
+            sector_scan=sector_scan,
+            stocks=stocks,
+        )
+
+    async def build_account_context(
+        self,
+        trade_date: str,
+        account_id: Optional[str] = None,
+    ) -> AccountDecisionContext:
+        """构建只依赖账户维度的私有上下文。"""
+        holdings_list = await self.get_holdings_from_db(account_id, trade_date)
+        holdings = [AccountPosition(**h) for h in holdings_list]
+        account = await self.build_account_input_from_holdings(
+            holdings_list,
+            account_id,
+            trade_date,
+        )
+        return AccountDecisionContext(
+            trade_date=trade_date,
+            account_id=account_id,
+            holdings_list=holdings_list,
+            holdings=holdings,
+            account=account,
+        )
+
+    def compose_context(
+        self,
+        shared_context: SharedDecisionContext,
+        account_context: AccountDecisionContext,
+        *,
+        include_holdings: bool = False,
+    ) -> DecisionContext:
+        """将共享层与账户层拼成完整决策上下文。"""
+        stocks = shared_context.stocks
+        if include_holdings:
+            stocks = merge_holdings_into_candidate_stocks(
+                shared_context.selection_trade_date,
+                shared_context.stocks,
+                account_context.holdings_list,
+            )
+
+        return DecisionContext(
+            trade_date=shared_context.trade_date,
+            resolved_stock_trade_date=shared_context.resolved_stock_trade_date,
+            sector_scan_trade_date=shared_context.sector_scan_trade_date,
+            sector_scan_resolved_trade_date=shared_context.sector_scan_resolved_trade_date,
+            market_env=shared_context.market_env,
+            realtime_market_env=shared_context.realtime_market_env,
+            sector_scan=shared_context.sector_scan,
+            stocks=stocks,
+            holdings_list=account_context.holdings_list,
+            holdings=account_context.holdings,
+            account=account_context.account,
+            shared_context=shared_context,
+            account_context=account_context,
+        )
+
     def build_single_stock_input(
         self,
         ts_code: str,
@@ -185,47 +307,21 @@ class DecisionContextService:
         trade_date: str,
         top_gainers: int = 100,
         include_holdings: bool = False,
+        account_id: Optional[str] = None,
     ) -> DecisionContext:
-        """构建单次请求的共享上下文。"""
-        selection_trade_date = await self._resolve_selection_trade_date(trade_date)
-        holdings_list = await self.get_holdings_from_db(trade_date)
-        holdings = [AccountPosition(**h) for h in holdings_list]
-        account = await self.build_account_input_from_holdings(
-            holdings_list,
+        """构建单次请求的完整上下文。"""
+        shared_context = await self.build_shared_context(
             trade_date,
-        )
-        market_env = market_env_service.get_current_env(selection_trade_date)
-        realtime_market_env = (
-            market_env
-            if selection_trade_date == trade_date
-            else market_env_service.get_current_env(trade_date)
-        )
-        sector_scan = await sector_scan_snapshot_service.get_snapshot(selection_trade_date)
-        if not sector_scan:
-            sector_scan = sector_scan_service.scan(
-                selection_trade_date,
-                limit_output=False,
-                market_env=market_env,
-            )
-        stocks, resolved_stock_trade_date = self.get_candidate_stocks(
-            selection_trade_date,
             top_gainers=top_gainers,
-            holdings_list=holdings_list,
-            include_holdings=include_holdings,
         )
-
-        return DecisionContext(
-            trade_date=trade_date,
-            resolved_stock_trade_date=resolved_stock_trade_date,
-            sector_scan_trade_date=getattr(sector_scan, "trade_date", None),
-            sector_scan_resolved_trade_date=getattr(sector_scan, "resolved_trade_date", None),
-            market_env=market_env,
-            realtime_market_env=realtime_market_env,
-            sector_scan=sector_scan,
-            stocks=stocks,
-            holdings_list=holdings_list,
-            holdings=holdings,
-            account=account,
+        account_context = await self.build_account_context(
+            trade_date,
+            account_id=account_id,
+        )
+        return self.compose_context(
+            shared_context,
+            account_context,
+            include_holdings=include_holdings,
         )
 
 

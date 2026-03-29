@@ -8,7 +8,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 
 from app.core.database import async_session_factory
 from app.models.review_snapshot import ReviewSnapshot
@@ -32,17 +32,72 @@ class ReviewSnapshotService:
     def __init__(self):
         self._outcome_refresh_task: Optional[asyncio.Task] = None
 
+    def _normalize_account_id(self, account_id: Optional[str]) -> str:
+        return str(account_id or "").strip()
+
+    def _snapshot_signature(self, row: ReviewSnapshot) -> Tuple:
+        """只比较落库字段，忽略主键和时间戳。"""
+        return (
+            row.snapshot_type or "",
+            row.account_id or "",
+            row.ts_code or "",
+            row.stock_name or "",
+            row.candidate_source_tag or "",
+            row.candidate_bucket_tag or "",
+            row.buy_signal_tag or "",
+            row.buy_point_type or "",
+            row.stock_pool_tag or "",
+            round(float(row.stock_score or 0.0), 4),
+            round(float(row.base_price or 0.0), 4),
+        )
+
+    async def _buy_snapshot_unchanged(
+        self,
+        session,
+        trade_date: str,
+        normalized_account_id: str,
+        rows: List[ReviewSnapshot],
+    ) -> bool:
+        """同一交易日买点快照内容未变化时跳过重写，避免反复 DELETE + INSERT。"""
+        result = await session.execute(
+            select(ReviewSnapshot)
+            .where(ReviewSnapshot.trade_date == trade_date)
+            .where(ReviewSnapshot.account_id == normalized_account_id)
+            .where(ReviewSnapshot.snapshot_type.in_(["buy_available", "buy_observe"]))
+        )
+        existing_rows = result.scalars().all()
+        if len(existing_rows) != len(rows):
+            return False
+        existing_signatures = sorted(self._snapshot_signature(row) for row in existing_rows)
+        target_signatures = sorted(self._snapshot_signature(row) for row in rows)
+        return existing_signatures == target_signatures
+
+    def _review_snapshot_scope_clause(self, normalized_account_id: str):
+        return or_(
+            and_(
+                ReviewSnapshot.snapshot_type == "pool_market",
+                ReviewSnapshot.account_id == "",
+            ),
+            and_(
+                ReviewSnapshot.snapshot_type != "pool_market",
+                ReviewSnapshot.account_id == normalized_account_id,
+            ),
+        )
+
     async def get_stock_pools_page_snapshot(
         self,
         trade_date: str,
         candidate_limit: int,
+        account_id: Optional[str] = None,
     ) -> Optional[StockPoolsOutput]:
         """读取完整三池页快照，命中后可直接返回页面结果。"""
+        normalized_account_id = self._normalize_account_id(account_id)
         async with async_session_factory() as session:
             result = await session.execute(
                 select(StockPoolSnapshot).where(
                     StockPoolSnapshot.trade_date == trade_date,
                     StockPoolSnapshot.candidate_limit == candidate_limit,
+                    StockPoolSnapshot.account_id == normalized_account_id,
                 )
             )
             row = result.scalar_one_or_none()
@@ -64,8 +119,10 @@ class ReviewSnapshotService:
         trade_date: str,
         candidate_limit: int,
         stock_pools: StockPoolsOutput,
+        account_id: Optional[str] = None,
     ) -> int:
         """保存完整三池页快照，供后续页面直接读取。"""
+        normalized_account_id = self._normalize_account_id(account_id)
         payload_json = json.dumps(
             stock_pools.model_dump(mode="json"),
             ensure_ascii=False,
@@ -77,11 +134,13 @@ class ReviewSnapshotService:
                 delete(StockPoolSnapshot).where(
                     StockPoolSnapshot.trade_date == trade_date,
                     StockPoolSnapshot.candidate_limit == candidate_limit,
+                    StockPoolSnapshot.account_id == normalized_account_id,
                 )
             )
             session.add(
                 StockPoolSnapshot(
                     trade_date=trade_date,
+                    account_id=normalized_account_id,
                     candidate_limit=candidate_limit,
                     resolved_trade_date=stock_pools.resolved_trade_date or "",
                     payload_json=payload_json,
@@ -96,29 +155,45 @@ class ReviewSnapshotService:
         trade_date: str,
         candidate_limit: int,
         stock_pools: StockPoolsOutput,
+        account_id: Optional[str] = None,
     ) -> int:
         """安全保存完整三池页快照，失败时只记日志。"""
         try:
+            snapshot_kwargs = {"account_id": account_id} if account_id else {}
             return await self.save_stock_pools_page_snapshot(
                 trade_date,
                 candidate_limit,
                 stock_pools,
+                **snapshot_kwargs,
             )
         except Exception as exc:
             logger.warning("三池页快照写入失败: %s", exc)
             return 0
 
-    async def save_analysis_snapshot(self, trade_date: str, stock_pools=None, buy_analysis=None) -> int:
+    async def save_analysis_snapshot(
+        self,
+        trade_date: str,
+        stock_pools=None,
+        buy_analysis=None,
+        sell_analysis=None,
+        account_output=None,
+        account_id: Optional[str] = None,
+    ) -> int:
         """保存某交易日的候选池与买点快照，支持三池页/买点页部分写入。"""
+        normalized_account_id = self._normalize_account_id(account_id)
         rows = []
-        snapshot_types_to_replace = []
+        delete_targets: List[Tuple[str, str]] = []
 
         if stock_pools is not None:
-            snapshot_types_to_replace.extend(["pool_market", "pool_account"])
+            delete_targets.extend([
+                ("pool_market", ""),
+                ("pool_account", normalized_account_id),
+            ])
             for stock in stock_pools.market_watch_pool:
                 rows.append(
                     ReviewSnapshot(
                         trade_date=trade_date,
+                        account_id="",
                         snapshot_type="pool_market",
                         ts_code=stock.ts_code,
                         stock_name=stock.stock_name,
@@ -134,6 +209,7 @@ class ReviewSnapshotService:
                 rows.append(
                     ReviewSnapshot(
                         trade_date=trade_date,
+                        account_id=normalized_account_id,
                         snapshot_type="pool_account",
                         ts_code=stock.ts_code,
                         stock_name=stock.stock_name,
@@ -146,11 +222,15 @@ class ReviewSnapshotService:
                 )
 
         if buy_analysis is not None:
-            snapshot_types_to_replace.extend(["buy_available", "buy_observe"])
+            delete_targets.extend([
+                ("buy_available", normalized_account_id),
+                ("buy_observe", normalized_account_id),
+            ])
             for bp in buy_analysis.available_buy_points:
                 rows.append(
                     ReviewSnapshot(
                         trade_date=trade_date,
+                        account_id=normalized_account_id,
                         snapshot_type="buy_available",
                         ts_code=bp.ts_code,
                         stock_name=bp.stock_name,
@@ -166,6 +246,7 @@ class ReviewSnapshotService:
                 rows.append(
                     ReviewSnapshot(
                         trade_date=trade_date,
+                        account_id=normalized_account_id,
                         snapshot_type="buy_observe",
                         ts_code=bp.ts_code,
                         stock_name=bp.stock_name,
@@ -177,15 +258,30 @@ class ReviewSnapshotService:
                     )
                 )
 
-        if not snapshot_types_to_replace:
+        if not delete_targets:
             return 0
 
         async with async_session_factory() as session:
-            await session.execute(
-                delete(ReviewSnapshot)
-                .where(ReviewSnapshot.trade_date == trade_date)
-                .where(ReviewSnapshot.snapshot_type.in_(snapshot_types_to_replace))
-            )
+            if buy_analysis is not None and stock_pools is None:
+                buy_rows = [
+                    row
+                    for row in rows
+                    if row.snapshot_type in {"buy_available", "buy_observe"}
+                ]
+                if await self._buy_snapshot_unchanged(
+                    session,
+                    trade_date,
+                    normalized_account_id,
+                    buy_rows,
+                ):
+                    return 0
+            for snapshot_type, target_account_id in delete_targets:
+                await session.execute(
+                    delete(ReviewSnapshot)
+                    .where(ReviewSnapshot.trade_date == trade_date)
+                    .where(ReviewSnapshot.snapshot_type == snapshot_type)
+                    .where(ReviewSnapshot.account_id == target_account_id)
+                )
             if rows:
                 session.add_all(rows)
             await session.commit()
@@ -197,13 +293,16 @@ class ReviewSnapshotService:
         trade_date: str,
         stock_pools=None,
         buy_analysis=None,
+        account_id: Optional[str] = None,
     ) -> int:
         """安全保存分析快照，失败时只记日志。"""
         try:
+            snapshot_kwargs = {"account_id": account_id} if account_id else {}
             return await self.save_analysis_snapshot(
                 trade_date,
                 stock_pools=stock_pools,
                 buy_analysis=buy_analysis,
+                **snapshot_kwargs,
             )
         except Exception as exc:
             logger.warning("分析快照写入失败: %s", exc)
@@ -452,12 +551,14 @@ class ReviewSnapshotService:
 
         return {"exact": exact, "bucket": bucket_rollup}
 
-    async def get_review_bias_profile(self, limit_days: int = 10) -> Dict:
+    async def get_review_bias_profile(self, limit_days: int = 10, account_id: Optional[str] = None) -> Dict:
         """为三池/买点排序提供复盘反馈画像。"""
+        normalized_account_id = self._normalize_account_id(account_id)
         async with async_session_factory() as session:
             date_rows = await session.execute(
                 select(ReviewSnapshot.trade_date)
                 .distinct()
+                .where(self._review_snapshot_scope_clause(normalized_account_id))
                 .order_by(ReviewSnapshot.trade_date.desc())
                 .limit(limit_days)
             )
@@ -469,6 +570,7 @@ class ReviewSnapshotService:
                 select(ReviewSnapshot)
                 .where(ReviewSnapshot.trade_date.in_(trade_dates))
                 .where(ReviewSnapshot.snapshot_type.in_(["buy_available", "buy_observe", "pool_account", "pool_market"]))
+                .where(self._review_snapshot_scope_clause(normalized_account_id))
             )
             rows = result.scalars().all()
 
@@ -476,10 +578,10 @@ class ReviewSnapshotService:
             return {"exact": {}, "bucket": {}}
         return self._build_review_bias_profile_from_rows(rows)
 
-    async def get_review_bias_profile_safe(self, limit_days: int = 10) -> Dict:
+    async def get_review_bias_profile_safe(self, limit_days: int = 10, account_id: Optional[str] = None) -> Dict:
         """安全读取复盘反馈画像，失败时回退为空画像而不影响主流程。"""
         try:
-            return await self.get_review_bias_profile(limit_days=limit_days)
+            return await self.get_review_bias_profile(limit_days=limit_days, account_id=account_id)
         except Exception as exc:
             logger.warning("读取复盘反馈画像失败，已降级为空画像: %s", exc)
             return {"exact": {}, "bucket": {}}
@@ -488,8 +590,10 @@ class ReviewSnapshotService:
         self,
         limit_days: int = 10,
         refresh_outcomes: bool = False,
+        account_id: Optional[str] = None,
     ) -> Dict:
         """获取最近 N 个交易日的分层复盘统计。"""
+        normalized_account_id = self._normalize_account_id(account_id)
         refreshed_count = 0
         if refresh_outcomes:
             refreshed_count = await self.refresh_snapshot_outcomes(limit_days=limit_days)
@@ -498,14 +602,17 @@ class ReviewSnapshotService:
             pending_1d_rows = await session.execute(
                 select(ReviewSnapshot.id)
                 .where(ReviewSnapshot.resolved_days < 1)
+                .where(self._review_snapshot_scope_clause(normalized_account_id))
             )
             pending_3d_rows = await session.execute(
                 select(ReviewSnapshot.id)
                 .where(ReviewSnapshot.resolved_days < 3)
+                .where(self._review_snapshot_scope_clause(normalized_account_id))
             )
             pending_5d_rows = await session.execute(
                 select(ReviewSnapshot.id)
                 .where(ReviewSnapshot.resolved_days < 5)
+                .where(self._review_snapshot_scope_clause(normalized_account_id))
             )
             pending_1d_count = len(pending_1d_rows.all())
             pending_3d_count = len(pending_3d_rows.all())
@@ -514,6 +621,7 @@ class ReviewSnapshotService:
             date_rows = await session.execute(
                 select(ReviewSnapshot.trade_date)
                 .distinct()
+                .where(self._review_snapshot_scope_clause(normalized_account_id))
                 .order_by(ReviewSnapshot.trade_date.desc())
                 .limit(limit_days)
             )
@@ -525,6 +633,7 @@ class ReviewSnapshotService:
                 select(ReviewSnapshot)
                 .where(ReviewSnapshot.trade_date.in_(trade_dates))
                 .where(ReviewSnapshot.snapshot_type.in_(["buy_available", "buy_observe"]))
+                .where(self._review_snapshot_scope_clause(normalized_account_id))
             )
             rows = result.scalars().all()
             stats_mode = "buy"
@@ -534,6 +643,7 @@ class ReviewSnapshotService:
                     select(ReviewSnapshot)
                     .where(ReviewSnapshot.trade_date.in_(trade_dates))
                     .where(ReviewSnapshot.snapshot_type.in_(["pool_account", "pool_market"]))
+                    .where(self._review_snapshot_scope_clause(normalized_account_id))
                 )
                 rows = result.scalars().all()
                 stats_mode = "pool"

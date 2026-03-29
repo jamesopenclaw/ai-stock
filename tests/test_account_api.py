@@ -10,29 +10,32 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.api.v1 import account
 
 
-def test_refresh_holdings_price_uses_stock_detail_chain(monkeypatch):
-    """账户页持仓刷新应复用个股详情链路，拿到实时价和行情元数据。"""
+def test_refresh_holdings_price_uses_batch_quote_chain(monkeypatch):
+    """账户页持仓刷新应优先复用批量行情链路。"""
 
-    def fake_get_stock_detail(ts_code, trade_date):
-        if ts_code == "601012.SH":
-            return {
+    def fake_get_stock_quote_map(ts_codes, trade_date):
+        assert ts_codes == ["601012.SH", "002463.SZ"]
+        assert trade_date
+        return {
+            "601012.SH": {
                 "ts_code": "601012.SH",
                 "stock_name": "隆基绿能",
                 "close": 19.18,
                 "pre_close": 18.90,
                 "quote_time": "2026-03-23 14:32:10",
                 "data_source": "realtime_sina",
-            }
-        return {
-            "ts_code": ts_code,
-            "stock_name": "沪电股份",
-            "close": 84.30,
-            "pre_close": 85.10,
-            "quote_time": "2026-03-23 14:32:11",
-            "data_source": "realtime_sina",
+            },
+            "002463.SZ": {
+                "ts_code": "002463.SZ",
+                "stock_name": "沪电股份",
+                "close": 84.30,
+                "pre_close": 85.10,
+                "quote_time": "2026-03-23 14:32:11",
+                "data_source": "realtime_sina",
+            },
         }
 
-    monkeypatch.setattr(account.tushare_client, "get_stock_detail", fake_get_stock_detail)
+    monkeypatch.setattr(account.tushare_client, "get_stock_quote_map", fake_get_stock_quote_map)
 
     holdings = [
         {
@@ -70,14 +73,16 @@ def test_refresh_holdings_price_keeps_existing_when_detail_missing(monkeypatch):
 
     monkeypatch.setattr(
         account.tushare_client,
-        "get_stock_detail",
-        lambda ts_code, trade_date: {
-            "ts_code": ts_code,
-            "stock_name": "测试股票",
-            "close": 0.0,
-            "pre_close": 0.0,
-            "quote_time": None,
-            "data_source": "daily_fallback",
+        "get_stock_quote_map",
+        lambda ts_codes, trade_date: {
+            "002025.SZ": {
+                "ts_code": "002025.SZ",
+                "stock_name": "测试股票",
+                "close": 0.0,
+                "pre_close": 0.0,
+                "quote_time": None,
+                "data_source": "daily_fallback",
+            }
         },
     )
 

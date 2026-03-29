@@ -255,6 +255,17 @@ const setModuleLoading = (key, value) => {
   }
 }
 
+const isAbortedRequest = (error) => {
+  const code = String(error?.code || '')
+  const message = String(error?.message || '').toLowerCase()
+  return (
+    code === 'ERR_CANCELED'
+    || message.includes('request aborted')
+    || message.includes('aborted')
+    || message.includes('canceled')
+  )
+}
+
 const persistDashboardCache = () => {
   if (typeof window === 'undefined') return
   const payload = {
@@ -304,6 +315,9 @@ const refreshData = async ({ silent = false } = {}) => {
         if (refreshVersion.value !== version) return
         assign(res.data.data)
       } catch (error) {
+        if (isAbortedRequest(error)) {
+          return
+        }
         console.error(`${label}加载失败:`, error)
         if (refreshVersion.value === version) {
           failedModules.push(label)

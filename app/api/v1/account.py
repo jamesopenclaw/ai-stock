@@ -1,7 +1,7 @@
 """
 账户管理 API - PostgreSQL 存储
 """
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
@@ -18,20 +18,21 @@ from app.services.account_adapter import account_adapter_service
 from app.data.tushare_client import tushare_client, normalize_ts_code
 from app.models.holding import Holding
 from app.core.database import async_session_factory
+from app.core.security import AuthenticatedAccount, get_current_account
 from app.services.account_config_service import (
     get_config as get_account_config_from_db,
     update_config as update_account_config,
 )
-from app.services.portfolio_service import portfolio_service
+from app.services.portfolio_service import _safe_float, portfolio_service
 from sqlalchemy import select
 from loguru import logger
 
 router = APIRouter()
 
 
-async def build_account_input(holdings: List[dict]) -> AccountInput:
+async def build_account_input(holdings: List[dict], account_id: Optional[str] = None) -> AccountInput:
     """根据实际持仓动态构建账户信息（总资产来自数据库配置）"""
-    return await portfolio_service.build_account_input_from_holdings(holdings)
+    return await portfolio_service.build_account_input_from_holdings(holdings, account_id=account_id)
 
 
 class AddPositionRequest(BaseModel):
@@ -73,9 +74,52 @@ async def get_stock_name(ts_code: str) -> str:
         return ts_code
 
 
-async def get_holdings_from_db() -> List[dict]:
+async def get_holdings_from_db(account_id: str) -> List[dict]:
     """从数据库获取持仓"""
-    return await portfolio_service.get_holdings_from_db()
+    return await portfolio_service.get_holdings_from_db(account_id=account_id)
+
+
+async def build_account_overview_payload(current_account: AuthenticatedAccount) -> dict:
+    """构建账户页首屏所需的概况、状态和持仓明细。"""
+    holdings = await get_holdings_from_db(current_account.id)
+    account = await build_account_input(holdings, current_account.id)
+    holdings_obj = [AccountPosition(**h) for h in holdings]
+    profile = account_adapter_service.get_profile(account, holdings_obj)
+    account_status = account_adapter_service.adapt(
+        datetime.now().strftime("%Y-%m-%d"),
+        account,
+        holdings_obj,
+    )
+    total_pnl = sum(_safe_float(h.get("pnl_amount"), 0.0) for h in holdings)
+    today_pnl = sum(_safe_float(h.get("today_pnl_amount"), 0.0) for h in holdings)
+    profile_payload = profile.model_dump()
+    profile_payload.update(
+        {
+            "total_pnl_amount": round(total_pnl, 2),
+            "today_pnl_amount": round(today_pnl, 2),
+            "account_id": current_account.id,
+            "account_name": current_account.account_name,
+            "can_trade": account_status.new_position_allowed,
+            "action": account_status.account_action_tag,
+            "priority": account_status.priority_action,
+        }
+    )
+
+    return {
+        "profile": profile_payload,
+        "status": {
+            "account_id": current_account.id,
+            "account_name": current_account.account_name,
+            "can_trade": account_status.new_position_allowed,
+            "action": account_status.account_action_tag,
+            "priority": account_status.priority_action,
+            "position_ratio": profile.total_position_ratio,
+            "available_cash": profile.available_cash,
+            "holding_count": profile.holding_count,
+        },
+        "positions": holdings,
+        "total": len(holdings),
+    }
 
 
 async def save_holding_to_db(holding_data: dict) -> dict:
@@ -88,10 +132,12 @@ async def save_holding_to_db(holding_data: dict) -> dict:
         return holding.to_dict()
 
 
-async def delete_holding_from_db(ts_code: str) -> bool:
+async def delete_holding_from_db(account_id: str, ts_code: str) -> bool:
     """从数据库删除持仓"""
     async with async_session_factory() as session:
-        result = await session.execute(select(Holding).where(Holding.ts_code == ts_code))
+        result = await session.execute(
+            select(Holding).where(Holding.account_id == account_id, Holding.ts_code == ts_code)
+        )
         holding = result.scalar_one_or_none()
         if holding:
             await session.delete(holding)
@@ -100,10 +146,12 @@ async def delete_holding_from_db(ts_code: str) -> bool:
         return False
 
 
-async def update_holding_in_db(ts_code: str, **kwargs) -> Optional[dict]:
+async def update_holding_in_db(account_id: str, ts_code: str, **kwargs) -> Optional[dict]:
     """更新持仓"""
     async with async_session_factory() as session:
-        result = await session.execute(select(Holding).where(Holding.ts_code == ts_code))
+        result = await session.execute(
+            select(Holding).where(Holding.account_id == account_id, Holding.ts_code == ts_code)
+        )
         holding = result.scalar_one_or_none()
         if holding:
             for key, value in kwargs.items():
@@ -126,20 +174,25 @@ def enrich_holdings(holdings: List[dict]):
 
 
 @router.get("/config", response_model=ApiResponse)
-async def get_account_config() -> ApiResponse:
+async def get_account_config(
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
     """获取账户配置（总资产等）"""
     try:
-        data = await get_account_config_from_db()
+        data = await get_account_config_from_db(account_id=current_account.id)
         return ApiResponse(data=data)
     except Exception as e:
         return ApiResponse(code=500, message=f"获取账户配置失败：{str(e)}")
 
 
 @router.put("/config", response_model=ApiResponse)
-async def put_account_config(request: AccountConfigUpdateRequest) -> ApiResponse:
+async def put_account_config(
+    request: AccountConfigUpdateRequest,
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
     """更新账户配置"""
     try:
-        data = await update_account_config(request.model_dump())
+        data = await update_account_config(request.model_dump(), account_id=current_account.id)
         return ApiResponse(data=data)
     except ValueError as e:
         return ApiResponse(code=400, message=str(e))
@@ -148,42 +201,46 @@ async def put_account_config(request: AccountConfigUpdateRequest) -> ApiResponse
 
 
 @router.get("/profile", response_model=ApiResponse)
-async def get_profile() -> ApiResponse:
+async def get_profile(
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
     """获取账户概况"""
     try:
-        holdings = await get_holdings_from_db()
-        refresh_holdings_price(holdings)
-        enrich_holdings(holdings)
-        account = await build_account_input(holdings)
-        holdings_obj = [AccountPosition(**h) for h in holdings]
-        profile = account_adapter_service.get_profile(account, holdings_obj)
-        total_pnl = sum(_safe_float(h.get("pnl_amount"), 0.0) for h in holdings)
-        today_pnl = sum(_safe_float(h.get("today_pnl_amount"), 0.0) for h in holdings)
-        profile = profile.model_copy(
-            update={
-                "total_pnl_amount": round(total_pnl, 2),
-                "today_pnl_amount": round(today_pnl, 2),
-            }
-        )
-        return ApiResponse(data=profile.model_dump())
+        payload = await build_account_overview_payload(current_account)
+        return ApiResponse(data=payload["profile"])
     except Exception as e:
         return ApiResponse(code=500, message=f"获取账户概况失败：{str(e)}")
 
 
+@router.get("/overview", response_model=ApiResponse)
+async def get_overview(
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
+    """获取账户页首屏所需的概况、状态和持仓明细。"""
+    try:
+        payload = await build_account_overview_payload(current_account)
+        return ApiResponse(data=payload)
+    except Exception as e:
+        return ApiResponse(code=500, message=f"获取账户总览失败：{str(e)}")
+
+
 @router.get("/positions", response_model=ApiResponse)
-async def get_positions() -> ApiResponse:
+async def get_positions(
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
     """获取持仓明细"""
     try:
-        holdings = await get_holdings_from_db()
-        refresh_holdings_price(holdings)
-        enrich_holdings(holdings)
+        holdings = await get_holdings_from_db(current_account.id)
         return ApiResponse(data={"positions": holdings, "total": len(holdings)})
     except Exception as e:
         return ApiResponse(code=500, message=f"获取持仓明细失败：{str(e)}")
 
 
 @router.post("/positions", response_model=ApiResponse)
-async def add_position(request: AddPositionRequest) -> ApiResponse:
+async def add_position(
+    request: AddPositionRequest,
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
     """新增持仓"""
     try:
         # 标准化股票代码
@@ -216,6 +273,7 @@ async def add_position(request: AddPositionRequest) -> ApiResponse:
         # 创建持仓数据
         holding_data = {
             "id": str(uuid.uuid4()),
+            "account_id": current_account.id,
             "ts_code": ts_code,
             "stock_name": stock_name,
             "holding_qty": request.holding_qty,
@@ -237,7 +295,11 @@ async def add_position(request: AddPositionRequest) -> ApiResponse:
 
 
 @router.put("/positions/{ts_code}", response_model=ApiResponse)
-async def update_position(ts_code: str, request: UpdatePositionRequest) -> ApiResponse:
+async def update_position(
+    ts_code: str,
+    request: UpdatePositionRequest,
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
     """修改持仓（数量、成本价、买入理由等）"""
     try:
         ts_code = normalize_ts_code(ts_code)
@@ -247,7 +309,7 @@ async def update_position(ts_code: str, request: UpdatePositionRequest) -> ApiRe
             return ApiResponse(code=400, message="请至少修改一项")
 
         # 更新数据库
-        updated = await update_holding_in_db(ts_code, **payload)
+        updated = await update_holding_in_db(current_account.id, ts_code, **payload)
 
         if updated:
             # 与 GET 持仓一致：按当日行情刷新现价、盈亏、市值
@@ -261,11 +323,19 @@ async def update_position(ts_code: str, request: UpdatePositionRequest) -> ApiRe
 
 
 @router.delete("/positions/{position_id}", response_model=ApiResponse)
-async def delete_position(position_id: str) -> ApiResponse:
+async def delete_position(
+    position_id: str,
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
     """删除持仓（按 id）"""
     try:
         async with async_session_factory() as session:
-            result = await session.execute(select(Holding).where(Holding.id == position_id))
+            result = await session.execute(
+                select(Holding).where(
+                    Holding.id == position_id,
+                    Holding.account_id == current_account.id,
+                )
+            )
             holding = result.scalar_one_or_none()
             if holding:
                 await session.delete(holding)
@@ -280,14 +350,13 @@ async def delete_position(position_id: str) -> ApiResponse:
 @router.post("/adapt", response_model=ApiResponse)
 async def adapt_account(
     trade_date: str = Body(..., description="交易日"),
-    account: Optional[AccountInput] = Body(None, description="账户信息")
+    account: Optional[AccountInput] = Body(None, description="账户信息"),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """账户适配分析"""
     try:
-        holdings = await get_holdings_from_db()
-        refresh_holdings_price(holdings)
-        enrich_holdings(holdings)
-        account = account or await build_account_input(holdings)
+        holdings = await get_holdings_from_db(current_account.id)
+        account = account or await build_account_input(holdings, current_account.id)
         holdings_obj = [AccountPosition(**h) for h in holdings]
         result = account_adapter_service.adapt(trade_date, account, holdings_obj)
         return ApiResponse(data=result.model_dump())
@@ -296,25 +365,12 @@ async def adapt_account(
 
 
 @router.get("/status", response_model=ApiResponse)
-async def get_account_status() -> ApiResponse:
+async def get_account_status(
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
     """获取账户状态快速检查"""
     try:
-        holdings = await get_holdings_from_db()
-        refresh_holdings_price(holdings)
-        enrich_holdings(holdings)
-        account = await build_account_input(holdings)
-        holdings_obj = [AccountPosition(**h) for h in holdings]
-        profile = account_adapter_service.get_profile(account, holdings_obj)
-        trade_date = datetime.now().strftime("%Y-%m-%d")
-        result = account_adapter_service.adapt(trade_date, account, holdings_obj)
-
-        return ApiResponse(data={
-            "can_trade": result.new_position_allowed,
-            "action": result.account_action_tag,
-            "priority": result.priority_action,
-            "position_ratio": profile.total_position_ratio,
-            "available_cash": profile.available_cash,
-            "holding_count": profile.holding_count
-        })
+        payload = await build_account_overview_payload(current_account)
+        return ApiResponse(data=payload["status"])
     except Exception as e:
         return ApiResponse(code=500, message=f"获取账户状态失败：{str(e)}")

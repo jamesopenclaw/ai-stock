@@ -1,15 +1,35 @@
 // API 配置
+import { authState, clearSession, getAccessToken } from '../auth'
+
 const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
 
 // 请求封装
 const request = (url, options = {}) => {
   return new Promise((resolve, reject) => {
+    const { params, data, ...rest } = options
+    const headers = {
+      ...(rest.header || {}),
+    }
+    const token = getAccessToken()
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+    }
+    const accountId = authState.account?.id
+    if (accountId) {
+      headers['X-Account-Id'] = accountId
+    }
     uni.request({
       url: API_BASE + url,
-      ...options,
+      header: headers,
+      data: data !== undefined ? data : params,
+      ...rest,
       success: (res) => {
-        if (res.statusCode === 200) {
+        if (res.statusCode === 200 && res.data?.code !== 401) {
           resolve(res.data)
+        } else if (res.statusCode === 401 || res.data?.code === 401) {
+          clearSession()
+          uni.showToast({ title: '登录已失效，请重新登录', icon: 'none' })
+          reject(res)
         } else {
           reject(res)
         }
@@ -19,6 +39,13 @@ const request = (url, options = {}) => {
       }
     })
   })
+}
+
+export const authApi = {
+  login: (data) => request('/auth/login', { method: 'POST', data }),
+  refresh: (refreshToken) => request('/auth/refresh', { method: 'POST', data: { refresh_token: refreshToken } }),
+  logout: (refreshToken) => request('/auth/logout', { method: 'POST', data: { refresh_token: refreshToken } }),
+  me: () => request('/auth/me'),
 }
 
 // 市场 API
@@ -66,6 +93,8 @@ export const accountApi = {
   getConfig: () => request('/account/config'),
   updateConfig: (data) => request('/account/config', { method: 'PUT', data }),
   adapt: (tradeDate) => request('/account/adapt', { method: 'POST', data: { trade_date: tradeDate } }),
+  addPosition: (data) => request('/account/positions', { method: 'POST', data }),
+  deletePosition: (positionId) => request(`/account/positions/${encodeURIComponent(positionId)}`, { method: 'DELETE' }),
   updatePosition: (tsCode, data) =>
     request(`/account/positions/${encodeURIComponent(tsCode)}`, { method: 'PUT', data })
 }

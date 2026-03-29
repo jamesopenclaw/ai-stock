@@ -1,7 +1,7 @@
 """
 持仓数据模型
 """
-from sqlalchemy import Column, String, Integer, Float, Boolean, Date
+from sqlalchemy import Column, String, Integer, Float, Boolean
 from app.core.database import Base
 
 
@@ -10,6 +10,7 @@ class Holding(Base):
     __tablename__ = "holdings"
 
     id = Column(String, primary_key=True)
+    account_id = Column(String(36), nullable=True, index=True)
     ts_code = Column(String, nullable=False, index=True)  # 股票代码
     stock_name = Column(String)  # 股票名称
     holding_qty = Column(Integer, nullable=False)  # 持仓数量
@@ -24,6 +25,7 @@ class Holding(Base):
     def to_dict(self):
         return {
             "id": self.id,
+            "account_id": self.account_id,
             "ts_code": self.ts_code,
             "stock_name": self.stock_name,
             "holding_qty": self.holding_qty,

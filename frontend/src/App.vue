@@ -1,5 +1,6 @@
 <template>
-  <el-container class="app-container">
+  <router-view v-if="!showShell" />
+  <el-container v-else class="app-container">
     <el-aside width="200px">
       <div class="logo">
         <h3>轻舟交易系统</h3>
@@ -9,49 +10,13 @@
         router
         class="el-menu-vertical"
       >
-        <el-menu-item index="/">
-          <el-icon><House /></el-icon>
-          <span>Dashboard</span>
-        </el-menu-item>
-        <el-menu-item index="/market">
-          <el-icon><TrendCharts /></el-icon>
-          <span>市场环境</span>
-        </el-menu-item>
-        <el-menu-item index="/sectors">
-          <el-icon><Grid /></el-icon>
-          <span>板块扫描</span>
-        </el-menu-item>
-        <el-menu-item index="/pools">
-          <el-icon><List /></el-icon>
-          <span>三池分类</span>
-        </el-menu-item>
-        <el-menu-item index="/buy">
-          <el-icon><Plus /></el-icon>
-          <span>买点分析</span>
-        </el-menu-item>
-        <el-menu-item index="/sell">
-          <el-icon><Minus /></el-icon>
-          <span>卖点分析</span>
-        </el-menu-item>
-        <el-menu-item index="/account">
-          <el-icon><Wallet /></el-icon>
-          <span>账户管理</span>
-        </el-menu-item>
-        <el-menu-item index="/review">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>复盘统计</span>
-        </el-menu-item>
-        <el-menu-item index="/system">
-          <el-icon><Setting /></el-icon>
-          <span>系统设置</span>
-        </el-menu-item>
-        <el-menu-item index="/llm-logs">
-          <el-icon><Tickets /></el-icon>
-          <span>LLM调用记录</span>
-        </el-menu-item>
-        <el-menu-item index="/tasks">
-          <el-icon><Operation /></el-icon>
-          <span>任务调度</span>
+        <el-menu-item
+          v-for="item in visibleMenuItems"
+          :key="item.path"
+          :index="item.path"
+        >
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ item.label }}</span>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -62,7 +27,32 @@
           <span>{{ route.meta.title }}</span>
         </div>
         <div class="header-right">
+          <div class="header-user" v-if="currentUser">
+            <el-tag type="info">{{ currentUser.display_name || currentUser.username }}</el-tag>
+            <el-tag :type="currentUser.role === 'admin' ? 'danger' : 'success'">
+              {{ currentUser.role === 'admin' ? '管理员' : '普通用户' }}
+            </el-tag>
+            <el-select
+              v-if="isAdmin && accountOptions.length"
+              v-model="selectedAccountId"
+              class="account-switcher"
+              placeholder="选择查看账户"
+              :loading="switchingAccount"
+              @change="handleAccountSwitch"
+            >
+              <el-option
+                v-for="account in accountOptions"
+                :key="account.id"
+                :label="`${account.account_name} (${account.account_code})`"
+                :value="account.id"
+              />
+            </el-select>
+            <el-tag v-else-if="currentAccount" type="warning">
+              {{ currentAccount.account_name }}
+            </el-tag>
+          </div>
           <el-tag>{{ currentDate }}</el-tag>
+          <el-button type="danger" plain size="small" @click="handleLogout">退出登录</el-button>
         </div>
       </el-header>
       
@@ -74,10 +64,12 @@
 </template>
 
 <script setup>
-import { useRoute } from 'vue-router'
-import { ref, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
+import { ElMessage } from 'element-plus'
 import {
+  Avatar,
   DataAnalysis,
   Grid,
   House,
@@ -88,17 +80,131 @@ import {
   Setting,
   Tickets,
   TrendCharts,
+  UserFilled,
   Wallet,
 } from '@element-plus/icons-vue'
+import { adminApi, authApi } from './api'
+import { authState, clearSession, getRefreshToken, setCurrentAccount, setSession } from './auth'
 
 const route = useRoute()
+const router = useRouter()
 const currentDate = ref(dayjs().format('YYYY-MM-DD'))
+const accountOptions = ref([])
+const switchingAccount = ref(false)
+const selectedAccountId = ref('')
+const currentUser = computed(() => authState.user)
+const currentAccount = computed(() => authState.account)
+const isAdmin = computed(() => currentUser.value?.role === 'admin')
+const showShell = computed(() => route.meta.requiresAuth !== false)
+const menuItems = [
+  { path: '/', label: 'Dashboard', icon: House },
+  { path: '/market', label: '市场环境', icon: TrendCharts },
+  { path: '/sectors', label: '板块扫描', icon: Grid },
+  { path: '/pools', label: '三池分类', icon: List },
+  { path: '/buy', label: '买点分析', icon: Plus },
+  { path: '/sell', label: '卖点分析', icon: Minus },
+  { path: '/account', label: '账户管理', icon: Wallet },
+  { path: '/review', label: '复盘统计', icon: DataAnalysis },
+  { path: '/system', label: '系统设置', icon: Setting, adminOnly: true },
+  { path: '/llm-logs', label: 'LLM调用记录', icon: Tickets },
+  { path: '/tasks', label: '任务调度', icon: Operation, adminOnly: true },
+  { path: '/admin/users', label: '用户管理', icon: UserFilled, adminOnly: true },
+  { path: '/admin/accounts', label: '交易账户', icon: Avatar, adminOnly: true },
+]
+const visibleMenuItems = computed(() =>
+  menuItems.filter((item) => !item.adminOnly || currentUser.value?.role === 'admin')
+)
+
+const syncSelectedAccount = () => {
+  selectedAccountId.value = currentAccount.value?.id || ''
+}
+
+const loadAdminAccounts = async () => {
+  if (!isAdmin.value) {
+    accountOptions.value = []
+    selectedAccountId.value = ''
+    return
+  }
+  try {
+    const response = await adminApi.listAccounts()
+    accountOptions.value = (response.data?.data?.accounts || []).filter((account) => account.status === 'active')
+    syncSelectedAccount()
+  } catch {
+    accountOptions.value = []
+  }
+}
+
+const loadCurrentUser = async () => {
+  if (!authState.accessToken) {
+    return
+  }
+  try {
+    const response = await authApi.me()
+    const user = response.data?.data?.user || null
+    const account = response.data?.data?.account || null
+    if (user) {
+      setSession({
+        accessToken: authState.accessToken,
+        refreshToken: authState.refreshToken,
+        user,
+        account,
+      })
+    }
+  } catch {
+    // 401 交给 axios 拦截器统一处理
+  }
+}
+
+const handleAccountSwitch = (accountId) => {
+  const nextAccount = accountOptions.value.find((account) => account.id === accountId)
+  if (!nextAccount || nextAccount.id === currentAccount.value?.id) {
+    syncSelectedAccount()
+    return
+  }
+  switchingAccount.value = true
+  setCurrentAccount(nextAccount)
+  ElMessage.success(`已切换到 ${nextAccount.account_name}`)
+  window.location.reload()
+}
+
+const handleLogout = async () => {
+  const refreshToken = getRefreshToken()
+  try {
+    if (refreshToken) {
+      await authApi.logout(refreshToken)
+    }
+  } catch {
+    // 忽略服务端注销失败，仍清理本地状态
+  } finally {
+    clearSession()
+    ElMessage.success('已退出登录')
+    router.replace('/login')
+  }
+}
 
 onMounted(() => {
+  loadCurrentUser()
   setInterval(() => {
     currentDate.value = dayjs().format('YYYY-MM-DD HH:mm')
   }, 60000)
 })
+
+watch(
+  () => currentUser.value?.role,
+  () => {
+    loadAdminAccounts()
+    syncSelectedAccount()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => currentAccount.value?.id,
+  () => {
+    syncSelectedAccount()
+  },
+  { immediate: true }
+)
 </script>
 
 <style>
@@ -214,6 +320,22 @@ body {
   font-size: 16px;
   font-weight: 600;
   color: var(--color-text-pri);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-switcher {
+  width: 240px;
+}
+
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* 内容区 */

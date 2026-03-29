@@ -1,0 +1,80 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - heading "轻舟交易系统" [level=3] [ref=e6]
+    - menubar [ref=e7]:
+      - menuitem "Dashboard" [ref=e8] [cursor=pointer]:
+        - img [ref=e10]
+        - generic [ref=e12]: Dashboard
+      - menuitem "市场环境" [ref=e13] [cursor=pointer]:
+        - img [ref=e15]
+        - generic [ref=e17]: 市场环境
+      - menuitem "板块扫描" [ref=e18] [cursor=pointer]:
+        - img [ref=e20]
+        - generic [ref=e22]: 板块扫描
+      - menuitem "三池分类" [ref=e23] [cursor=pointer]:
+        - img [ref=e25]
+        - generic [ref=e27]: 三池分类
+      - menuitem "买点分析" [ref=e28] [cursor=pointer]:
+        - img [ref=e30]
+        - generic [ref=e32]: 买点分析
+      - menuitem "卖点分析" [ref=e33] [cursor=pointer]:
+        - img [ref=e35]
+        - generic [ref=e37]: 卖点分析
+      - menuitem "账户管理" [ref=e38] [cursor=pointer]:
+        - img [ref=e40]
+        - generic [ref=e44]: 账户管理
+      - menuitem "复盘统计" [ref=e45] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e49]: 复盘统计
+      - menuitem "系统设置" [ref=e50] [cursor=pointer]:
+        - img [ref=e52]
+        - generic [ref=e54]: 系统设置
+      - menuitem "LLM调用记录" [ref=e55] [cursor=pointer]:
+        - img [ref=e57]
+        - generic [ref=e59]: LLM调用记录
+      - menuitem "任务调度" [ref=e60] [cursor=pointer]:
+        - img [ref=e62]
+        - generic [ref=e64]: 任务调度
+      - menuitem "用户管理" [ref=e65] [cursor=pointer]:
+        - img [ref=e67]
+        - generic [ref=e69]: 用户管理
+      - menuitem "交易账户" [ref=e70] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e74]: 交易账户
+  - generic [ref=e75]:
+    - generic [ref=e76]:
+      - generic [ref=e77]: 板块扫描
+      - generic [ref=e78]:
+        - generic [ref=e79]:
+          - generic [ref=e81]: 系统管理员
+          - generic [ref=e83]: 管理员
+          - generic [ref=e85]: 默认账户
+        - generic [ref=e87]: 2026-03-29
+        - button "退出登录" [ref=e88] [cursor=pointer]:
+          - generic [ref=e89]: 退出登录
+    - main [ref=e90]:
+      - generic [ref=e92]:
+        - generic [ref=e94]:
+          - generic [ref=e95]: 板块扫描结果
+          - generic [ref=e97]: 请求日 -
+          - button "刷新" [ref=e113] [cursor=pointer]:
+            - generic [ref=e114]: 刷新
+        - generic [ref=e115]:
+          - tablist [ref=e119]:
+            - tab "主线板块 0" [selected] [ref=e121]:
+              - generic [ref=e122]:
+                - text: 主线板块
+                - emphasis [ref=e123]: "0"
+            - tab "次主线 0" [ref=e124]:
+              - generic [ref=e125]:
+                - text: 次主线
+                - emphasis [ref=e126]: "0"
+            - tab "跟风板块 0" [ref=e127]:
+              - generic [ref=e128]:
+                - text: 跟风板块
+                - emphasis [ref=e129]: "0"
+            - tab "全部板块" [ref=e130]
+          - tabpanel "主线板块 0" [ref=e132]:
+            - generic [ref=e133]:
+              - img [ref=e135]
+              - paragraph [ref=e152]: 今日无主线板块（市场偏弱）

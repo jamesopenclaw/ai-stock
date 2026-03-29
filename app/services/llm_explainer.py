@@ -89,6 +89,7 @@ key, title, content
         self,
         *,
         scene: str,
+        account_id: str,
         trade_date: str,
         provider: str,
         model: str,
@@ -97,6 +98,7 @@ key, title, content
         raw = json.dumps(
             {
                 "scene": scene,
+                "account_id": account_id,
                 "trade_date": trade_date,
                 "provider": provider,
                 "model": model,
@@ -248,6 +250,7 @@ key, title, content
         stock_pools: StockPoolsOutput,
         market_env,
         *,
+        account_id: Optional[str] = None,
         force_refresh: bool = False,
         allow_live_request: bool = True,
     ) -> Optional[LlmPoolsSummary]:
@@ -255,6 +258,7 @@ key, title, content
         summary, _status = await self.summarize_stock_pools_with_status(
             stock_pools,
             market_env,
+            account_id=account_id,
             force_refresh=force_refresh,
             allow_live_request=allow_live_request,
         )
@@ -265,6 +269,7 @@ key, title, content
         stock_pools: StockPoolsOutput,
         market_env,
         *,
+        account_id: Optional[str] = None,
         force_refresh: bool = False,
         allow_live_request: bool = True,
     ) -> tuple[Optional[LlmPoolsSummary], LlmCallStatus]:
@@ -286,6 +291,7 @@ key, title, content
         payload = self._build_pool_payload(stock_pools, market_env, max_items)
         cache_key = self._cache_key(
             scene="stock_pools",
+            account_id=str(account_id or ""),
             trade_date=stock_pools.trade_date,
             provider=str(runtime.get("provider") or ""),
             model=str(runtime.get("model") or ""),
@@ -293,7 +299,11 @@ key, title, content
         )
 
         if not force_refresh:
-            cached = await llm_cache_service.get_cache(cache_key=cache_key)
+            cache_kwargs = {"account_id": account_id} if account_id else {}
+            cached = await llm_cache_service.get_cache(
+                cache_key=cache_key,
+                **cache_kwargs,
+            )
             if cached:
                 try:
                     summary = LlmPoolsSummary.model_validate(
@@ -317,11 +327,13 @@ key, title, content
                     message="LLM 摘要未命中缓存，已跳过实时生成以保证页面响应",
                 )
 
+        llm_kwargs = {"account_id": account_id} if account_id else {}
         data, status = await llm_client.chat_json_with_status(
             self.POOLS_SYSTEM_PROMPT,
             payload,
             scene="stock_pools",
             trade_date=stock_pools.trade_date,
+            **llm_kwargs,
         )
         if not data and status.status == "timeout":
             fallback_payload = self._build_pool_payload(stock_pools, market_env, 3)
@@ -330,6 +342,7 @@ key, title, content
                 fallback_payload,
                 scene="stock_pools",
                 trade_date=stock_pools.trade_date,
+                **llm_kwargs,
             )
         if not data:
             return None, status
@@ -347,6 +360,7 @@ key, title, content
                 model=str(runtime.get("model") or ""),
                 payload=payload,
                 response=summary.model_dump(),
+                **llm_kwargs,
             )
             return summary, status
         except Exception as exc:
@@ -384,12 +398,14 @@ key, title, content
         sell_points: SellPointResponse,
         market_env,
         *,
+        account_id: Optional[str] = None,
         force_refresh: bool = False,
     ) -> Optional[LlmSellSummary]:
         """生成卖点页摘要，并回填更可读的动作句。"""
         summary, _status = await self.rewrite_sell_points_with_status(
             sell_points,
             market_env,
+            account_id=account_id,
             force_refresh=force_refresh,
         )
         return summary
@@ -399,6 +415,7 @@ key, title, content
         sell_points: SellPointResponse,
         market_env,
         *,
+        account_id: Optional[str] = None,
         force_refresh: bool = False,
     ) -> tuple[Optional[LlmSellSummary], LlmCallStatus]:
         """生成卖点页摘要，并返回调用状态。"""
@@ -449,6 +466,7 @@ key, title, content
         }
         cache_key = self._cache_key(
             scene="sell_points",
+            account_id=str(account_id or ""),
             trade_date=sell_points.trade_date,
             provider=str(runtime.get("provider") or ""),
             model=str(runtime.get("model") or ""),
@@ -456,7 +474,11 @@ key, title, content
         )
 
         if not force_refresh:
-            cached = await llm_cache_service.get_cache(cache_key=cache_key)
+            cache_kwargs = {"account_id": account_id} if account_id else {}
+            cached = await llm_cache_service.get_cache(
+                cache_key=cache_key,
+                **cache_kwargs,
+            )
             if cached:
                 try:
                     summary = LlmSellSummary.model_validate(cached)
@@ -470,11 +492,13 @@ key, title, content
                 except Exception as exc:
                     logger.warning(f"LLM 卖点缓存校验失败: {exc}")
 
+        llm_kwargs = {"account_id": account_id} if account_id else {}
         data, status = await llm_client.chat_json_with_status(
             self.SELL_SYSTEM_PROMPT,
             payload,
             scene="sell_points",
             trade_date=sell_points.trade_date,
+            **llm_kwargs,
         )
         if not data:
             return None, status
@@ -490,6 +514,7 @@ key, title, content
                 model=str(runtime.get("model") or ""),
                 payload=payload,
                 response=summary.model_dump(),
+                **llm_kwargs,
             )
             return summary, status
         except Exception as exc:
@@ -651,6 +676,7 @@ key, title, content
         *,
         trade_date: str,
         checkup_target: StockCheckupTarget,
+        account_id: Optional[str] = None,
         force_refresh: bool = False,
     ) -> tuple[Optional[LlmStockCheckupReport], LlmCallStatus]:
         runtime = await llm_client.get_runtime_config()
@@ -682,13 +708,18 @@ key, title, content
         )
         cache_key = self._cache_key(
             scene="stock_checkup",
+            account_id=str(account_id or ""),
             trade_date=trade_date,
             provider=str(runtime.get("provider") or ""),
             model=str(runtime.get("model") or ""),
             payload=payload,
         )
         if not force_refresh:
-            cached = await llm_cache_service.get_cache(cache_key=cache_key)
+            cache_kwargs = {"account_id": account_id} if account_id else {}
+            cached = await llm_cache_service.get_cache(
+                cache_key=cache_key,
+                **cache_kwargs,
+            )
             if cached:
                 try:
                     report = LlmStockCheckupReport.model_validate(cached)
@@ -701,6 +732,7 @@ key, title, content
                 except Exception as exc:
                     logger.warning(f"LLM 个股体检缓存校验失败: {exc}")
 
+        llm_kwargs = {"account_id": account_id} if account_id else {}
         data, status = await llm_client.chat_json_with_status(
             self.STOCK_CHECKUP_SYSTEM_PROMPT,
             payload,
@@ -708,6 +740,7 @@ key, title, content
             trade_date=trade_date,
             request_label="stock_checkup_full",
             timeout_seconds=checkup_http_timeout,
+            **llm_kwargs,
         )
         if not data and status.status == "timeout":
             fallback_payload = self._build_checkup_payload(
@@ -723,6 +756,7 @@ key, title, content
                 trade_date=trade_date,
                 request_label="stock_checkup_compact_retry",
                 timeout_seconds=checkup_http_timeout,
+                **llm_kwargs,
             )
         if not data and status.status == "timeout":
             ultra_payload = self._build_checkup_payload(
@@ -738,6 +772,7 @@ key, title, content
                 trade_date=trade_date,
                 request_label="stock_checkup_ultra_compact_retry",
                 timeout_seconds=checkup_http_timeout,
+                **llm_kwargs,
             )
         if not data:
             return None, status
@@ -752,6 +787,7 @@ key, title, content
                 model=str(runtime.get("model") or ""),
                 payload=payload,
                 response=report.model_dump(),
+                **llm_kwargs,
             )
             return report, status
         except Exception as exc:

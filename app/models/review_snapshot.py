@@ -13,11 +13,12 @@ class ReviewSnapshot(Base):
 
     __tablename__ = "review_snapshots"
     __table_args__ = (
-        UniqueConstraint("trade_date", "snapshot_type", "ts_code", name="uq_review_snapshot_key"),
+        UniqueConstraint("trade_date", "snapshot_type", "ts_code", "account_id", name="uq_review_snapshot_key"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     trade_date = Column(String, nullable=False, index=True)
+    account_id = Column(String, nullable=False, index=True, default="")
     snapshot_type = Column(String, nullable=False, index=True)
     ts_code = Column(String, nullable=False, index=True)
     stock_name = Column(String, nullable=False)

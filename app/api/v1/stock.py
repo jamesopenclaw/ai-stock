@@ -2,7 +2,7 @@
 个股筛选 API
 """
 import asyncio
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from datetime import datetime
 import logging
@@ -24,6 +24,8 @@ from app.services.sell_point_sop import sell_point_sop_service
 from app.services.review_snapshot import review_snapshot_service
 from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date
 from app.data.tushare_client import tushare_client
+from app.core.config import settings
+from app.core.security import AuthenticatedAccount, get_current_account
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,12 +33,20 @@ STOCK_POOLS_SNAPSHOT_VERSION = 3
 _stock_pools_refresh_tasks: dict[str, asyncio.Task] = {}
 
 
-def _stock_pools_refresh_key(trade_date: str, candidate_limit: int) -> str:
-    return f"{trade_date}:{candidate_limit}"
+def _resolve_account_id(current_account: Optional[AuthenticatedAccount]) -> Optional[str]:
+    """兼容 FastAPI 依赖注入与直接函数调用。"""
+    account_id = getattr(current_account, "id", None)
+    if isinstance(account_id, str) and account_id:
+        return account_id
+    return None
 
 
-def _is_stock_pools_refresh_running(trade_date: str, candidate_limit: int) -> bool:
-    task = _stock_pools_refresh_tasks.get(_stock_pools_refresh_key(trade_date, candidate_limit))
+def _stock_pools_refresh_key(trade_date: str, candidate_limit: int, account_id: Optional[str] = None) -> str:
+    return f"{trade_date}:{candidate_limit}:{account_id or ''}"
+
+
+def _is_stock_pools_refresh_running(trade_date: str, candidate_limit: int, account_id: Optional[str] = None) -> bool:
+    task = _stock_pools_refresh_tasks.get(_stock_pools_refresh_key(trade_date, candidate_limit, account_id))
     return bool(task and not task.done())
 
 
@@ -64,11 +74,17 @@ def _serialize_stock_pools_result(result, *, refresh_in_progress: bool = False, 
     }
 
 
-async def _compute_stock_pools_result(trade_date: str, candidate_limit: int):
+async def _compute_stock_pools_result(
+    trade_date: str,
+    candidate_limit: int,
+    *,
+    account_id: Optional[str] = None,
+):
     bundle = await decision_flow_service.build_candidate_analysis(
         trade_date,
         top_gainers=candidate_limit,
         include_holdings=True,
+        account_id=account_id,
     )
     result = bundle.stock_pools
     result.resolved_trade_date = bundle.context.resolved_stock_trade_date
@@ -85,30 +101,64 @@ async def _compute_stock_pools_result(trade_date: str, candidate_limit: int):
     return result
 
 
-async def _persist_stock_pools_result(trade_date: str, candidate_limit: int, result) -> None:
+async def _persist_stock_pools_result(
+    trade_date: str,
+    candidate_limit: int,
+    result,
+    *,
+    account_id: Optional[str] = None,
+) -> None:
+    snapshot_kwargs = {"account_id": account_id} if account_id else {}
     await review_snapshot_service.save_analysis_snapshot_safe(
         trade_date,
         stock_pools=result,
+        **snapshot_kwargs,
     )
     await review_snapshot_service.save_stock_pools_page_snapshot_safe(
         trade_date,
         candidate_limit,
         result,
+        **snapshot_kwargs,
     )
 
 
-def _ensure_stock_pools_background_refresh(trade_date: str, candidate_limit: int) -> bool:
-    key = _stock_pools_refresh_key(trade_date, candidate_limit)
-    if _is_stock_pools_refresh_running(trade_date, candidate_limit):
+def _ensure_stock_pools_background_refresh(
+    trade_date: str,
+    candidate_limit: int,
+    *,
+    account_id: Optional[str] = None,
+) -> bool:
+    key = _stock_pools_refresh_key(trade_date, candidate_limit, account_id)
+    if _is_stock_pools_refresh_running(trade_date, candidate_limit, account_id):
         return False
 
     async def _runner():
         try:
-            result = await _compute_stock_pools_result(trade_date, candidate_limit)
-            await _persist_stock_pools_result(trade_date, candidate_limit, result)
-            logger.info("三池后台刷新完成: trade_date=%s candidate_limit=%s", trade_date, candidate_limit)
+            result = await _compute_stock_pools_result(
+                trade_date,
+                candidate_limit,
+                account_id=account_id,
+            )
+            await _persist_stock_pools_result(
+                trade_date,
+                candidate_limit,
+                result,
+                account_id=account_id,
+            )
+            logger.info(
+                "三池后台刷新完成: trade_date=%s candidate_limit=%s account_id=%s",
+                trade_date,
+                candidate_limit,
+                account_id or "",
+            )
         except Exception as exc:
-            logger.warning("三池后台刷新失败: trade_date=%s candidate_limit=%s err=%s", trade_date, candidate_limit, exc)
+            logger.warning(
+                "三池后台刷新失败: trade_date=%s candidate_limit=%s account_id=%s err=%s",
+                trade_date,
+                candidate_limit,
+                account_id or "",
+                exc,
+            )
         finally:
             _stock_pools_refresh_tasks.pop(key, None)
 
@@ -119,7 +169,8 @@ def _ensure_stock_pools_background_refresh(trade_date: str, candidate_limit: int
 @router.get("/filter", response_model=ApiResponse)
 async def filter_stocks(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
-    limit: int = Query(50, description="返回数量限制", ge=1, le=200)
+    limit: int = Query(50, description="返回数量限制", ge=1, le=200),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """
     个股筛选
@@ -130,10 +181,12 @@ async def filter_stocks(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
+        account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
         context = await decision_context_service.build_context(
             trade_date,
             top_gainers=max(100, min(limit, 200)),
             include_holdings=False,
+            account_id=account_id,
         )
 
         # 筛选
@@ -163,6 +216,7 @@ async def get_stock_pools(
     limit: int = Query(100, description="候选股数量限制", ge=1, le=500),
     refresh: bool = Query(False, description="是否强制重新计算三池结果并覆盖快照"),
     force_llm_refresh: bool = Query(False, description="保留字段，三池页当前不再触发 LLM"),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """
     三池分类
@@ -177,11 +231,14 @@ async def get_stock_pools(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
+        account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
         candidate_limit = max(100, min(limit, 300))
         expected_sector_scan_trade_date = await resolve_snapshot_lookup_trade_date(trade_date)
+        snapshot_kwargs = {"account_id": account_id} if account_id else {}
         cached = await review_snapshot_service.get_stock_pools_page_snapshot(
             trade_date,
             candidate_limit,
+            **snapshot_kwargs,
         )
         cache_valid = bool(
             cached
@@ -191,12 +248,16 @@ async def get_stock_pools(
         )
 
         if refresh:
-            started = _ensure_stock_pools_background_refresh(trade_date, candidate_limit)
+            started = _ensure_stock_pools_background_refresh(
+                trade_date,
+                candidate_limit,
+                account_id=account_id,
+            )
             if cached:
                 return ApiResponse(
                     data=_serialize_stock_pools_result(
                         cached,
-                        refresh_in_progress=_is_stock_pools_refresh_running(trade_date, candidate_limit),
+                        refresh_in_progress=_is_stock_pools_refresh_running(trade_date, candidate_limit, account_id),
                         refresh_requested=started,
                         stale_snapshot=not cache_valid,
                     )
@@ -231,14 +292,23 @@ async def get_stock_pools(
             return ApiResponse(
                 data=_serialize_stock_pools_result(
                     cached,
-                    refresh_in_progress=_is_stock_pools_refresh_running(trade_date, candidate_limit),
+                    refresh_in_progress=_is_stock_pools_refresh_running(trade_date, candidate_limit, account_id),
                     refresh_requested=False,
                     stale_snapshot=False,
                 )
             )
 
-        result = await _compute_stock_pools_result(trade_date, candidate_limit)
-        await _persist_stock_pools_result(trade_date, candidate_limit, result)
+        result = await _compute_stock_pools_result(
+            trade_date,
+            candidate_limit,
+            account_id=account_id,
+        )
+        await _persist_stock_pools_result(
+            trade_date,
+            candidate_limit,
+            result,
+            account_id=account_id,
+        )
 
         return ApiResponse(
             data=_serialize_stock_pools_result(
@@ -289,16 +359,19 @@ async def get_stock_checkup(
         description="体检目标：观察型 / 持仓型 / 交易型",
     ),
     force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 缓存"),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """获取单只股票的全面体检结果。"""
     if not trade_date:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
+        account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
         result = await stock_checkup_service.checkup(
             ts_code,
             trade_date,
             checkup_target,
+            account_id=account_id,
             force_llm_refresh=force_llm_refresh,
         )
         return ApiResponse(data=result.model_dump(mode="json"))
@@ -310,13 +383,19 @@ async def get_stock_checkup(
 async def get_stock_buy_analysis(
     ts_code: str,
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """获取单只股票的详细买点 SOP 分析。"""
     if not trade_date:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        result = await buy_point_sop_service.analyze(ts_code, trade_date)
+        account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
+        result = await buy_point_sop_service.analyze(
+            ts_code,
+            trade_date,
+            account_id=account_id,
+        )
         return ApiResponse(data=result.model_dump(mode="json"))
     except Exception as e:
         return ApiResponse(code=500, message=f"获取买点分析失败: {str(e)}")
@@ -326,13 +405,19 @@ async def get_stock_buy_analysis(
 async def get_stock_sell_analysis(
     ts_code: str,
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """获取单只持仓的详细卖点 SOP 分析。"""
     if not trade_date:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        result = await sell_point_sop_service.analyze(ts_code, trade_date)
+        account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
+        result = await sell_point_sop_service.analyze(
+            ts_code,
+            trade_date,
+            account_id=account_id,
+        )
         return ApiResponse(data=result.model_dump(mode="json"))
     except Exception as e:
         return ApiResponse(code=500, message=f"获取卖点分析失败: {str(e)}")

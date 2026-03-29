@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str = "dev-secret-key-change-in-production"
 
+    # 认证
+    auth_enabled: bool = True
+    auth_access_token_expire_minutes: int = 30
+    auth_refresh_token_expire_days: int = 14
+    auth_bootstrap_admin_username: str = "admin"
+    auth_bootstrap_admin_password: str = "admin123456"
+    auth_bootstrap_admin_display_name: str = "系统管理员"
+
     # 数据库
     database_url: str = "postgresql+asyncpg://aistock:aistock123@localhost:5488/aistock"
 

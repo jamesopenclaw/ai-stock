@@ -14,10 +14,14 @@ from app.models.schemas import LlmCallStatus
 class LlmCallLogService:
     """记录并查询 LLM 调用。"""
 
+    def _normalize_account_id(self, account_id: Optional[str]) -> str:
+        return str(account_id or "").strip()
+
     async def record_call(
         self,
         *,
         scene: str,
+        account_id: Optional[str] = None,
         trade_date: str = "",
         provider: str = "",
         model: str = "",
@@ -27,10 +31,12 @@ class LlmCallLogService:
         latency_ms: float = 0.0,
     ) -> None:
         try:
+            normalized_account_id = self._normalize_account_id(account_id)
             async with async_session_factory() as session:
                 session.add(
                     LlmCallLog(
                         scene=scene or "",
+                        account_id=normalized_account_id,
                         trade_date=trade_date or "",
                         provider=provider or "",
                         model=model or "",
@@ -53,9 +59,13 @@ class LlmCallLogService:
         scene: Optional[str] = None,
         status: Optional[str] = None,
         success: Optional[bool] = None,
+        account_id: Optional[str] = None,
     ) -> List[Dict]:
         async with async_session_factory() as session:
             stmt = select(LlmCallLog).order_by(desc(LlmCallLog.created_at)).limit(max(1, min(limit, 500)))
+            normalized_account_id = self._normalize_account_id(account_id)
+            if account_id is not None:
+                stmt = stmt.where(LlmCallLog.account_id == normalized_account_id)
             if scene:
                 stmt = stmt.where(LlmCallLog.scene == scene)
             if status:
@@ -69,6 +79,7 @@ class LlmCallLogService:
             result.append({
                 "id": row.id,
                 "scene": row.scene,
+                "account_id": row.account_id,
                 "trade_date": row.trade_date,
                 "provider": row.provider,
                 "model": row.model,

@@ -228,6 +228,40 @@ def test_get_stock_detail_overlays_realtime_quote_when_available():
     assert detail["intraday_volume_ratio"] is not None
 
 
+def test_get_stock_quote_map_batches_daily_query_and_realtime_overlay():
+    """批量行情应共用一次 daily/daily_basic 查询，并统一叠加实时覆盖。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._resolve_trade_date = lambda d: "20260320"
+    client._recent_open_dates = lambda trade_date, count=5: ["20260320"]
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._should_use_realtime_quote = lambda d: True
+    client._fetch_realtime_quote_map = lambda codes: {
+        "002025.SZ": {
+            "close": 63.44,
+            "change_pct": -0.17,
+            "open": 63.70,
+            "high": 64.10,
+            "low": 63.22,
+            "pre_close": 63.55,
+            "volume": 2456000,
+            "amount": 156000000,
+            "avg_price": 63.52,
+            "quote_time": "2026-03-23 09:35:51",
+            "data_source": "realtime_sina",
+        }
+    }
+
+    result = client.get_stock_quote_map(["002025.SZ", "002475.SZ"], "2026-03-23")
+
+    assert client.pro.daily_calls == [(None, None, None, "20260320")]
+    assert client.pro.daily_basic_calls == [(None, "20260320", "ts_code,turnover_rate,volume_ratio")]
+    assert result["002025.SZ"]["close"] == 63.44
+    assert result["002025.SZ"]["data_source"] == "realtime_sina"
+    assert result["002475.SZ"]["close"] == 35.0
+
+
 class _FallbackStockListPro(_FakePro):
     def __init__(self):
         super().__init__()
@@ -296,6 +330,47 @@ def test_get_expanded_stock_list_overlays_realtime_prices():
     assert target["close"] == 36.12
     assert target["quote_time"] == "2026-03-23 09:36:11"
     assert target["data_source"] == "realtime_sina"
+
+
+def test_get_expanded_stock_list_with_meta_uses_cache_for_same_request():
+    """同一交易日同一参数的扩展候选池请求应命中缓存，避免重复查 daily/daily_basic/limit_list。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FallbackStockListPro()
+    client._resolve_trade_date = lambda d: "20260323"
+    client._should_use_realtime_quote = lambda d: False
+    client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._expanded_stock_list_cache = {}
+
+    first = client.get_expanded_stock_list_with_meta("20260323", top_gainers=20)
+    second = client.get_expanded_stock_list_with_meta("20260323", top_gainers=20)
+
+    assert first["data_trade_date"] == "20260320"
+    assert second["data_trade_date"] == "20260320"
+    assert len(client.pro.daily_calls) == 2
+    assert len(client.pro.daily_basic_calls) == 1
+    assert len(client.pro.trade_cal_calls) == 1
+
+
+def test_get_expanded_stock_list_with_meta_reuses_resolved_trade_date_cache():
+    """非交易日请求回退后，应复用已缓存的实际交易日结果。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FallbackStockListPro()
+    client._resolve_trade_date = lambda d: "20260323"
+    client._should_use_realtime_quote = lambda d: False
+    client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._expanded_stock_list_cache = {}
+
+    from_non_trading_day = client.get_expanded_stock_list_with_meta("20260323", top_gainers=20)
+    from_resolved_day = client.get_expanded_stock_list_with_meta("20260320", top_gainers=20)
+
+    assert from_non_trading_day["data_trade_date"] == "20260320"
+    assert from_resolved_day["data_trade_date"] == "20260320"
+    assert len(client.pro.daily_basic_calls) == 1
+    assert len(client.pro.trade_cal_calls) == 1
 
 
 def test_get_stock_list_with_meta_uses_daily_and_daily_basic():

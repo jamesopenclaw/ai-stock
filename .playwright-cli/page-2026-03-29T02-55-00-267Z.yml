@@ -1,0 +1,177 @@
+- generic [ref=e35]:
+  - complementary [ref=e36]:
+    - heading "轻舟交易系统" [level=3] [ref=e38]
+    - menubar [ref=e39]:
+      - menuitem "Dashboard" [ref=e40] [cursor=pointer]:
+        - img [ref=e42]
+        - generic [ref=e44]: Dashboard
+      - menuitem "市场环境" [ref=e45] [cursor=pointer]:
+        - img [ref=e47]
+        - generic [ref=e49]: 市场环境
+      - menuitem "板块扫描" [ref=e50] [cursor=pointer]:
+        - img [ref=e52]
+        - generic [ref=e54]: 板块扫描
+      - menuitem "三池分类" [ref=e55] [cursor=pointer]:
+        - img [ref=e57]
+        - generic [ref=e59]: 三池分类
+      - menuitem "买点分析" [ref=e60] [cursor=pointer]:
+        - img [ref=e62]
+        - generic [ref=e64]: 买点分析
+      - menuitem "卖点分析" [ref=e65] [cursor=pointer]:
+        - img [ref=e67]
+        - generic [ref=e69]: 卖点分析
+      - menuitem "账户管理" [ref=e70] [cursor=pointer]:
+        - img [ref=e72]
+        - generic [ref=e76]: 账户管理
+      - menuitem "复盘统计" [ref=e77] [cursor=pointer]:
+        - img [ref=e79]
+        - generic [ref=e81]: 复盘统计
+      - menuitem "系统设置" [ref=e82] [cursor=pointer]:
+        - img [ref=e84]
+        - generic [ref=e86]: 系统设置
+      - menuitem "LLM调用记录" [ref=e87] [cursor=pointer]:
+        - img [ref=e89]
+        - generic [ref=e91]: LLM调用记录
+      - menuitem "任务调度" [ref=e92] [cursor=pointer]:
+        - img [ref=e94]
+        - generic [ref=e96]: 任务调度
+      - menuitem "用户管理" [ref=e97] [cursor=pointer]:
+        - img [ref=e99]
+        - generic [ref=e101]: 用户管理
+      - menuitem "交易账户" [ref=e102] [cursor=pointer]:
+        - img [ref=e104]
+        - generic [ref=e106]: 交易账户
+  - generic [ref=e107]:
+    - generic [ref=e108]:
+      - generic [ref=e109]: Dashboard
+      - generic [ref=e110]:
+        - generic [ref=e111]:
+          - generic [ref=e113]: 系统管理员
+          - generic [ref=e115]: 管理员
+          - generic [ref=e117]: 默认账户
+        - generic [ref=e119]: 2026-03-29
+        - button "退出登录" [ref=e120] [cursor=pointer]:
+          - generic [ref=e121]: 退出登录
+    - main [ref=e122]:
+      - generic [ref=e123]:
+        - generic [ref=e128]:
+          - generic [ref=e129]: 今日执行摘要
+          - button "刷新" [disabled]:
+            - generic:
+              - img
+            - generic:
+              - generic:
+                - img
+              - text: 刷新
+        - generic [ref=e137]:
+          - generic [ref=e139]:
+            - generic [ref=e140]: 市场环境
+            - generic [ref=e142]:
+              - generic [ref=e145]: 进攻
+              - paragraph [ref=e146]: 市场处于进攻状态，氛围活跃，指数温和上涨，涨停家数较多，炸板率偏高，追高风险大
+              - generic [ref=e147]:
+                - generic [ref=e148]: "突破允许: 是"
+                - generic [ref=e149]: "风险等级: 低"
+          - generic [ref=e152]: 主线板块
+          - generic [ref=e161]: 账户概况
+        - generic [ref=e170]:
+          - generic [ref=e171]: 分层复盘统计
+          - generic [ref=e174]:
+            - table [ref=e176]:
+              - rowgroup [ref=e184]:
+                - row "类型 分层 出现次数 1日均值 3日均值 5日均值" [ref=e185]:
+                  - columnheader "类型" [ref=e186]:
+                    - generic [ref=e187]: 类型
+                  - columnheader "分层" [ref=e188]:
+                    - generic [ref=e189]: 分层
+                  - columnheader "出现次数" [ref=e190]:
+                    - generic [ref=e191]: 出现次数
+                  - columnheader "1日均值" [ref=e192]:
+                    - generic [ref=e193]: 1日均值
+                  - columnheader "3日均值" [ref=e194]:
+                    - generic [ref=e195]: 3日均值
+                  - columnheader "5日均值" [ref=e196]:
+                    - generic [ref=e197]: 5日均值
+            - table [ref=e202]:
+              - rowgroup [ref=e210]:
+                - row "buy_available 异动预备 2 -2.32 -2.32 -2.32" [ref=e211]:
+                  - cell "buy_available" [ref=e212]:
+                    - generic [ref=e213]: buy_available
+                  - cell "异动预备" [ref=e214]:
+                    - generic [ref=e215]: 异动预备
+                  - cell "2" [ref=e216]:
+                    - generic [ref=e217]: "2"
+                  - cell "-2.32" [ref=e218]:
+                    - generic [ref=e219]: "-2.32"
+                  - cell "-2.32" [ref=e220]:
+                    - generic [ref=e221]: "-2.32"
+                  - cell "-2.32" [ref=e222]:
+                    - generic [ref=e223]: "-2.32"
+                - row "buy_available 强势确认 3 0.29 0.94 0.94" [ref=e224]:
+                  - cell "buy_available" [ref=e225]:
+                    - generic [ref=e226]: buy_available
+                  - cell "强势确认" [ref=e227]:
+                    - generic [ref=e228]: 强势确认
+                  - cell "3" [ref=e229]:
+                    - generic [ref=e230]: "3"
+                  - cell "0.29" [ref=e231]:
+                    - generic [ref=e232]: "0.29"
+                  - cell "0.94" [ref=e233]:
+                    - generic [ref=e234]: "0.94"
+                  - cell "0.94" [ref=e235]:
+                    - generic [ref=e236]: "0.94"
+                - row "buy_available 趋势回踩 10 2.03 2.6 1.96" [ref=e237]:
+                  - cell "buy_available" [ref=e238]:
+                    - generic [ref=e239]: buy_available
+                  - cell "趋势回踩" [ref=e240]:
+                    - generic [ref=e241]: 趋势回踩
+                  - cell "10" [ref=e242]:
+                    - generic [ref=e243]: "10"
+                  - cell "2.03" [ref=e244]:
+                    - generic [ref=e245]: "2.03"
+                  - cell "2.6" [ref=e246]:
+                    - generic [ref=e247]: "2.6"
+                  - cell "1.96" [ref=e248]:
+                    - generic [ref=e249]: "1.96"
+                - row "buy_observe 异动预备 2 3.11 3.11 3.11" [ref=e250]:
+                  - cell "buy_observe" [ref=e251]:
+                    - generic [ref=e252]: buy_observe
+                  - cell "异动预备" [ref=e253]:
+                    - generic [ref=e254]: 异动预备
+                  - cell "2" [ref=e255]:
+                    - generic [ref=e256]: "2"
+                  - cell "3.11" [ref=e257]:
+                    - generic [ref=e258]: "3.11"
+                  - cell "3.11" [ref=e259]:
+                    - generic [ref=e260]: "3.11"
+                  - cell "3.11" [ref=e261]:
+                    - generic [ref=e262]: "3.11"
+                - row "buy_observe 趋势回踩 4 0 0 0" [ref=e263]:
+                  - cell "buy_observe" [ref=e264]:
+                    - generic [ref=e265]: buy_observe
+                  - cell "趋势回踩" [ref=e266]:
+                    - generic [ref=e267]: 趋势回踩
+                  - cell "4" [ref=e268]:
+                    - generic [ref=e269]: "4"
+                  - cell "0" [ref=e270]:
+                    - generic [ref=e271]: "0"
+                  - cell "0" [ref=e272]:
+                    - generic [ref=e273]: "0"
+                  - cell "0" [ref=e274]:
+                    - generic [ref=e275]: "0"
+                - row "buy_observe 强势确认 33 8.96 8.97 8.72" [ref=e276]:
+                  - cell "buy_observe" [ref=e277]:
+                    - generic [ref=e278]: buy_observe
+                  - cell "强势确认" [ref=e279]:
+                    - generic [ref=e280]: 强势确认
+                  - cell "33" [ref=e281]:
+                    - generic [ref=e282]: "33"
+                  - cell "8.96" [ref=e283]:
+                    - generic [ref=e284]: "8.96"
+                  - cell "8.97" [ref=e285]:
+                    - generic [ref=e286]: "8.97"
+                  - cell "8.72" [ref=e287]:
+                    - generic [ref=e288]: "8.72"
+        - generic [ref=e289]:
+          - generic [ref=e292]: 可买候选 (0)
+          - generic [ref=e304]: 持仓处理 (0)

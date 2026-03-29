@@ -56,6 +56,7 @@ class LlmClient:
         user_payload: Dict[str, Any],
         *,
         scene: str = "",
+        account_id: Optional[str] = None,
         trade_date: str = "",
         temperature: Optional[float] = None,
         request_label: str = "",
@@ -82,6 +83,7 @@ class LlmClient:
                 return
             await llm_call_log_service.record_call(
                 scene=scene,
+                account_id=account_id,
                 trade_date=trade_date,
                 provider=provider,
                 model=model,

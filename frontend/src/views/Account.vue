@@ -491,14 +491,11 @@ const openCheckup = (row) => {
 const loadData = async () => {
   if (isFirstLoad.value) pageLoading.value = true
   try {
-    const [profileRes, statusRes, posRes] = await Promise.allSettled([
-      accountApi.profile(),
-      accountApi.status(),
-      accountApi.positions()
-    ])
-    if (profileRes.status === 'fulfilled') profile.value = profileRes.value.data.data
-    if (statusRes.status === 'fulfilled') status.value = statusRes.value.data.data
-    if (posRes.status === 'fulfilled') positions.value = posRes.value.data.data.positions || []
+    const res = await accountApi.overview()
+    const data = res.data?.data || {}
+    profile.value = data.profile || null
+    status.value = data.status || null
+    positions.value = data.positions || []
     if (!profile.value || !status.value) {
       throw new Error('账户核心数据加载失败')
     }

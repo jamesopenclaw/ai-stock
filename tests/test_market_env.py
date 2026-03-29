@@ -421,6 +421,126 @@ class TestMarketEnv:
         assert result_same.index_score > result_diff.index_score, \
             "指数共振应有更高的评分"
 
+    def test_get_current_env_uses_cache_for_same_trade_date(self, service, monkeypatch):
+        calls = {
+            "index": 0,
+            "limit": 0,
+            "turnover": 0,
+            "up_down": 0,
+        }
+
+        monkeypatch.setattr(service.client, "now_trade_date", lambda: "2026-03-29")
+        monkeypatch.setattr(service.client, "should_use_realtime_quote", lambda _trade_date: False)
+
+        def fake_index(_trade_date):
+            calls["index"] += 1
+            return {
+                "rows": [
+                    {"change_pct": 1.2},
+                    {"change_pct": 1.0},
+                    {"change_pct": 0.8},
+                ],
+                "data_trade_date": "20260327",
+            }
+
+        def fake_limit(_trade_date):
+            calls["limit"] += 1
+            return {
+                "stats": {"limit_up_count": 45, "limit_down_count": 4, "broken_board_rate": 12.0},
+                "data_trade_date": "20260327",
+            }
+
+        def fake_turnover(_trade_date):
+            calls["turnover"] += 1
+            return {
+                "market_turnover": 12345,
+                "data_trade_date": "20260327",
+            }
+
+        def fake_up_down(_trade_date):
+            calls["up_down"] += 1
+            return {
+                "up_down_ratio": {"up": 3200, "down": 1200},
+                "data_trade_date": "20260327",
+            }
+
+        monkeypatch.setattr(service.client, "get_index_quote_with_meta", fake_index)
+        monkeypatch.setattr(service.client, "get_limit_stats_with_meta", fake_limit)
+        monkeypatch.setattr(service.client, "get_market_turnover_with_meta", fake_turnover)
+        monkeypatch.setattr(service.client, "get_up_down_ratio_with_meta", fake_up_down)
+
+        first = service.get_current_env("2026-03-29")
+        second = service.get_current_env("2026-03-29")
+
+        assert first.trade_date == "2026-03-27"
+        assert second.trade_date == "2026-03-27"
+        assert calls == {
+            "index": 1,
+            "limit": 1,
+            "turnover": 1,
+            "up_down": 1,
+        }
+
+    def test_get_current_env_reuses_resolved_trade_date_cache(self, service, monkeypatch):
+        calls = {
+            "index": 0,
+            "limit": 0,
+            "turnover": 0,
+            "up_down": 0,
+        }
+
+        monkeypatch.setattr(service.client, "now_trade_date", lambda: "2026-03-29")
+        monkeypatch.setattr(service.client, "should_use_realtime_quote", lambda _trade_date: False)
+
+        def fake_index(_trade_date):
+            calls["index"] += 1
+            return {
+                "rows": [
+                    {"change_pct": 0.5},
+                    {"change_pct": 0.3},
+                    {"change_pct": 0.2},
+                ],
+                "data_trade_date": "20260327",
+            }
+
+        def fake_limit(_trade_date):
+            calls["limit"] += 1
+            return {
+                "stats": {"limit_up_count": 28, "limit_down_count": 9, "broken_board_rate": 18.0},
+                "data_trade_date": "20260327",
+            }
+
+        def fake_turnover(_trade_date):
+            calls["turnover"] += 1
+            return {
+                "market_turnover": 9800,
+                "data_trade_date": "20260327",
+            }
+
+        def fake_up_down(_trade_date):
+            calls["up_down"] += 1
+            return {
+                "up_down_ratio": {"up": 2100, "down": 1700},
+                "data_trade_date": "20260327",
+            }
+
+        monkeypatch.setattr(service.client, "get_index_quote_with_meta", fake_index)
+        monkeypatch.setattr(service.client, "get_limit_stats_with_meta", fake_limit)
+        monkeypatch.setattr(service.client, "get_market_turnover_with_meta", fake_turnover)
+        monkeypatch.setattr(service.client, "get_up_down_ratio_with_meta", fake_up_down)
+
+        from_non_trading_day = service.get_current_env("2026-03-29")
+        from_resolved_trade_day = service.get_current_env("2026-03-27")
+
+        assert from_non_trading_day.trade_date == "2026-03-27"
+        assert from_resolved_trade_day.trade_date == "2026-03-27"
+        assert calls == {
+            "index": 1,
+            "limit": 1,
+            "turnover": 1,
+            "up_down": 1,
+        }
+
 
 class TestMarketEnvAPI:
     """市场环境 API 测试（模拟 API 响应格式）"""

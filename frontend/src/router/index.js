@@ -1,6 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { authState, isAuthenticated } from '../auth'
 
 const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    meta: { title: '登录', requiresAuth: false },
+    component: () => import('../views/Login.vue')
+  },
   {
     path: '/',
     name: 'Dashboard',
@@ -52,7 +59,7 @@ const routes = [
   {
     path: '/system',
     name: 'SystemSettings',
-    meta: { title: '系统设置' },
+    meta: { title: '系统设置', adminOnly: true },
     component: () => import('../views/SystemSettings.vue')
   },
   {
@@ -64,14 +71,48 @@ const routes = [
   {
     path: '/tasks',
     name: 'TaskRuns',
-    meta: { title: '任务调度' },
+    meta: { title: '任务调度', adminOnly: true },
     component: () => import('../views/TaskRuns.vue')
+  },
+  {
+    path: '/admin/users',
+    name: 'AdminUsers',
+    meta: { title: '用户管理', adminOnly: true },
+    component: () => import('../views/AdminUsers.vue')
+  },
+  {
+    path: '/admin/accounts',
+    name: 'AdminAccounts',
+    meta: { title: '交易账户', adminOnly: true },
+    component: () => import('../views/AdminAccounts.vue')
   }
 ]
 
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach((to) => {
+  const requiresAuth = to.meta.requiresAuth !== false
+  if (!requiresAuth) {
+    if (to.path === '/login' && isAuthenticated()) {
+      return '/'
+    }
+    return true
+  }
+
+  if (isAuthenticated()) {
+    if (to.meta.adminOnly && authState.user?.role !== 'admin') {
+      return '/'
+    }
+    return true
+  }
+
+  return {
+    path: '/login',
+    query: { redirect: to.fullPath }
+  }
 })
 
 export default router

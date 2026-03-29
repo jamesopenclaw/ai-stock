@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { authState, clearSession, getAccessToken, getRefreshToken, setSession } from '../auth'
 
 // 默认走相对路径，便于 Docker 内 nginx 反代 /api；本地可设 VITE_API_BASE=http://localhost:8000/api/v1
 const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
@@ -7,6 +8,112 @@ const api = axios.create({
   baseURL: API_BASE,
   timeout: 30000
 })
+
+const redirectToLogin = () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+  const current = `${window.location.pathname}${window.location.search || ''}`
+  if (window.location.pathname === '/login') {
+    return
+  }
+  const next = encodeURIComponent(current || '/')
+  window.location.href = `/login?redirect=${next}`
+}
+
+let refreshPromise = null
+
+api.interceptors.request.use((config) => {
+  const token = getAccessToken()
+  if (token) {
+    config.headers = config.headers || {}
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  const accountId = authState.account?.id
+  if (accountId) {
+    config.headers = config.headers || {}
+    config.headers['X-Account-Id'] = accountId
+  }
+  return config
+})
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config || {}
+    const status = error.response?.status
+    const requestUrl = String(originalRequest.url || '')
+    const isAuthEndpoint = requestUrl.includes('/auth/login') || requestUrl.includes('/auth/refresh')
+
+    if (status !== 401 || originalRequest._retry || isAuthEndpoint) {
+      throw error
+    }
+
+    const refreshToken = getRefreshToken()
+    if (!refreshToken) {
+      clearSession()
+      redirectToLogin()
+      throw error
+    }
+
+    if (!refreshPromise) {
+      const selectedAccount = authState.account || null
+      refreshPromise = axios
+        .post(
+          `${API_BASE}/auth/refresh`,
+          { refresh_token: refreshToken },
+          selectedAccount?.id
+            ? { headers: { 'X-Account-Id': selectedAccount.id } }
+            : undefined
+        )
+        .then((response) => {
+          const payload = response.data?.data || {}
+          const nextAccount =
+            payload.user?.role === 'admin' && selectedAccount?.id
+              ? selectedAccount
+              : payload.account || null
+          setSession({
+            accessToken: payload.access_token || '',
+            refreshToken: payload.refresh_token || '',
+            user: payload.user || null,
+            account: nextAccount,
+          })
+          return payload
+        })
+        .catch((refreshError) => {
+          clearSession()
+          redirectToLogin()
+          throw refreshError
+        })
+        .finally(() => {
+          refreshPromise = null
+        })
+    }
+
+    const payload = await refreshPromise
+    originalRequest._retry = true
+    originalRequest.headers = originalRequest.headers || {}
+    originalRequest.headers.Authorization = `Bearer ${payload.access_token}`
+    return api(originalRequest)
+  }
+)
+
+export const authApi = {
+  login: (payload) => api.post('/auth/login', payload),
+  refresh: (refreshToken) => api.post('/auth/refresh', { refresh_token: refreshToken }),
+  logout: (refreshToken) => api.post('/auth/logout', { refresh_token: refreshToken }),
+  me: () => api.get('/auth/me'),
+}
+
+export const adminApi = {
+  listUsers: () => api.get('/admin/users'),
+  createUser: (payload) => api.post('/admin/users', payload),
+  updateUser: (userId, payload) => api.put(`/admin/users/${encodeURIComponent(userId)}`, payload),
+  listAccounts: () => api.get('/admin/accounts'),
+  createAccount: (payload) => api.post('/admin/accounts', payload),
+  updateAccount: (accountId, payload) => api.put(`/admin/accounts/${encodeURIComponent(accountId)}`, payload),
+  bindAccount: (accountId, payload) => api.post(`/admin/accounts/${encodeURIComponent(accountId)}/bind-user`, payload),
+}
 
 // Market API
 export const marketApi = {
@@ -91,6 +198,7 @@ export const decisionApi = {
 
 // Account API
 export const accountApi = {
+  overview: (options = {}) => api.get('/account/overview', { timeout: options.timeout }),
   profile: (options = {}) => api.get('/account/profile', { timeout: options.timeout }),
   positions: (options = {}) => api.get('/account/positions', { timeout: options.timeout }),
   status: (options = {}) => api.get('/account/status', { timeout: options.timeout }),

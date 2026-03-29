@@ -1,12 +1,15 @@
 """
 轻舟版交易系统 - 主入口
 """
-from fastapi import FastAPI
+import uuid
+
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 import sys
 
 from app.core.config import settings
+from app.core.security import get_current_user, hash_password
 
 # 配置日志
 logger.remove()
@@ -43,8 +46,11 @@ async def startup_event():
     # 仅初始化业务默认数据；表结构由 Alembic 管理
     try:
         from app.models.account_config import AccountConfig
+        from app.models.trading_account import TradingAccount
+        from app.models.user import User
         from sqlalchemy import select
         from app.core.database import async_session_factory
+        from app.services.trading_account_service import create_trading_account
 
         # 账户配置单例：无记录时用 .env 中的 QINGZHOU_TOTAL_ASSET 作为初始值
         async with async_session_factory() as session:
@@ -68,6 +74,46 @@ async def startup_event():
                 )
                 await session.commit()
                 logger.info("已初始化 account_config 默认总资产")
+
+            if settings.auth_enabled:
+                user_result = await session.execute(
+                    select(User).where(User.username == settings.auth_bootstrap_admin_username)
+                )
+                admin_user = user_result.scalar_one_or_none()
+                if admin_user is None:
+                    admin_user = User(
+                        id=str(uuid.uuid4()),
+                        username=settings.auth_bootstrap_admin_username,
+                        password_hash=hash_password(settings.auth_bootstrap_admin_password),
+                        display_name=settings.auth_bootstrap_admin_display_name,
+                        role="admin",
+                        status="active",
+                    )
+                    session.add(admin_user)
+                    await session.commit()
+                    await session.refresh(admin_user)
+                    logger.info("已初始化默认管理员账号: {}", settings.auth_bootstrap_admin_username)
+
+                if not admin_user.default_account_id:
+                    account_result = await session.execute(
+                        select(TradingAccount)
+                        .where(TradingAccount.owner_user_id == admin_user.id)
+                        .order_by(TradingAccount.created_at.asc())
+                    )
+                    account = account_result.scalars().first()
+                    if account is None:
+                        account = await create_trading_account(
+                            "DEFAULT-001",
+                            "默认账户",
+                            owner_user_id=admin_user.id,
+                        )
+                        logger.info("已初始化默认交易账户: {}", account.account_code)
+
+                    refresh_result = await session.execute(select(User).where(User.id == admin_user.id))
+                    bound_admin = refresh_result.scalar_one_or_none()
+                    if bound_admin:
+                        bound_admin.default_account_id = account.id
+                        await session.commit()
     except Exception as e:
         logger.warning(f"默认业务数据初始化失败，请先执行 Alembic 迁移: {e}")
 
@@ -95,25 +141,28 @@ async def health_check():
 
 
 # 导入并注册路由
-from app.api.v1 import market, sector, stock, decision, account, task
+from app.api.v1 import account, auth, decision, market, sector, stock, task
+from app.api.v1 import admin as admin_api
 from app.api.v1 import system as system_api
 
-app.include_router(market.router, prefix=settings.api_v1_prefix, tags=["市场环境"])
-app.include_router(sector.router, prefix=settings.api_v1_prefix, tags=["板块扫描"])
-app.include_router(stock.router, prefix=settings.api_v1_prefix, tags=["个股筛选"])
-app.include_router(decision.router, prefix=settings.api_v1_prefix, tags=["决策分析"])
-app.include_router(account.router, prefix=settings.api_v1_prefix, tags=["账户适配"])
-app.include_router(task.router, prefix=settings.api_v1_prefix, tags=["任务管理"])
-app.include_router(system_api.router, prefix=settings.api_v1_prefix, tags=["系统设置"])
+app.include_router(auth.router, prefix=f"{settings.api_v1_prefix}/auth", tags=["认证"])
+app.include_router(admin_api.router, prefix=f"{settings.api_v1_prefix}/admin", tags=["管理员"])
+app.include_router(market.router, prefix=settings.api_v1_prefix, tags=["市场环境"], dependencies=[Depends(get_current_user)])
+app.include_router(sector.router, prefix=settings.api_v1_prefix, tags=["板块扫描"], dependencies=[Depends(get_current_user)])
+app.include_router(stock.router, prefix=settings.api_v1_prefix, tags=["个股筛选"], dependencies=[Depends(get_current_user)])
+app.include_router(decision.router, prefix=settings.api_v1_prefix, tags=["决策分析"], dependencies=[Depends(get_current_user)])
+app.include_router(account.router, prefix=settings.api_v1_prefix, tags=["账户适配"], dependencies=[Depends(get_current_user)])
+app.include_router(task.router, prefix=settings.api_v1_prefix, tags=["任务管理"], dependencies=[Depends(get_current_user)])
+app.include_router(system_api.router, prefix=settings.api_v1_prefix, tags=["系统设置"], dependencies=[Depends(get_current_user)])
 
 # 兼容前端按业务分组的路径：/api/v1/market/* /api/v1/decision/* 等
-app.include_router(market.router, prefix=f"{settings.api_v1_prefix}/market", tags=["市场环境"])
-app.include_router(sector.router, prefix=f"{settings.api_v1_prefix}/sector", tags=["板块扫描"])
-app.include_router(stock.router, prefix=f"{settings.api_v1_prefix}/stock", tags=["个股筛选"])
-app.include_router(decision.router, prefix=f"{settings.api_v1_prefix}/decision", tags=["决策分析"])
-app.include_router(account.router, prefix=f"{settings.api_v1_prefix}/account", tags=["账户适配"])
-app.include_router(task.router, prefix=f"{settings.api_v1_prefix}/task", tags=["任务管理"])
-app.include_router(system_api.router, prefix=f"{settings.api_v1_prefix}/system", tags=["系统设置"])
+app.include_router(market.router, prefix=f"{settings.api_v1_prefix}/market", tags=["市场环境"], dependencies=[Depends(get_current_user)])
+app.include_router(sector.router, prefix=f"{settings.api_v1_prefix}/sector", tags=["板块扫描"], dependencies=[Depends(get_current_user)])
+app.include_router(stock.router, prefix=f"{settings.api_v1_prefix}/stock", tags=["个股筛选"], dependencies=[Depends(get_current_user)])
+app.include_router(decision.router, prefix=f"{settings.api_v1_prefix}/decision", tags=["决策分析"], dependencies=[Depends(get_current_user)])
+app.include_router(account.router, prefix=f"{settings.api_v1_prefix}/account", tags=["账户适配"], dependencies=[Depends(get_current_user)])
+app.include_router(task.router, prefix=f"{settings.api_v1_prefix}/task", tags=["任务管理"], dependencies=[Depends(get_current_user)])
+app.include_router(system_api.router, prefix=f"{settings.api_v1_prefix}/system", tags=["系统设置"], dependencies=[Depends(get_current_user)])
 
 
 if __name__ == "__main__":

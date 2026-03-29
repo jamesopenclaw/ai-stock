@@ -39,14 +39,17 @@ class DecisionFlowService:
         *,
         top_gainers: int,
         include_holdings: bool,
+        account_id: Optional[str] = None,
     ) -> CandidateAnalysisBundle:
         context = await decision_context_service.build_context(
             trade_date,
             top_gainers=top_gainers,
             include_holdings=include_holdings,
+            account_id=account_id,
         )
         review_bias_profile = await review_snapshot_service.get_review_bias_profile_safe(
-            limit_days=10
+            limit_days=10,
+            account_id=account_id,
         )
         scored_stocks = stock_filter_service.filter_with_context(
             trade_date,
@@ -78,11 +81,13 @@ class DecisionFlowService:
         trade_date: str,
         *,
         top_gainers: int = 200,
+        account_id: Optional[str] = None,
     ) -> FullDecisionBundle:
         candidate_bundle = await self.build_candidate_analysis(
             trade_date,
             top_gainers=top_gainers,
             include_holdings=True,
+            account_id=account_id,
         )
         buy_analysis = buy_point_service.analyze(
             trade_date,

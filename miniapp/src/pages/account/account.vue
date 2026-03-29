@@ -216,7 +216,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { accountApi } from '../../api'
+import { accountApi, stockApi } from '../../api'
 
 const loading = ref(false)
 const profile = ref(null)
@@ -308,12 +308,9 @@ const fetchStockName = async () => {
   if (!newPosition.value.ts_code) return
   try {
     const tsCode = newPosition.value.ts_code.trim()
-    const res = await uni.request({
-      url: 'http://localhost:8000/api/v1/stock/detail/' + tsCode,
-      method: 'GET'
-    })
-    if (res.data && res.data.data && res.data.data.stock) {
-      newPosition.value.stock_name = res.data.data.stock.stock_name
+    const res = await stockApi.detail(tsCode)
+    if (res.data && res.data.stock) {
+      newPosition.value.stock_name = res.data.stock.stock_name
     }
   } catch (e) {
     console.log('获取股票名称失败', e)
@@ -332,19 +329,15 @@ const addPosition = async () => {
   
   loading.value = true
   try {
-    const res = await uni.request({
-      url: 'http://localhost:8000/api/v1/account/positions',
-      method: 'POST',
-      data: {
-        ts_code: newPosition.value.ts_code,
-        holding_qty: parseInt(newPosition.value.holding_qty),
-        cost_price: parseFloat(newPosition.value.cost_price),
-        buy_date: newPosition.value.buy_date,
-        holding_reason: newPosition.value.holding_reason
-      }
+    const res = await accountApi.addPosition({
+      ts_code: newPosition.value.ts_code,
+      holding_qty: parseInt(newPosition.value.holding_qty),
+      cost_price: parseFloat(newPosition.value.cost_price),
+      buy_date: newPosition.value.buy_date,
+      holding_reason: newPosition.value.holding_reason
     })
-    
-    if (res.data.code === 200) {
+
+    if (res.code === 200) {
       uni.showToast({ title: '添加成功', icon: 'success' })
       showAddModal.value = false
       // 重置表单
@@ -359,7 +352,7 @@ const addPosition = async () => {
       // 刷新数据
       loadData()
     } else {
-      uni.showToast({ title: res.data.message || '添加失败', icon: 'none' })
+      uni.showToast({ title: res.message || '添加失败', icon: 'none' })
     }
   } catch (e) {
     uni.showToast({ title: '添加失败', icon: 'none' })
@@ -376,12 +369,9 @@ const deletePosition = async (id) => {
       if (res.confirm) {
         loading.value = true
         try {
-          const res = await uni.request({
-            url: 'http://localhost:8000/api/v1/account/positions/' + id,
-            method: 'DELETE'
-          })
-          
-          if (res.data.code === 200) {
+          const res = await accountApi.deletePosition(id)
+
+          if (res.code === 200) {
             uni.showToast({ title: '删除成功', icon: 'success' })
             loadData()
           } else {

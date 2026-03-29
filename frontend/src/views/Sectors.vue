@@ -44,13 +44,31 @@
             <div class="hero-side-value">{{ marketEnv?.market_env_tag || '未知' }}</div>
             <div class="hero-side-copy">{{ marketEnvTitle }}</div>
           </div>
-          <div class="hero-side-card">
-            <div class="hero-side-label">风向板块</div>
-            <div class="hero-side-value">{{ primaryLeaderSector?.sector_name || '暂无' }}</div>
-            <div class="hero-side-copy">{{ leaderStockSummary }}</div>
-          </div>
+        <div class="hero-side-card">
+          <div class="hero-side-label">风向板块</div>
+          <div class="hero-side-value">{{ primaryLeaderSector?.sector_name || '暂无' }}</div>
+          <div class="hero-side-copy">{{ leaderStockSummary }}</div>
+          <el-button
+            v-if="primaryLeaderSector && !leaderLoading && !leaderLoaded"
+            type="primary"
+            link
+            size="small"
+            @click="loadLeaderData()"
+          >
+            加载风向标
+          </el-button>
+          <el-button
+            v-else-if="primaryLeaderSector && leaderLoading"
+            type="primary"
+            link
+            size="small"
+            loading
+          >
+            加载中
+          </el-button>
         </div>
       </div>
+    </div>
       <el-alert
         v-if="sectorModeAlertVisible"
         :title="sectorModeAlertTitle"
@@ -272,14 +290,19 @@ import { sectorApi, marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 
+const SECTORS_REQUEST_TIMEOUT = 90000
 const loading = ref(false)
+const leaderLoading = ref(false)
+const leaderLoaded = ref(false)
 const activeTab = ref('mainline')
 const marketEnv = ref(null)
 const leaderData = ref(null)
 const router = useRouter()
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
-const scanData = ref({
+const loadVersion = ref(0)
+
+const createDefaultScanData = () => ({
   trade_date: '',
   resolved_trade_date: '',
   sector_data_mode: '',
@@ -292,6 +315,7 @@ const scanData = ref({
   trash_sectors: [],
   total_sectors: 0
 })
+const scanData = ref(createDefaultScanData())
 
 const mainlineClass = (tag) => {
   if (tag === '主线') return 'text-red'
@@ -405,6 +429,8 @@ const sectorGroupingSummary = computed(() => (
 
 const leaderStockSummary = computed(() => {
   const leaderStocks = leaderData.value?.leader_stocks || []
+  if (leaderLoading.value) return '风向标加载中'
+  if (!leaderLoaded.value && primaryLeaderSector.value) return '按需加载风向标个股'
   if (!leaderStocks.length) return '暂无风向标'
   return `风向标 ${leaderStocks.map((item) => item.stock_name).join(' / ')}`
 })
@@ -545,31 +571,109 @@ const getLocalDate = () => {
   return `${y}-${m}-${d}`
 }
 
+const isAbortedRequest = (error) => {
+  const code = String(error?.code || '')
+  const message = String(error?.message || '').toLowerCase()
+  return (
+    code === 'ERR_CANCELED'
+    || message.includes('request aborted')
+    || message.includes('aborted')
+    || message.includes('canceled')
+  )
+}
+
+const applyScanData = (data) => {
+  scanData.value = {
+    ...createDefaultScanData(),
+    ...(data || {})
+  }
+  if (!scanData.value.mainline_sectors?.length && !scanData.value.sub_mainline_sectors?.length) {
+    activeTab.value = 'all'
+  }
+}
+
+const loadSupportingData = async (tradeDate, version, options = {}) => {
+  const failedModules = []
+  const [marketRes] = await Promise.allSettled([
+    marketApi.getEnv(tradeDate, { timeout: SECTORS_REQUEST_TIMEOUT })
+  ])
+
+  if (loadVersion.value !== version) {
+    return
+  }
+
+  if (marketRes.status === 'fulfilled') {
+    marketEnv.value = marketRes.value.data?.data || null
+  } else if (!isAbortedRequest(marketRes.reason)) {
+    failedModules.push('市场环境')
+  }
+
+  if (failedModules.length && !options.silent) {
+    ElMessage.warning(`部分数据加载失败：${failedModules.join('、')}`)
+  }
+}
+
+const loadLeaderData = async (options = {}) => {
+  if (!primaryLeaderSector.value || leaderLoading.value) {
+    return
+  }
+  leaderLoading.value = true
+  try {
+    const tradeDate = scanData.value.resolved_trade_date || scanData.value.trade_date || getLocalDate()
+    const res = await sectorApi.leader(tradeDate, {
+      refresh: false,
+      timeout: SECTORS_REQUEST_TIMEOUT,
+      ...options
+    })
+    leaderData.value = res.data?.data || null
+    leaderLoaded.value = true
+  } catch (error) {
+    if (!isAbortedRequest(error)) {
+      ElMessage.warning('风向标加载失败')
+    }
+  } finally {
+    leaderLoading.value = false
+  }
+}
+
 const loadData = async (options = {}) => {
+  const version = loadVersion.value + 1
+  loadVersion.value = version
+  const { silent = false, ...requestOptions } = options
   loading.value = true
+  marketEnv.value = null
+  leaderData.value = null
+  leaderLoaded.value = false
+  leaderLoading.value = false
   try {
     const tradeDate = getLocalDate()
-    const [scanRes, marketRes, leaderRes] = await Promise.all([
-      sectorApi.scan(tradeDate, options),
-      marketApi.getEnv(tradeDate),
-      sectorApi.leader(tradeDate, options)
-    ])
-    scanData.value = scanRes.data.data
-    marketEnv.value = marketRes.data.data
-    leaderData.value = leaderRes.data.data
-    // 弱市时主线/次主线为空，自动切到全部行业 tab
-    if (!scanData.value.mainline_sectors?.length && !scanData.value.sub_mainline_sectors?.length) {
-      activeTab.value = 'all'
+    const scanRes = await sectorApi.scan(tradeDate, {
+      ...requestOptions,
+      timeout: SECTORS_REQUEST_TIMEOUT
+    })
+    if (loadVersion.value !== version) {
+      return
     }
+    applyScanData(scanRes.data?.data)
+    const auxTradeDate = scanData.value.resolved_trade_date || scanData.value.trade_date || tradeDate
+    loadSupportingData(auxTradeDate, version, { ...requestOptions, silent })
   } catch (error) {
-    ElMessage.error('加载失败')
+    if (loadVersion.value !== version || isAbortedRequest(error)) {
+      return
+    }
+    applyScanData(null)
+    if (!silent) {
+      ElMessage.error('加载失败')
+    }
   } finally {
-    loading.value = false
+    if (loadVersion.value === version) {
+      loading.value = false
+    }
   }
 }
 
 onMounted(() => {
-  loadData()
+  loadData({ silent: true })
 })
 </script>
 

@@ -67,12 +67,14 @@ class BuyPointSopService:
         self,
         ts_code: str,
         trade_date: str,
+        account_id: Optional[str] = None,
     ) -> BuyPointSopResponse:
         normalized_code = normalize_ts_code(ts_code)
         context = await decision_context_service.build_context(
             trade_date,
             top_gainers=120,
             include_holdings=True,
+            account_id=account_id,
         )
         stable_market_env = context.market_env
         realtime_market_env = getattr(context, "realtime_market_env", None) or stable_market_env

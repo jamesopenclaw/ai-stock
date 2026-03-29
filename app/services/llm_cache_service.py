@@ -14,14 +14,21 @@ from app.models.llm_cache_entry import LlmCacheEntry
 class LlmCacheService:
     """按场景与输入签名缓存 LLM 解释结果。"""
 
-    async def get_cache(self, *, cache_key: str) -> Optional[Dict]:
+    def _normalize_account_id(self, account_id: Optional[str]) -> str:
+        return str(account_id or "").strip()
+
+    async def get_cache(self, *, cache_key: str, account_id: Optional[str] = None) -> Optional[Dict]:
         if not cache_key:
             return None
+        normalized_account_id = self._normalize_account_id(account_id)
         try:
             async with async_session_factory() as session:
                 row = (
                     await session.execute(
-                        select(LlmCacheEntry).where(LlmCacheEntry.cache_key == cache_key)
+                        select(LlmCacheEntry).where(
+                            LlmCacheEntry.cache_key == cache_key,
+                            LlmCacheEntry.account_id == normalized_account_id,
+                        )
                     )
                 ).scalar_one_or_none()
             if not row or not row.response_json:
@@ -36,6 +43,7 @@ class LlmCacheService:
         *,
         scene: str,
         cache_key: str,
+        account_id: Optional[str] = None,
         trade_date: str,
         provider: str,
         model: str,
@@ -44,19 +52,24 @@ class LlmCacheService:
     ) -> None:
         if not cache_key:
             return
+        normalized_account_id = self._normalize_account_id(account_id)
         try:
             payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
             response_json = json.dumps(response, ensure_ascii=False, sort_keys=True)
             async with async_session_factory() as session:
                 row = (
                     await session.execute(
-                        select(LlmCacheEntry).where(LlmCacheEntry.cache_key == cache_key)
+                        select(LlmCacheEntry).where(
+                            LlmCacheEntry.cache_key == cache_key,
+                            LlmCacheEntry.account_id == normalized_account_id,
+                        )
                     )
                 ).scalar_one_or_none()
                 if row is None:
                     session.add(
                         LlmCacheEntry(
                             scene=scene or "",
+                            account_id=normalized_account_id,
                             cache_key=cache_key,
                             trade_date=trade_date or "",
                             provider=provider or "",
@@ -67,6 +80,7 @@ class LlmCacheService:
                     )
                 else:
                     row.scene = scene or row.scene
+                    row.account_id = normalized_account_id or row.account_id
                     row.trade_date = trade_date or row.trade_date
                     row.provider = provider or row.provider
                     row.model = model or row.model

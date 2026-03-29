@@ -1,0 +1,117 @@
+"""
+认证 API
+"""
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from app.core.config import settings
+from app.core.security import (
+    authenticate_user,
+    create_access_token,
+    create_refresh_session,
+    get_current_user,
+    get_current_account,
+    revoke_refresh_session,
+    rotate_refresh_session,
+    serialize_user,
+)
+from app.models.schemas import ApiResponse
+from app.services.trading_account_service import get_user_default_account, serialize_account
+from app.core.security import AuthenticatedAccount
+
+
+router = APIRouter()
+
+
+class LoginRequest(BaseModel):
+    """登录请求。"""
+
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class RefreshRequest(BaseModel):
+    """刷新令牌请求。"""
+
+    refresh_token: str = Field(..., min_length=16)
+
+
+class LogoutRequest(BaseModel):
+    """登出请求。"""
+
+    refresh_token: str = Field(..., min_length=16)
+
+
+async def _build_auth_payload(user, access_token: str, refresh_token: str, refresh_expires_at) -> dict:
+    refresh_expires_in = max(
+        int((refresh_expires_at - datetime.now(timezone.utc)).total_seconds()),
+        0,
+    )
+    account = await get_user_default_account(user.id, getattr(user, "default_account_id", None))
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": int(settings.auth_access_token_expire_minutes * 60),
+        "refresh_token": refresh_token,
+        "refresh_expires_in": refresh_expires_in,
+        "user": serialize_user(user),
+        "account": serialize_account(account),
+    }
+
+
+@router.post("/login", response_model=ApiResponse)
+async def login(request: LoginRequest) -> ApiResponse:
+    """用户名密码登录。"""
+    user = await authenticate_user(request.username, request.password)
+    if not user:
+        return JSONResponse(
+            status_code=401,
+            content=ApiResponse(code=401, message="用户名或密码错误").model_dump(),
+        )
+
+    access_token = create_access_token(user)
+    refresh_token, refresh_expires_at = await create_refresh_session(user.id)
+    return ApiResponse(
+        data=await _build_auth_payload(user, access_token, refresh_token, refresh_expires_at)
+    )
+
+
+@router.post("/refresh", response_model=ApiResponse)
+async def refresh_token(request: RefreshRequest) -> ApiResponse:
+    """刷新 access token，并轮换 refresh token。"""
+    rotated = await rotate_refresh_session(request.refresh_token)
+    if not rotated:
+        return JSONResponse(
+            status_code=401,
+            content=ApiResponse(code=401, message="刷新令牌无效或已过期").model_dump(),
+        )
+
+    user, new_refresh_token, refresh_expires_at = rotated
+    access_token = create_access_token(user)
+    return ApiResponse(
+        data=await _build_auth_payload(user, access_token, new_refresh_token, refresh_expires_at)
+    )
+
+
+@router.post("/logout", response_model=ApiResponse)
+async def logout(request: LogoutRequest) -> ApiResponse:
+    """注销当前 refresh session。"""
+    await revoke_refresh_session(request.refresh_token)
+    return ApiResponse(data={"success": True})
+
+
+@router.get("/me", response_model=ApiResponse)
+async def me(
+    current_user=Depends(get_current_user),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
+    """获取当前登录用户。"""
+    return ApiResponse(
+        data={
+            "user": serialize_user(current_user),
+            "account": serialize_account(current_account),
+        }
+    )

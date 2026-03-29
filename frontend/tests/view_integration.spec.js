@@ -81,6 +81,7 @@ const mountView = async (component) => {
 }
 
 beforeEach(() => {
+  window.sessionStorage.clear()
   routeQuery = {}
   routerPush.mockReset()
   routerReplace.mockReset()
@@ -188,6 +189,8 @@ describe('关键页面联调', () => {
 
     const { default: BuyPointView } = await import('../src/views/BuyPoint.vue')
     const wrapper = await mountView(BuyPointView)
+    await new Promise((resolve) => window.setTimeout(resolve, 220))
+    await flushPromises()
 
     expect(decisionApi.buyPoint).toHaveBeenCalledOnce()
     expect(decisionApi.reviewStats).toHaveBeenCalledOnce()

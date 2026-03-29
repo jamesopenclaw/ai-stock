@@ -62,6 +62,7 @@ class StockCheckupService:
         trade_date: str,
         checkup_target: StockCheckupTarget = StockCheckupTarget.OBSERVE,
         *,
+        account_id: Optional[str] = None,
         force_llm_refresh: bool = False,
     ) -> StockCheckupResponse:
         normalized_code = market_data_gateway.normalize_ts_code(ts_code)
@@ -69,6 +70,7 @@ class StockCheckupService:
             trade_date,
             top_gainers=120,
             include_holdings=True,
+            account_id=account_id,
         )
         stocks, found_in_candidates = decision_context_service.merge_single_stock_into_context(
             trade_date,
@@ -166,6 +168,7 @@ class StockCheckupService:
             rule_snapshot,
             trade_date=trade_date,
             checkup_target=checkup_target,
+            account_id=account_id,
             force_refresh=force_llm_refresh,
         )
         return StockCheckupResponse(

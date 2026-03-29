@@ -144,7 +144,7 @@ class TaskScheduler:
         # 生成摘要
         summary = self._generate_summary(trade_date, market_env, account_adapt, holdings)
         risk_alerts = self._build_risk_alerts(market_env, account, buy_analysis, holdings)
-        snapshot_count = await review_snapshot_service.save_analysis_snapshot(
+        snapshot_count = await review_snapshot_service.save_analysis_snapshot_safe(
             trade_date,
             stock_pools,
             buy_analysis,
