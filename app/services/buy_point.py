@@ -24,15 +24,20 @@ from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
 from app.services.stock_filter import stock_filter_service
 from app.services.account_adapter import AccountAdapterService
+from app.services.strategy_config import (
+    BuyPointStrategyConfig,
+    DEFAULT_BUY_POINT_STRATEGY,
+)
 
 
 class BuyPointService:
     """买点分析服务"""
 
-    def __init__(self):
+    def __init__(self, strategy: Optional[BuyPointStrategyConfig] = None):
         self.market_env_service = market_env_service
         self.sector_scan_service = sector_scan_service
         self.stock_filter_service = stock_filter_service
+        self.strategy = strategy or DEFAULT_BUY_POINT_STRATEGY
 
     def analyze(
         self,
@@ -43,6 +48,7 @@ class BuyPointService:
         sector_scan=None,
         scored_stocks: Optional[List[StockOutput]] = None,
         stock_pools: Optional[StockPoolsOutput] = None,
+        review_bias_profile: Optional[Dict] = None,
     ) -> BuyPointResponse:
         """
         买点分析
@@ -72,6 +78,7 @@ class BuyPointService:
             market_env=market_env,
             sector_scan=sector_scan,
             scored_stocks=scored_stocks,
+            review_bias_profile=review_bias_profile,
         )
         pool_tag_by_code = {}
         for stock in stock_pools.market_watch_pool:
@@ -95,7 +102,7 @@ class BuyPointService:
             if stock.stock_pool_tag == StockPoolTag.HOLDING_PROCESS:
                 continue
 
-            buy_point = self._analyze_stock_buy_point(stock, market_env, account)
+            buy_point = self._analyze_stock_buy_point(stock, market_env, account, review_bias_profile)
             buy_point = self._apply_display_quote(buy_point, stock, display_quote_map)
             analyzed_count += 1
 
@@ -116,12 +123,16 @@ class BuyPointService:
             else:
                 not_buy.append(buy_point)
 
+        available.sort(key=self._buy_point_rank_key, reverse=True)
+        observe.sort(key=self._buy_point_rank_key, reverse=True)
+        not_buy.sort(key=self._buy_point_rank_key, reverse=True)
+
         return BuyPointResponse(
             trade_date=trade_date,
             market_env_tag=market_env.market_env_tag,
-            available_buy_points=available[:10],   # 最多10只
-            observe_buy_points=observe[:10],       # 最多10只
-            not_buy_points=not_buy[:10],           # 最多10只
+            available_buy_points=available[:self.strategy.max_available],
+            observe_buy_points=observe[:self.strategy.max_observe],
+            not_buy_points=not_buy[:self.strategy.max_not_buy],
             total_count=analyzed_count
         )
 
@@ -170,7 +181,8 @@ class BuyPointService:
         self,
         stock: StockOutput,
         market_env,
-        account: Optional[AccountInput] = None
+        account: Optional[AccountInput] = None,
+        review_bias_profile: Optional[Dict] = None,
     ) -> BuyPointOutput:
         """
         分析单个股票的买点
@@ -209,14 +221,20 @@ class BuyPointService:
 
         # 生成买点简评
         comment = self._generate_buy_comment(stock, buy_type, signal_tag)
+        review_bias = self._resolve_review_bias(stock, signal_tag, review_bias_profile)
 
         return BuyPointOutput(
             ts_code=stock.ts_code,
             stock_name=stock.stock_name,
+            sector_name=stock.sector_name,
             candidate_source_tag=stock.candidate_source_tag,
             candidate_bucket_tag=stock.candidate_bucket_tag,
             stock_pool_tag=stock.stock_pool_tag.value if stock.stock_pool_tag else "",
             pool_entry_reason=stock.pool_entry_reason or "",
+            hard_filter_failed_rules=list(stock.hard_filter_failed_rules or []),
+            hard_filter_failed_count=int(stock.hard_filter_failed_count or 0),
+            hard_filter_pass_count=int(stock.hard_filter_pass_count or 0),
+            hard_filter_summary=stock.hard_filter_summary or "",
             buy_signal_tag=signal_tag,
             buy_point_type=buy_type,
             buy_trigger_cond=trigger_cond,
@@ -234,8 +252,50 @@ class BuyPointService:
             buy_requires_sector_resonance=requires_sector_resonance,
             buy_risk_level=risk_level,
             buy_account_fit=account_fit,
-            buy_comment=comment
+            buy_comment=comment,
+            review_bias_score=review_bias["score"],
+            review_bias_label=review_bias["label"],
+            review_bias_reason=review_bias["reason"],
         )
+
+    def _resolve_review_bias(
+        self,
+        stock: StockOutput,
+        signal_tag: BuySignalTag,
+        review_bias_profile: Optional[Dict],
+    ) -> Dict:
+        if not review_bias_profile:
+            return {"score": 0.0, "label": None, "reason": None}
+
+        snapshot_type = "buy_available" if signal_tag == BuySignalTag.CAN_BUY else "buy_observe"
+        bucket = stock.candidate_bucket_tag or "未分层"
+        exact = (review_bias_profile.get("exact") or {}).get((snapshot_type, bucket))
+        bucket_entry = (review_bias_profile.get("bucket") or {}).get(bucket)
+        entry = exact or bucket_entry
+        if not entry:
+            return {"score": 0.0, "label": None, "reason": None}
+        return {
+            "score": float(entry.get("score") or 0.0),
+            "label": entry.get("label"),
+            "reason": entry.get("reason"),
+        }
+
+    def _buy_point_rank_key(self, point: BuyPointOutput):
+        return (
+            float(point.review_bias_score or 0),
+            1 if point.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE.value else 0,
+            self._buy_point_type_priority(point.buy_point_type),
+            float(point.buy_current_change_pct or 0),
+        )
+
+    def _buy_point_type_priority(self, buy_point_type: BuyPointType) -> int:
+        if buy_point_type == BuyPointType.RETRACE_SUPPORT:
+            return 3
+        if buy_point_type == BuyPointType.BREAKTHROUGH:
+            return 2
+        if buy_point_type == BuyPointType.LOW_SUCK:
+            return 1
+        return 0
 
     def _determine_buy_type(self, stock: StockOutput, market_env) -> BuyPointType:
         """确定买点类型"""

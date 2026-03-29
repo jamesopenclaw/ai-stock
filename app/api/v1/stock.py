@@ -1,6 +1,7 @@
 """
 个股筛选 API
 """
+import asyncio
 from fastapi import APIRouter, Query
 from typing import Optional
 from datetime import datetime
@@ -8,22 +9,111 @@ import logging
 
 from app.models.schemas import (
     ApiResponse,
+    LlmCallStatus,
     StockCheckupTarget,
 )
 from app.services.stock_filter import (
     stock_filter_service,
 )
 from app.services.decision_context import decision_context_service
+from app.services.decision_flow import decision_flow_service
 from app.services.sell_point import sell_point_service
-from app.services.llm_explainer import llm_explainer_service
 from app.services.stock_checkup import stock_checkup_service
 from app.services.buy_point_sop import buy_point_sop_service
 from app.services.sell_point_sop import sell_point_sop_service
 from app.services.review_snapshot import review_snapshot_service
+from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date
 from app.data.tushare_client import tushare_client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+STOCK_POOLS_SNAPSHOT_VERSION = 3
+_stock_pools_refresh_tasks: dict[str, asyncio.Task] = {}
+
+
+def _stock_pools_refresh_key(trade_date: str, candidate_limit: int) -> str:
+    return f"{trade_date}:{candidate_limit}"
+
+
+def _is_stock_pools_refresh_running(trade_date: str, candidate_limit: int) -> bool:
+    task = _stock_pools_refresh_tasks.get(_stock_pools_refresh_key(trade_date, candidate_limit))
+    return bool(task and not task.done())
+
+
+def _serialize_stock_pools_result(result, *, refresh_in_progress: bool = False, refresh_requested: bool = False, stale_snapshot: bool = False):
+    return {
+        "trade_date": result.trade_date,
+        "resolved_trade_date": result.resolved_trade_date,
+        "sector_scan_trade_date": result.sector_scan_trade_date,
+        "sector_scan_resolved_trade_date": result.sector_scan_resolved_trade_date,
+        "market_watch_pool": [s.model_dump() for s in result.market_watch_pool],
+        "trend_recognition_pool": [s.model_dump() for s in result.trend_recognition_pool],
+        "account_executable_pool": [s.model_dump() for s in result.account_executable_pool],
+        "holding_process_pool": [s.model_dump() for s in result.holding_process_pool],
+        "total_count": result.total_count,
+        "llm_summary": None,
+        "llm_status": LlmCallStatus(
+            enabled=False,
+            success=False,
+            status="disabled",
+            message="三池分类已改为纯规则输出，不再调用 LLM",
+        ).model_dump(),
+        "refresh_in_progress": refresh_in_progress,
+        "refresh_requested": refresh_requested,
+        "stale_snapshot": stale_snapshot,
+    }
+
+
+async def _compute_stock_pools_result(trade_date: str, candidate_limit: int):
+    bundle = await decision_flow_service.build_candidate_analysis(
+        trade_date,
+        top_gainers=candidate_limit,
+        include_holdings=True,
+    )
+    result = bundle.stock_pools
+    result.resolved_trade_date = bundle.context.resolved_stock_trade_date
+    result.sector_scan_trade_date = bundle.context.sector_scan_trade_date
+    result.sector_scan_resolved_trade_date = bundle.context.sector_scan_resolved_trade_date
+    result.snapshot_version = STOCK_POOLS_SNAPSHOT_VERSION
+    sell_analysis = sell_point_service.analyze(
+        trade_date,
+        bundle.context.holdings,
+        market_env=bundle.context.market_env,
+        sector_scan=bundle.context.sector_scan,
+    )
+    result = stock_filter_service.attach_sell_analysis(result, sell_analysis)
+    return result
+
+
+async def _persist_stock_pools_result(trade_date: str, candidate_limit: int, result) -> None:
+    await review_snapshot_service.save_analysis_snapshot_safe(
+        trade_date,
+        stock_pools=result,
+    )
+    await review_snapshot_service.save_stock_pools_page_snapshot_safe(
+        trade_date,
+        candidate_limit,
+        result,
+    )
+
+
+def _ensure_stock_pools_background_refresh(trade_date: str, candidate_limit: int) -> bool:
+    key = _stock_pools_refresh_key(trade_date, candidate_limit)
+    if _is_stock_pools_refresh_running(trade_date, candidate_limit):
+        return False
+
+    async def _runner():
+        try:
+            result = await _compute_stock_pools_result(trade_date, candidate_limit)
+            await _persist_stock_pools_result(trade_date, candidate_limit, result)
+            logger.info("三池后台刷新完成: trade_date=%s candidate_limit=%s", trade_date, candidate_limit)
+        except Exception as exc:
+            logger.warning("三池后台刷新失败: trade_date=%s candidate_limit=%s err=%s", trade_date, candidate_limit, exc)
+        finally:
+            _stock_pools_refresh_tasks.pop(key, None)
+
+    _stock_pools_refresh_tasks[key] = asyncio.create_task(_runner())
+    return True
 
 
 @router.get("/filter", response_model=ApiResponse)
@@ -52,6 +142,8 @@ async def filter_stocks(
             context.stocks,
             market_env=context.market_env,
             sector_scan=context.sector_scan,
+            account=context.account,
+            holdings=context.holdings_list,
         )
 
         return ApiResponse(
@@ -69,7 +161,8 @@ async def filter_stocks(
 async def get_stock_pools(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
     limit: int = Query(100, description="候选股数量限制", ge=1, le=500),
-    force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 解读缓存"),
+    refresh: bool = Query(False, description="是否强制重新计算三池结果并覆盖快照"),
+    force_llm_refresh: bool = Query(False, description="保留字段，三池页当前不再触发 LLM"),
 ) -> ApiResponse:
     """
     三池分类
@@ -84,59 +177,76 @@ async def get_stock_pools(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        context = await decision_context_service.build_context(
+        candidate_limit = max(100, min(limit, 300))
+        expected_sector_scan_trade_date = await resolve_snapshot_lookup_trade_date(trade_date)
+        cached = await review_snapshot_service.get_stock_pools_page_snapshot(
             trade_date,
-            top_gainers=max(100, min(limit, 300)),
-            include_holdings=True,
+            candidate_limit,
         )
-        scored_stocks = stock_filter_service.filter_with_context(
-            trade_date,
-            context.stocks,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
+        cache_valid = bool(
+            cached
+            and cached.snapshot_version == STOCK_POOLS_SNAPSHOT_VERSION
+            and cached.sector_scan_trade_date
+            and cached.sector_scan_trade_date == expected_sector_scan_trade_date
         )
 
-        # 三池分类
-        result = stock_filter_service.classify_pools(
-            trade_date,
-            context.stocks,
-            context.holdings_list,
-            context.account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
-        )
-        result.resolved_trade_date = context.resolved_stock_trade_date
-        sell_analysis = sell_point_service.analyze(
-            trade_date,
-            context.holdings,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-        )
-        result = stock_filter_service.attach_sell_analysis(result, sell_analysis)
-        try:
-            await review_snapshot_service.save_analysis_snapshot(trade_date, stock_pools=result)
-        except Exception as exc:
-            logger.warning("三池页快照写入失败: %s", exc)
-        llm_summary, llm_status = await llm_explainer_service.summarize_stock_pools_with_status(
-            result,
-            context.market_env,
-            force_refresh=force_llm_refresh,
-            allow_live_request=force_llm_refresh,
-        )
+        if refresh:
+            started = _ensure_stock_pools_background_refresh(trade_date, candidate_limit)
+            if cached:
+                return ApiResponse(
+                    data=_serialize_stock_pools_result(
+                        cached,
+                        refresh_in_progress=_is_stock_pools_refresh_running(trade_date, candidate_limit),
+                        refresh_requested=started,
+                        stale_snapshot=not cache_valid,
+                    )
+                )
+
+            return ApiResponse(
+                data={
+                    "trade_date": trade_date,
+                    "resolved_trade_date": "",
+                    "sector_scan_trade_date": expected_sector_scan_trade_date,
+                    "sector_scan_resolved_trade_date": "",
+                    "market_watch_pool": [],
+                    "trend_recognition_pool": [],
+                    "account_executable_pool": [],
+                    "holding_process_pool": [],
+                    "total_count": 0,
+                    "llm_summary": None,
+                    "llm_status": LlmCallStatus(
+                        enabled=False,
+                        success=False,
+                        status="disabled",
+                        message="三池分类已改为纯规则输出，不再调用 LLM",
+                    ).model_dump(),
+                    "refresh_in_progress": True,
+                    "refresh_requested": started,
+                    "stale_snapshot": False,
+                },
+                message="已触发后台刷新，当前暂无可展示的三池快照",
+            )
+
+        if cache_valid:
+            return ApiResponse(
+                data=_serialize_stock_pools_result(
+                    cached,
+                    refresh_in_progress=_is_stock_pools_refresh_running(trade_date, candidate_limit),
+                    refresh_requested=False,
+                    stale_snapshot=False,
+                )
+            )
+
+        result = await _compute_stock_pools_result(trade_date, candidate_limit)
+        await _persist_stock_pools_result(trade_date, candidate_limit, result)
 
         return ApiResponse(
-            data={
-                "trade_date": result.trade_date,
-                "resolved_trade_date": result.resolved_trade_date,
-                "market_watch_pool": [s.model_dump() for s in result.market_watch_pool],
-                "trend_recognition_pool": [s.model_dump() for s in result.trend_recognition_pool],
-                "account_executable_pool": [s.model_dump() for s in result.account_executable_pool],
-                "holding_process_pool": [s.model_dump() for s in result.holding_process_pool],
-                "total_count": result.total_count,
-                "llm_summary": llm_summary.model_dump() if llm_summary else None,
-                "llm_status": llm_status.model_dump(),
-            }
+            data=_serialize_stock_pools_result(
+                result,
+                refresh_in_progress=False,
+                refresh_requested=False,
+                stale_snapshot=False,
+            )
         )
     except Exception as e:
         return ApiResponse(code=500, message=f"获取三池失败: {str(e)}")

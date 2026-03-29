@@ -49,6 +49,10 @@
           <el-icon><Tickets /></el-icon>
           <span>LLM调用记录</span>
         </el-menu-item>
+        <el-menu-item index="/tasks">
+          <el-icon><Operation /></el-icon>
+          <span>任务调度</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     
@@ -73,7 +77,19 @@
 import { useRoute } from 'vue-router'
 import { ref, onMounted } from 'vue'
 import dayjs from 'dayjs'
-import { Tickets } from '@element-plus/icons-vue'
+import {
+  DataAnalysis,
+  Grid,
+  House,
+  List,
+  Minus,
+  Operation,
+  Plus,
+  Setting,
+  Tickets,
+  TrendCharts,
+  Wallet,
+} from '@element-plus/icons-vue'
 
 const route = useRoute()
 const currentDate = ref(dayjs().format('YYYY-MM-DD'))

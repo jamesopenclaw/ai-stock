@@ -248,6 +248,7 @@ const loading = ref(false)
 const llmRefreshing = ref(false)
 const activeTarget = ref('观察型')
 const data = ref(null)
+const CHECKUP_TIMEOUT = 120000
 
 const rule = computed(() => data.value?.rule_snapshot || null)
 const llm = computed(() => data.value?.llm_report || null)
@@ -307,11 +308,17 @@ const loadData = async (options = {}) => {
       props.tsCode,
       displayTradeDate.value,
       activeTarget.value,
-      { forceLlmRefresh }
+      { forceLlmRefresh, timeout: CHECKUP_TIMEOUT }
     )
-    data.value = res.data.data || null
+    const payload = res.data || {}
+    if (payload.code && payload.code !== 200) {
+      throw new Error(payload.message || '加载个股体检失败')
+    }
+    data.value = payload.data || null
   } catch (error) {
-    ElMessage.error('加载个股体检失败')
+    data.value = null
+    const isTimeout = error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')
+    ElMessage.error(isTimeout ? '个股体检超时，请稍后重试' : (error?.message || '加载个股体检失败'))
   } finally {
     loading.value = false
     llmRefreshing.value = false

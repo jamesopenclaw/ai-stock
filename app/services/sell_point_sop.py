@@ -94,6 +94,8 @@ class SellPointSopService:
             context.stocks,
             market_env=context.market_env,
             sector_scan=context.sector_scan,
+            account=context.account,
+            holdings=context.holdings_list,
         )
         target_scored = self._find_scored_stock(scored_stocks, normalized_code)
         full_sell_analysis = sell_point_service.analyze(

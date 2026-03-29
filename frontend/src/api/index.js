@@ -10,23 +10,42 @@ const api = axios.create({
 
 // Market API
 export const marketApi = {
-  getEnv: (tradeDate) => api.get('/market/env', { params: { trade_date: tradeDate } }),
-  getIndex: (tradeDate) => api.get('/market/index', { params: { trade_date: tradeDate } }),
-  getStats: (tradeDate) => api.get('/market/stats', { params: { trade_date: tradeDate } })
+  getEnv: (tradeDate, options = {}) => api.get('/market/env', {
+    params: { trade_date: tradeDate },
+    timeout: options.timeout
+  }),
+  getIndex: (tradeDate, options = {}) => api.get('/market/index', {
+    params: { trade_date: tradeDate },
+    timeout: options.timeout
+  }),
+  getStats: (tradeDate, options = {}) => api.get('/market/stats', {
+    params: { trade_date: tradeDate },
+    timeout: options.timeout
+  })
 }
 
 // Sector API
 export const sectorApi = {
-  scan: (tradeDate) => api.get('/sector/scan', { params: { trade_date: tradeDate } }),
-  leader: (tradeDate) => api.get('/sector/leader', { params: { trade_date: tradeDate } }),
-  list: (tradeDate, limit) => api.get('/sector/list', { params: { trade_date: tradeDate, limit } })
+  scan: (tradeDate, options = {}) => api.get('/sector/scan', {
+    params: { trade_date: tradeDate, refresh: Boolean(options.refresh) },
+    timeout: options.timeout
+  }),
+  leader: (tradeDate, options = {}) => api.get('/sector/leader', {
+    params: { trade_date: tradeDate, refresh: Boolean(options.refresh) },
+    timeout: options.timeout
+  }),
+  list: (tradeDate, limit, options = {}) => api.get('/sector/list', {
+    params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
+    timeout: options.timeout
+  })
 }
 
 // Stock API
 export const stockApi = {
   filter: (tradeDate, limit) => api.get('/stock/filter', { params: { trade_date: tradeDate, limit } }),
   pools: (tradeDate, limit, options = {}) => api.get('/stock/pools', {
-    params: { trade_date: tradeDate, limit, force_llm_refresh: Boolean(options.forceLlmRefresh) }
+    params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
+    timeout: options.timeout
   }),
   detail: (tsCode, tradeDate) => api.get(`/stock/detail/${tsCode}`, { params: { trade_date: tradeDate } }),
   buyAnalysis: (tsCode, tradeDate) => api.get(`/stock/buy-analysis/${encodeURIComponent(tsCode)}`, {
@@ -40,26 +59,41 @@ export const stockApi = {
       trade_date: tradeDate,
       checkup_target: checkupTarget,
       force_llm_refresh: Boolean(options.forceLlmRefresh)
-    }
+    },
+    timeout: options.timeout
   })
 }
 
 // Decision API
 export const decisionApi = {
-  buyPoint: (tradeDate, limit) => api.get('/decision/buy-point', { params: { trade_date: tradeDate, limit } }),
-  sellPoint: (tradeDate, options = {}) => api.get('/decision/sell-point', {
-    params: { trade_date: tradeDate, force_llm_refresh: Boolean(options.forceLlmRefresh) }
+  buyPoint: (tradeDate, limit, options = {}) => api.get('/decision/buy-point', {
+    params: { trade_date: tradeDate, limit },
+    timeout: options.timeout
   }),
-  summary: (tradeDate) => api.get('/decision/summary', { params: { trade_date: tradeDate } }),
+  sellPoint: (tradeDate, options = {}) => api.get('/decision/sell-point', {
+    params: {
+      trade_date: tradeDate,
+      force_llm_refresh: Boolean(options.forceLlmRefresh),
+      include_llm: options.includeLlm !== undefined ? Boolean(options.includeLlm) : true
+    },
+    timeout: options.timeout
+  }),
+  summary: (tradeDate, options = {}) => api.get('/decision/summary', {
+    params: { trade_date: tradeDate },
+    timeout: options.timeout
+  }),
   analyze: (tradeDate) => api.post('/decision/analyze', { trade_date: tradeDate }),
-  reviewStats: (limitDays = 10) => api.get('/decision/review-stats', { params: { limit_days: limitDays } })
+  reviewStats: (limitDays = 10, options = {}) => api.get('/decision/review-stats', {
+    params: { limit_days: limitDays },
+    timeout: options.timeout
+  })
 }
 
 // Account API
 export const accountApi = {
-  profile: () => api.get('/account/profile'),
-  positions: () => api.get('/account/positions'),
-  status: () => api.get('/account/status'),
+  profile: (options = {}) => api.get('/account/profile', { timeout: options.timeout }),
+  positions: (options = {}) => api.get('/account/positions', { timeout: options.timeout }),
+  status: (options = {}) => api.get('/account/status', { timeout: options.timeout }),
   adapt: (tradeDate) => api.post('/account/adapt', { trade_date: tradeDate }),
   getConfig: () => api.get('/account/config'),
   updateConfig: (payload) => api.put('/account/config', payload),
@@ -72,6 +106,11 @@ export const accountApi = {
 
 export const systemApi = {
   llmLogs: (params = {}) => api.get('/system/llm/logs', { params })
+}
+
+export const taskApi = {
+  trigger: (payload) => api.post('/task/trigger', payload),
+  status: (params = {}) => api.get('/task/status', { params }),
 }
 
 export default api

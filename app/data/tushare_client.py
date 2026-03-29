@@ -63,6 +63,11 @@ class TushareClient:
             "mapping": {},
         }
         self._intraday_volume_ratio_cache = {}
+        self._ths_concept_index_cache = {
+            "fetched_at": 0.0,
+            "mapping": {},
+        }
+        self._ths_member_by_stock_cache = {}
 
     def _now_sh(self) -> datetime:
         """获取上海时区当前时间。"""
@@ -492,7 +497,8 @@ class TushareClient:
             )
             if not cal_df.empty:
                 open_days = cal_df[cal_df["is_open"] == 1]["cal_date"].tolist()
-                return [str(d) for d in open_days[:count]]
+                open_days = sorted(str(d) for d in open_days)
+                return open_days[:count]
         except Exception as e:
             logger.warning(f"获取未来交易日失败，退回自然日: {e}")
 
@@ -1155,46 +1161,262 @@ class TushareClient:
             })
         return sectors
 
-    def get_concept_sectors_from_limitup_with_meta(self, trade_date: str) -> Dict[str, object]:
-        """
-        按涨停板 limit_list_d 的 theme 字段聚合题材概念板块，并返回可追踪状态。
+    def _get_ths_concept_index_map(self) -> Dict[str, Dict[str, str]]:
+        """获取同花顺题材指数映射，并做进程内缓存。"""
+        cache = getattr(self, "_ths_concept_index_cache", None)
+        now_ts = time_module.time()
+        if (
+            cache
+            and cache.get("mapping")
+            and now_ts - float(cache.get("fetched_at") or 0)
+            < self.STOCK_BASIC_CACHE_TTL_SECONDS
+        ):
+            return dict(cache["mapping"])
 
-        status:
-        - ok: 成功聚合出题材
-        - no_token: 未配置 token
-        - empty: 接口有响应但当日无涨停数据
-        - missing_theme: 返回字段不含 theme，无法按题材聚合
-        - missing_pct_chg: 返回字段缺少涨跌幅
-        - error: 调用异常
+        mapping: Dict[str, Dict[str, str]] = {}
+        ths_index = getattr(self.pro, "ths_index", None)
+        if not callable(ths_index):
+            return {}
+        for ths_type in ("N", "TH"):
+            try:
+                df = ths_index(exchange="A", type=ths_type)
+            except TypeError:
+                df = ths_index(type=ths_type)
+            if df is None or df.empty:
+                continue
+            for _, row in df.iterrows():
+                ts_code = str(row.get("ts_code") or "").strip()
+                name = str(row.get("name") or "").strip()
+                if not ts_code or not name:
+                    continue
+                mapping[ts_code] = {
+                    "name": name,
+                    "type": str(row.get("type") or ths_type).strip() or ths_type,
+                }
+
+        if mapping:
+            self._ths_concept_index_cache = {
+                "fetched_at": now_ts,
+                "mapping": mapping,
+            }
+        return dict(mapping)
+
+    def _get_ths_concept_codes_for_stock(self, ts_code: str) -> List[str]:
+        """获取单只股票所属的同花顺题材代码，并做进程内缓存。"""
+        normalized = normalize_ts_code(ts_code)
+        if not normalized:
+            return []
+
+        cache = getattr(self, "_ths_member_by_stock_cache", None)
+        if cache is None:
+            cache = {}
+            self._ths_member_by_stock_cache = cache
+
+        now_ts = time_module.time()
+        cached = cache.get(normalized)
+        if cached and now_ts - float(cached.get("fetched_at") or 0) < self.STOCK_BASIC_CACHE_TTL_SECONDS:
+            return list(cached.get("codes") or [])
+
+        ths_member = getattr(self.pro, "ths_member", None)
+        if not callable(ths_member):
+            cache[normalized] = {
+                "fetched_at": now_ts,
+                "codes": [],
+            }
+            return []
+
+        df = ths_member(con_code=normalized)
+        codes: List[str] = []
+        if df is not None and not df.empty:
+            work = df.copy()
+            if "is_new" in work.columns:
+                work = work[work["is_new"].fillna("Y").astype(str).str.upper() == "Y"]
+            for code in work.get("ts_code", []):
+                concept_code = str(code or "").strip()
+                if concept_code and concept_code not in codes:
+                    codes.append(concept_code)
+
+        cache[normalized] = {
+            "fetched_at": now_ts,
+            "codes": codes,
+        }
+        return list(codes)
+
+    def _get_ths_concept_names_for_stock(self, ts_code: str) -> List[str]:
+        """获取单只股票所属的同花顺题材名称。"""
+        concept_index_map = self._get_ths_concept_index_map()
+        if not concept_index_map:
+            return []
+
+        names: List[str] = []
+        for code in self._get_ths_concept_codes_for_stock(ts_code):
+            name = str((concept_index_map.get(code) or {}).get("name") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def _get_concept_sectors_from_ths_with_meta(self, trade_date: str) -> Dict[str, object]:
         """
-        effective_trade_date = self._resolve_trade_date(trade_date) if self.token else trade_date
-        if not self.token:
+        基于同花顺题材成分与题材指数行情构建题材聚合。
+
+        逻辑：
+        - 用 limit_list_d 识别当日涨停股
+        - 用 ths_member(con_code=ts_code) 找到涨停股所属题材
+        - 用 ths_daily(trade_date=...) 提取题材指数涨跌幅
+        - 成交额与扩散度仍按涨停股聚合
+        """
+        try:
+            limitup_df = self.pro.limit_list_d(
+                trade_date=trade_date,
+                limit_type="U",
+            )
+            if limitup_df is None or limitup_df.empty:
+                return {
+                    "rows": [],
+                    "data_trade_date": trade_date,
+                    "status": "empty",
+                    "message": "涨停列表为空，暂无可聚合题材",
+                }
+            if "pct_chg" not in limitup_df.columns:
+                return {
+                    "rows": [],
+                    "data_trade_date": trade_date,
+                    "status": "missing_pct_chg",
+                    "message": "涨停列表缺少 pct_chg 字段，无法计算题材强度",
+                }
+
+            concept_index_map = self._get_ths_concept_index_map()
+            if not concept_index_map:
+                return {
+                    "rows": [],
+                    "data_trade_date": trade_date,
+                    "status": "ths_unavailable",
+                    "message": "同花顺题材索引不可用，无法构建题材聚合",
+                }
+
+            work = limitup_df.copy()
+            work["ts_code"] = work["ts_code"].astype(str).map(normalize_ts_code)
+            work["pct_chg"] = work["pct_chg"].fillna(0)
+            if "amount" not in work.columns:
+                work["amount"] = 0.0
+            work["amount"] = work["amount"].fillna(0)
+
+            grouped: Dict[str, Dict[str, object]] = {}
+            matched_stock_count = 0
+            for _, row in work.iterrows():
+                stock_code = str(row.get("ts_code") or "").strip()
+                if not stock_code:
+                    continue
+                concept_codes = [
+                    code
+                    for code in self._get_ths_concept_codes_for_stock(stock_code)
+                    if code in concept_index_map
+                ]
+                if not concept_codes:
+                    continue
+                matched_stock_count += 1
+                for concept_code in concept_codes:
+                    bucket = grouped.setdefault(
+                        concept_code,
+                        {
+                            "sector_name": concept_index_map[concept_code]["name"],
+                            "sector_code": concept_code,
+                            "stock_codes": set(),
+                            "pct_values": [],
+                            "amount_sum": 0.0,
+                        },
+                    )
+                    bucket["stock_codes"].add(stock_code)
+                    bucket["pct_values"].append(float(row.get("pct_chg") or 0))
+                    bucket["amount_sum"] = float(bucket["amount_sum"]) + float(row.get("amount") or 0)
+
+            if not grouped:
+                return {
+                    "rows": [],
+                    "data_trade_date": trade_date,
+                    "status": "ths_no_members",
+                    "message": "涨停股未匹配到可用的同花顺题材成分",
+                }
+
+            concept_quote_map: Dict[str, Dict[str, float]] = {}
+            try:
+                quote_df = self.pro.ths_daily(trade_date=trade_date)
+                if quote_df is not None and not quote_df.empty and "ts_code" in quote_df.columns:
+                    quote_df = quote_df.copy()
+                    quote_df["ts_code"] = quote_df["ts_code"].astype(str).str.strip()
+                    quote_df = quote_df[quote_df["ts_code"].isin(grouped.keys())]
+                    for _, row in quote_df.iterrows():
+                        concept_quote_map[str(row.get("ts_code") or "").strip()] = {
+                            "pct_change": float(row.get("pct_change") or 0),
+                        }
+            except Exception as e:
+                logger.warning(f"获取同花顺题材指数行情失败，将回退到涨停股均值: {e}")
+
+            sectors: List[Dict] = []
+            for concept_code, bucket in grouped.items():
+                stock_codes = bucket["stock_codes"]
+                pct_values = bucket["pct_values"]
+                quote = concept_quote_map.get(concept_code) or {}
+                change_pct = quote.get("pct_change")
+                if change_pct is None:
+                    change_pct = (
+                        sum(float(v) for v in pct_values) / len(pct_values)
+                        if pct_values else 0.0
+                    )
+                sectors.append({
+                    "sector_name": str(bucket["sector_name"]),
+                    "sector_code": concept_code,
+                    "sector_change_pct": round(float(change_pct), 2),
+                    "sector_turnover": round(float(bucket["amount_sum"]) / 10000, 2),
+                    "stock_count": len(stock_codes),
+                })
+
+            sectors.sort(
+                key=lambda row: (
+                    int(row.get("stock_count", 0) or 0),
+                    float(row.get("sector_change_pct", 0) or 0),
+                ),
+                reverse=True,
+            )
+            logger.info(
+                f"题材板块（{trade_date}，THS题材聚合）: {len(sectors)} 个题材，命中 {matched_stock_count} 只涨停股"
+            )
+            return {
+                "rows": sectors,
+                "data_trade_date": trade_date,
+                "status": "ok",
+                "message": f"同花顺题材聚合成功，共 {len(sectors)} 个题材",
+            }
+        except Exception as e:
+            logger.warning(f"同花顺题材聚合失败: {e}")
             return {
                 "rows": [],
-                "data_trade_date": effective_trade_date,
-                "status": "no_token",
-                "message": "未配置 Tushare Token，无法获取题材聚合数据",
+                "data_trade_date": trade_date,
+                "status": "ths_error",
+                "message": f"同花顺题材聚合异常: {e}",
             }
 
+    def _get_concept_sectors_from_limitup_theme_with_meta(self, trade_date: str) -> Dict[str, object]:
+        """按涨停板附带的 theme 字段聚合题材概念板块。"""
         try:
             df = self.pro.limit_list_d(
-                trade_date=effective_trade_date,
+                trade_date=trade_date,
                 limit_type="U",
             )
             if df is None or df.empty:
                 return {
                     "rows": [],
-                    "data_trade_date": effective_trade_date,
+                    "data_trade_date": trade_date,
                     "status": "empty",
                     "message": "涨停列表为空，暂无可聚合题材",
                 }
             if "theme" not in df.columns:
                 logger.warning(
-                    f"limit_list_d 无 theme 列（{effective_trade_date}），题材板块为空"
+                    f"limit_list_d 无 theme 列（{trade_date}），题材板块为空"
                 )
                 return {
                     "rows": [],
-                    "data_trade_date": effective_trade_date,
+                    "data_trade_date": trade_date,
                     "status": "missing_theme",
                     "message": "涨停列表未提供 theme 字段，无法按题材聚合",
                 }
@@ -1207,28 +1429,74 @@ class TushareClient:
             if not sectors:
                 return {
                     "rows": [],
-                    "data_trade_date": effective_trade_date,
+                    "data_trade_date": trade_date,
                     "status": "missing_pct_chg",
                     "message": "涨停列表缺少 pct_chg 字段，无法计算题材涨跌幅",
                 }
 
             logger.info(
-                f"题材板块（{effective_trade_date}，涨停聚合）: {len(sectors)} 个"
+                f"题材板块（{trade_date}，涨停 theme 聚合）: {len(sectors)} 个"
             )
             return {
                 "rows": sectors,
-                "data_trade_date": effective_trade_date,
+                "data_trade_date": trade_date,
                 "status": "ok",
                 "message": f"涨停题材聚合成功，共 {len(sectors)} 个题材",
             }
         except Exception as e:
-            logger.error(f"获取题材概念板块失败: {e}")
+            logger.warning(f"涨停 theme 题材聚合失败: {e}")
+            return {
+                "rows": [],
+                "data_trade_date": trade_date,
+                "status": "theme_error",
+                "message": f"涨停 theme 题材聚合异常: {e}",
+            }
+
+    def get_concept_sectors_from_limitup_with_meta(self, trade_date: str) -> Dict[str, object]:
+        """
+        获取题材概念板块，并返回可追踪状态。
+
+        status:
+        - ok: 成功聚合出题材
+        - no_token: 未配置 token
+        - empty: 接口有响应但当日无涨停数据
+        - missing_theme: 降级到旧 theme 口径时，返回字段不含 theme
+        - missing_pct_chg: 返回字段缺少涨跌幅
+        - ths_unavailable/ths_no_members/ths_error: 同花顺题材链路不可用
+        """
+        effective_trade_date = self._resolve_trade_date(trade_date) if self.token else trade_date
+        if not self.token:
             return {
                 "rows": [],
                 "data_trade_date": effective_trade_date,
-                "status": "error",
-                "message": f"题材聚合调用异常: {e}",
+                "status": "no_token",
+                "message": "未配置 Tushare Token，无法获取题材聚合数据",
             }
+
+        ths_meta = self._get_concept_sectors_from_ths_with_meta(effective_trade_date)
+        if ths_meta.get("rows"):
+            return ths_meta
+
+        theme_meta = self._get_concept_sectors_from_limitup_theme_with_meta(effective_trade_date)
+        if theme_meta.get("rows"):
+            return theme_meta
+
+        if (
+            ths_meta.get("status") not in {"empty", "missing_pct_chg"}
+            and theme_meta.get("status") == "missing_theme"
+        ):
+            return {
+                "rows": [],
+                "data_trade_date": effective_trade_date,
+                "status": str(ths_meta.get("status") or "missing_theme"),
+                "message": (
+                    f"{ths_meta.get('message') or '题材聚合不可用'}；"
+                    "涨停列表也未提供 theme 字段，无法按题材聚合"
+                ),
+            }
+        if ths_meta.get("status") in {"empty", "missing_pct_chg"}:
+            return ths_meta
+        return theme_meta
 
     def get_limitup_industry_sectors_with_meta(self, trade_date: str) -> Dict[str, object]:
         """按涨停列表的 industry 字段聚合行业热度，并返回可追踪状态。"""
@@ -1306,6 +1574,7 @@ class TushareClient:
         self,
         row,
         sector_name: Optional[str] = None,
+        concept_names: Optional[List[str]] = None,
         candidate_source_tag: str = "",
     ) -> Dict:
         """将统一行情行转为个股行情 dict。"""
@@ -1330,6 +1599,7 @@ class TushareClient:
             "candidate_source_tag": candidate_source_tag,
             "quote_time": None,
             "data_source": "daily",
+            "concept_names": list(concept_names or []),
         }
 
     def _limit_up_row_to_stock_dict(self, lr, candidate_source_tag: str = "涨停入选") -> Dict:
@@ -1339,6 +1609,9 @@ class TushareClient:
         theme_s = (
             str(theme).strip() if theme is not None and str(theme).strip() else "其他题材"
         )
+        concept_names = self._get_ths_concept_names_for_stock(tc)
+        if theme_s != "其他题材" and theme_s not in concept_names:
+            concept_names.append(theme_s)
         pct = float(lr.get("pct_chg") or lr.get("pct_change") or 0)
         tr = lr.get("turnover_ratio")
         turnover_rate = float(tr) if tr is not None else 0.0
@@ -1358,6 +1631,7 @@ class TushareClient:
             "candidate_source_tag": candidate_source_tag,
             "quote_time": None,
             "data_source": "daily",
+            "concept_names": concept_names,
         }
 
     def _append_candidate_source(self, record: Dict, source_tag: str) -> Dict:
@@ -1471,6 +1745,7 @@ class TushareClient:
 
             result = []
             for _, row in source_df.iterrows():
+                concept_names = self._get_ths_concept_names_for_stock(str(row["ts_code"]))
                 result.append({
                     "ts_code": str(row["ts_code"]),
                     "stock_name": str(row.get("stock_name", row["ts_code"])),
@@ -1486,6 +1761,7 @@ class TushareClient:
                     "pre_close": float(row.get("pre_close") or 0),
                     "quote_time": None,
                     "data_source": "daily",
+                    "concept_names": concept_names,
                 })
 
             self._apply_realtime_overlay_to_stocks(result, trade_date)
@@ -1593,6 +1869,7 @@ class TushareClient:
             )
             for _, row in source_df.loc[mask_c].iterrows():
                 tc = str(row["ts_code"])
+                concept_names = self._get_ths_concept_names_for_stock(tc)
                 merged[tc] = {
                     "ts_code": tc,
                     "stock_name": str(row.get("stock_name", tc) or tc),
@@ -1609,6 +1886,7 @@ class TushareClient:
                     "candidate_source_tag": "量比异动",
                     "quote_time": None,
                     "data_source": "daily",
+                    "concept_names": concept_names,
                 }
 
             # A: 涨幅前列
@@ -1616,7 +1894,12 @@ class TushareClient:
             top_df = source_df.sort_values("pct_change", ascending=False).head(top_n)
             for _, row in top_df.iterrows():
                 tc = str(row["ts_code"])
+                concept_names = self._get_ths_concept_names_for_stock(tc)
                 if tc in merged:
+                    if concept_names:
+                        merged[tc]["concept_names"] = list(dict.fromkeys(
+                            list(merged[tc].get("concept_names") or []) + concept_names
+                        ))
                     merged[tc] = self._append_candidate_source(merged[tc], "涨幅前列")
                 else:
                     merged[tc] = {
@@ -1635,6 +1918,7 @@ class TushareClient:
                         "candidate_source_tag": "涨幅前列",
                         "quote_time": None,
                         "data_source": "daily",
+                        "concept_names": concept_names,
                     }
 
             # B: 涨停全量，题材覆盖 sector_name
@@ -1657,8 +1941,15 @@ class TushareClient:
                         row = by_code.loc[tc]
                         if getattr(row, "ndim", 1) == 2:
                             row = row.iloc[0]
+                        concept_names = self._get_ths_concept_names_for_stock(tc)
+                        if theme_s != "其他题材" and theme_s not in concept_names:
+                            concept_names.append(theme_s)
                         if tc in merged:
                             merged[tc]["sector_name"] = theme_s
+                            if concept_names:
+                                merged[tc]["concept_names"] = list(dict.fromkeys(
+                                    list(merged[tc].get("concept_names") or []) + concept_names
+                                ))
                             merged[tc] = self._append_candidate_source(merged[tc], "涨停入选")
                         else:
                             merged[tc] = {
@@ -1677,6 +1968,7 @@ class TushareClient:
                                 "candidate_source_tag": "涨停入选",
                                 "quote_time": None,
                                 "data_source": "daily",
+                                "concept_names": concept_names,
                             }
                     else:
                         merged[tc] = self._limit_up_row_to_stock_dict(lr, candidate_source_tag="涨停入选")
@@ -1730,6 +2022,7 @@ class TushareClient:
                 detail["sector_name"] = str(
                     stock_meta.get("industry") or detail["sector_name"] or "未知"
                 )
+            detail["concept_names"] = self._get_ths_concept_names_for_stock(ts_code)
 
             daily_basic = getattr(self.pro, "daily_basic", None)
 

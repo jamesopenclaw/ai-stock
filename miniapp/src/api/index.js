@@ -1,5 +1,5 @@
 // API 配置
-const API_BASE = 'http://localhost:8000/api/v1'
+const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
 
 // 请求封装
 const request = (url, options = {}) => {
@@ -30,15 +30,23 @@ export const marketApi = {
 
 // 板块 API
 export const sectorApi = {
-  scan: (tradeDate) => request('/sector/scan', { params: { trade_date: tradeDate } }),
-  leader: (tradeDate) => request('/sector/leader', { params: { trade_date: tradeDate } }),
-  list: (tradeDate, limit = 20) => request('/sector/list', { params: { trade_date: tradeDate, limit } })
+  scan: (tradeDate, options = {}) => request('/sector/scan', {
+    params: { trade_date: tradeDate, refresh: Boolean(options.refresh) }
+  }),
+  leader: (tradeDate, options = {}) => request('/sector/leader', {
+    params: { trade_date: tradeDate, refresh: Boolean(options.refresh) }
+  }),
+  list: (tradeDate, limit = 20, options = {}) => request('/sector/list', {
+    params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) }
+  })
 }
 
 // 个股 API
 export const stockApi = {
   filter: (tradeDate, limit = 50) => request('/stock/filter', { params: { trade_date: tradeDate, limit } }),
-  pools: (tradeDate, limit = 50) => request('/stock/pools', { params: { trade_date: tradeDate, limit } }),
+  pools: (tradeDate, limit = 50, options = {}) => request('/stock/pools', {
+    params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) }
+  }),
   detail: (tsCode, tradeDate) => request(`/stock/detail/${tsCode}`, { params: { trade_date: tradeDate } })
 }
 

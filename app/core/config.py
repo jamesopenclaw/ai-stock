@@ -2,7 +2,6 @@
 轻舟版交易系统 - 配置文件
 """
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -11,14 +10,14 @@ class Settings(BaseSettings):
     # 应用信息
     app_name: str = "轻舟版交易系统"
     app_version: str = "0.1.0"
-    debug: bool = True
+    debug: bool = False
     secret_key: str = "dev-secret-key-change-in-production"
 
     # 数据库
-    database_url: str = "postgresql+asyncpg://aistock:aistock123@localhost:5432/aistock"
+    database_url: str = "postgresql+asyncpg://aistock:aistock123@localhost:5488/aistock"
 
     # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = "redis://localhost:6388/0"
 
     # Tushare
     tushare_token: str = ""
@@ -28,11 +27,11 @@ class Settings(BaseSettings):
 
     # API
     api_v1_prefix: str = "/api/v1"
-    cors_origins: str = "http://localhost:3000,http://localhost:8000"
+    cors_origins: str = "http://localhost:3000,http://localhost:3088,http://localhost:8000"
 
     # 企业微信机器人
     wecom_webhook_url: str = ""
-    notify_enabled: bool = True
+    notify_enabled: bool = False
 
     # LLM 辅助层
     llm_enabled: bool = False
@@ -45,6 +44,17 @@ class Settings(BaseSettings):
     llm_stock_checkup_min_timeout_seconds: float = 45.0
     llm_temperature: float = 0.2
     llm_max_input_items: int = 8
+
+    def validate_runtime(self) -> None:
+        """校验高风险运行配置。"""
+        if not self.debug and self.secret_key == "dev-secret-key-change-in-production":
+            raise ValueError("生产模式必须显式设置 SECRET_KEY")
+        if self.notify_enabled and not self.wecom_webhook_url.strip():
+            raise ValueError("启用通知时必须提供 WECOM_WEBHOOK_URL")
+        if self.llm_enabled and not self.llm_api_key.strip():
+            raise ValueError("启用 LLM 时必须提供 LLM_API_KEY")
+        if self.llm_enabled and not self.llm_model.strip():
+            raise ValueError("启用 LLM 时必须提供 LLM_MODEL")
 
     class Config:
         env_file = ".env"

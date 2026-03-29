@@ -320,34 +320,109 @@ def test_get_stock_list_with_meta_uses_daily_and_daily_basic():
     assert first["sector_name"] in {"电子", "元器件"}
 
 
-def test_get_concept_sectors_from_limitup_with_meta_marks_missing_theme():
-    """limit_list_d 无 theme 字段时，应返回可追踪的 missing_theme 状态。"""
+def test_get_concept_sectors_from_limitup_with_meta_prefers_ths_concepts():
+    """limit_list_d 无 theme 字段时，应优先走 THS 题材链路恢复题材聚合。"""
     client = TushareClient.__new__(TushareClient)
     client.token = "test-token"
     client._resolve_trade_date = lambda d: "20260323"
+    client._ths_concept_index_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._ths_member_by_stock_cache = {}
 
-    class _LimitUpNoThemePro:
+    class _ThsConceptPro:
         def limit_list_d(self, trade_date=None, limit_type=None):
             return pd.DataFrame(
                 [
                     {
                         "trade_date": "20260323",
                         "ts_code": "000703.SZ",
-                        "industry": "炼化及贸",
                         "name": "恒逸石化",
                         "pct_chg": 10.04,
                         "amount": 715730592.0,
+                    },
+                    {
+                        "trade_date": "20260323",
+                        "ts_code": "001258.SZ",
+                        "name": "立新能源",
+                        "pct_chg": 10.05,
+                        "amount": 903245120.0,
                     }
                 ]
             )
 
-    client.pro = _LimitUpNoThemePro()
+        def ths_index(self, exchange=None, type=None):
+            return pd.DataFrame(
+                [
+                    {"ts_code": "885531.TI", "name": "绿色电力", "type": "N"},
+                    {"ts_code": "885555.TI", "name": "石化概念", "type": "N"},
+                ]
+            )
+
+        def ths_member(self, ts_code=None, con_code=None):
+            if con_code == "000703.SZ":
+                return pd.DataFrame([{"ts_code": "885555.TI", "con_code": "000703.SZ", "is_new": "Y"}])
+            if con_code == "001258.SZ":
+                return pd.DataFrame([{"ts_code": "885531.TI", "con_code": "001258.SZ", "is_new": "Y"}])
+            return pd.DataFrame()
+
+        def ths_daily(self, ts_code=None, trade_date=None, start_date=None, end_date=None):
+            return pd.DataFrame(
+                [
+                    {"ts_code": "885531.TI", "trade_date": "20260323", "pct_change": 3.26},
+                    {"ts_code": "885555.TI", "trade_date": "20260323", "pct_change": 2.18},
+                ]
+            )
+
+    client.pro = _ThsConceptPro()
 
     payload = client.get_concept_sectors_from_limitup_with_meta("20260323")
 
-    assert payload["status"] == "missing_theme"
-    assert payload["rows"] == []
+    assert payload["status"] == "ok"
     assert payload["data_trade_date"] == "20260323"
+    assert payload["rows"][0]["sector_name"] == "绿色电力"
+    assert payload["rows"][0]["sector_change_pct"] == 3.26
+
+
+def test_get_concept_sectors_from_limitup_with_meta_falls_back_to_theme_when_ths_unavailable():
+    """THS 题材链路不可用时，应回退到旧 theme 聚合。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._resolve_trade_date = lambda d: "20260323"
+    client._ths_concept_index_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._ths_member_by_stock_cache = {}
+
+    class _ThemeFallbackPro:
+        def limit_list_d(self, trade_date=None, limit_type=None):
+            return pd.DataFrame(
+                [
+                    {
+                        "trade_date": "20260323",
+                        "ts_code": "000703.SZ",
+                        "theme": "石化",
+                        "name": "恒逸石化",
+                        "pct_chg": 10.04,
+                        "amount": 715730592.0,
+                    },
+                    {
+                        "trade_date": "20260323",
+                        "ts_code": "001258.SZ",
+                        "theme": "绿色电力",
+                        "name": "立新能源",
+                        "pct_chg": 10.05,
+                        "amount": 903245120.0,
+                    },
+                ]
+            )
+
+        def ths_index(self, exchange=None, type=None):
+            raise RuntimeError("no ths permission")
+
+    client.pro = _ThemeFallbackPro()
+
+    payload = client.get_concept_sectors_from_limitup_with_meta("20260323")
+
+    assert payload["status"] == "ok"
+    assert payload["data_trade_date"] == "20260323"
+    assert {row["sector_name"] for row in payload["rows"]} == {"石化", "绿色电力"}
 
 
 def test_get_limitup_industry_sectors_with_meta_uses_industry_field():

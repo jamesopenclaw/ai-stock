@@ -13,7 +13,19 @@
 
       <el-skeleton v-if="loading" :rows="8" animated />
       <template v-else>
+        <div v-if="loadError" class="load-error">
+          {{ loadError }}
+        </div>
         <div v-if="buyData.market_env_tag" class="decision-overview">
+          <div v-if="focusSector" class="focus-context">
+            <div class="focus-context-copy">
+              当前按 <strong>{{ focusSector }}</strong> 方向查看买点，相关机会会优先排到前面。
+            </div>
+            <div class="focus-context-actions">
+              <el-switch v-model="focusOnly" size="small" inline-prompt active-text="只看当前方向" inactive-text="全部" />
+              <el-button link type="primary" size="small" @click="clearFocusSector">清除方向</el-button>
+            </div>
+          </div>
           <div class="overview-main">
             <div class="market-mode-chip" :class="envChipClass(buyData.market_env_tag)">
               {{ buyData.market_env_tag }}
@@ -37,7 +49,7 @@
               </div>
               <div class="stat-card stat-skip">
               <span class="stat-label">不买</span>
-              <strong class="stat-value">{{ buyData.not_buy_points?.length || 0 }}</strong>
+              <strong class="stat-value">{{ notBuyPoints.length }}</strong>
               <span class="stat-tip">今天先放弃</span>
             </div>
           </div>
@@ -47,15 +59,32 @@
               {{ rule }}
             </div>
           </div>
+          <div v-if="reviewInsight" class="review-bridge">
+            <div class="review-bridge-title">复盘怎么影响今天买点选择</div>
+            <div class="review-bridge-grid">
+              <div class="review-bridge-card review-bridge-card-do">
+                <div class="review-bridge-label">优先看</div>
+                <div class="review-bridge-text">{{ reviewInsight.doText }}</div>
+              </div>
+              <div class="review-bridge-card review-bridge-card-watch">
+                <div class="review-bridge-label">先观察</div>
+                <div class="review-bridge-text">{{ reviewInsight.watchText }}</div>
+              </div>
+              <div class="review-bridge-card review-bridge-card-avoid">
+                <div class="review-bridge-label">暂时少做</div>
+                <div class="review-bridge-text">{{ reviewInsight.avoidText }}</div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <el-tabs v-model="activeTab">
           <el-tab-pane name="available">
             <template #label>
-              <span>可买 <em class="tab-count">{{ primaryAvailablePoints.length }}/{{ buyData.available_buy_points?.length || 0 }}</em></span>
+              <span>可买 <em class="tab-count">{{ primaryAvailablePoints.length }}/{{ availablePoints.length }}</em></span>
             </template>
             <el-empty
-              v-if="!buyData.available_buy_points?.length"
+              v-if="!availablePoints.length"
               :description="buyData.market_env_tag === '防守' ? '当前是防守环境，只有极少数试错票会出现在这里' : '暂无可买标的'"
             />
             <template v-else>
@@ -66,13 +95,13 @@
                     按市场环境、板块分散和买法拥挤度压缩后，默认只保留最该下手的 {{ primaryAvailablePoints.length }} 只。
                   </div>
                 </div>
-                <div class="available-group-meta">总可买 {{ buyData.available_buy_points?.length || 0 }} 只</div>
+                <div class="available-group-meta">总可买 {{ availablePoints.length }} 只</div>
               </div>
 	            <div class="signal-grid">
 	              <article
 	                v-for="point in primaryAvailablePoints"
 	                :key="point.ts_code"
-	                class="signal-card signal-card-buy"
+	                :class="['signal-card', 'signal-card-buy', { 'signal-card-focused': matchesFocusSector(point) }]"
               >
                 <div class="signal-card-header">
                   <div>
@@ -83,6 +112,11 @@
                     <el-tag size="small" type="primary">{{ point.buy_point_type }}</el-tag>
                     <el-tag size="small" :type="riskTagType(point.buy_risk_level)">{{ point.buy_risk_level }}风险</el-tag>
                     <el-tag size="small" :type="accountFitType(point.buy_account_fit)">{{ point.buy_account_fit }}</el-tag>
+                    <el-tooltip v-if="point.review_bias_label" :content="point.review_bias_reason || point.review_bias_label" placement="top">
+                      <el-tag size="small" :type="reviewBiasTagType(point.review_bias_label)">
+                        {{ point.review_bias_label }}
+                      </el-tag>
+                    </el-tooltip>
                   </div>
                 </div>
 
@@ -94,6 +128,9 @@
 
                 <div class="signal-intent">
                   {{ primaryActionLine(point, buyData.market_env_tag) }}
+                </div>
+                <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (point.hard_filter_failed_count || 0) > 0 }">
+                  {{ hardFilterLine(point) }}
                 </div>
 
                 <div class="quote-strip">
@@ -279,6 +316,9 @@
                   <div class="signal-intent signal-intent-watch">
                     {{ primaryActionLine(point, buyData.market_env_tag) }}
                   </div>
+                  <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (point.hard_filter_failed_count || 0) > 0 }">
+                    {{ hardFilterLine(point) }}
+                  </div>
 
                   <div class="quote-strip quote-strip-watch">
                     <div class="quote-main">
@@ -309,14 +349,14 @@
 
           <el-tab-pane name="observe">
             <template #label>
-              <span>观察 <em class="tab-count">{{ buyData.observe_buy_points?.length || 0 }}</em></span>
+              <span>观察 <em class="tab-count">{{ observePoints.length }}</em></span>
             </template>
-            <el-empty v-if="!buyData.observe_buy_points?.length" description="暂无观察标的" />
+            <el-empty v-if="!observePoints.length" description="暂无观察标的" />
             <div v-else class="signal-grid">
               <article
-                v-for="point in buyData.observe_buy_points"
+                v-for="point in observePoints"
                 :key="point.ts_code"
-                class="signal-card signal-card-watch"
+                :class="['signal-card', 'signal-card-watch', { 'signal-card-focused': matchesFocusSector(point) }]"
               >
                 <div class="signal-card-header">
                   <div>
@@ -326,6 +366,11 @@
                   <div class="signal-badges">
                     <el-tag size="small" type="warning">{{ point.buy_point_type }}</el-tag>
                     <el-tag size="small" :type="riskTagType(point.buy_risk_level)">{{ point.buy_risk_level }}风险</el-tag>
+                    <el-tooltip v-if="point.review_bias_label" :content="point.review_bias_reason || point.review_bias_label" placement="top">
+                      <el-tag size="small" :type="reviewBiasTagType(point.review_bias_label)">
+                        {{ point.review_bias_label }}
+                      </el-tag>
+                    </el-tooltip>
                   </div>
                 </div>
 
@@ -337,6 +382,9 @@
 
                 <div class="signal-intent signal-intent-watch">
                   {{ observeActionLine(point, buyData.market_env_tag) }}
+                </div>
+                <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (point.hard_filter_failed_count || 0) > 0 }">
+                  {{ hardFilterLine(point) }}
                 </div>
 
                 <div class="quote-strip quote-strip-watch">
@@ -447,11 +495,11 @@
 
           <el-tab-pane name="skip">
             <template #label>
-              <span>不买 <em class="tab-count">{{ buyData.not_buy_points?.length || 0 }}</em></span>
+              <span>不买 <em class="tab-count">{{ notBuyPoints.length }}</em></span>
             </template>
-            <el-empty v-if="!buyData.not_buy_points?.length" description="暂无明确放弃标的" />
+            <el-empty v-if="!notBuyPoints.length" description="暂无明确放弃标的" />
             <div v-else class="skip-list">
-              <div v-for="point in buyData.not_buy_points" :key="point.ts_code" class="skip-row">
+              <div v-for="point in notBuyPoints" :key="point.ts_code" class="skip-row">
                 <div class="skip-main">
 	                  <strong>{{ point.stock_name }}</strong>
 	                  <span class="signal-code">{{ point.ts_code }}</span>
@@ -494,6 +542,7 @@
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
@@ -513,6 +562,31 @@ const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, cu
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '交易型' })
 const expandedCards = ref({})
+const reviewStatsData = ref(null)
+const REVIEW_STATS_TIMEOUT = 90000
+const BUY_POINT_TIMEOUT = 90000
+const loadError = ref('')
+const route = useRoute()
+const router = useRouter()
+const focusSector = computed(() => String(route.query.focus_sector || '').trim())
+const focusOnly = ref(false)
+
+const matchesFocusSector = (point) => {
+  if (!focusSector.value) return false
+  return String(point.sector_name || '').includes(focusSector.value)
+}
+
+const sortByFocusSector = (points = []) => {
+  const sorted = [...points].sort((a, b) => Number(matchesFocusSector(b)) - Number(matchesFocusSector(a)))
+  if (focusSector.value && focusOnly.value) {
+    return sorted.filter((item) => matchesFocusSector(item))
+  }
+  return sorted
+}
+
+const availablePoints = computed(() => sortByFocusSector(buyData.value.available_buy_points || []))
+const observePoints = computed(() => sortByFocusSector(buyData.value.observe_buy_points || []))
+const notBuyPoints = computed(() => sortByFocusSector(buyData.value.not_buy_points || []))
 
 const primaryAvailableLimit = computed(() => {
   if (buyData.value.market_env_tag === '进攻') return 5
@@ -521,7 +595,7 @@ const primaryAvailableLimit = computed(() => {
 })
 
 const primaryAvailablePoints = computed(() => {
-  const points = [...(buyData.value.available_buy_points || [])]
+  const points = [...availablePoints.value]
   const limit = primaryAvailableLimit.value
   const maxSector = buyData.value.market_env_tag === '进攻' ? 2 : 1
   const maxBreakthrough = buyData.value.market_env_tag === '进攻' ? 2 : 1
@@ -557,7 +631,53 @@ const primaryAvailablePoints = computed(() => {
 
 const backupAvailablePoints = computed(() => {
   const selectedCodes = new Set(primaryAvailablePoints.value.map((point) => point.ts_code))
-  return (buyData.value.available_buy_points || []).filter((point) => !selectedCodes.has(point.ts_code))
+  return availablePoints.value.filter((point) => !selectedCodes.has(point.ts_code))
+})
+
+const reviewSnapshotTypeLabel = (value) => {
+  if (value === 'buy_available') return '可买'
+  if (value === 'buy_observe') return '观察'
+  if (value === 'pool_account') return '可参与池'
+  if (value === 'pool_market') return '观察池'
+  return value || '-'
+}
+
+const reviewRowLabel = (row) => `${reviewSnapshotTypeLabel(row.snapshot_type)} / ${row.candidate_bucket_tag || '未分层'}`
+
+const reviewActionableRows = computed(() => (
+  (reviewStatsData.value?.bucket_stats || [])
+    .map((row) => ({
+      ...row,
+      shortLabel: reviewRowLabel(row),
+      resolvedWeight: Number(row.resolved_5d_count || row.resolved_3d_count || row.resolved_1d_count || 0),
+      qualityScore:
+        Number(row.avg_return_5d || 0) * 0.6 +
+        Number(row.win_rate_5d || 0) * 0.04 +
+        Number(row.avg_return_3d || 0) * 0.25 +
+        Number(row.win_rate_3d || 0) * 0.015 +
+        Number(row.count || 0) * 0.03
+    }))
+    .filter((row) => row.resolvedWeight > 0 && Number(row.count || 0) >= 2)
+    .sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0))
+))
+
+const reviewInsight = computed(() => {
+  const best = reviewActionableRows.value[0]
+  const weakest = [...reviewActionableRows.value].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))[0]
+  const watch = reviewActionableRows.value.find((row) => row.snapshot_type === 'buy_observe' || row.snapshot_type === 'pool_market')
+  if (!best && !weakest && !watch) return null
+
+  return {
+    doText: best
+      ? `最近 ${best.shortLabel} 的后续表现更稳，今天在可买列表里遇到同类结构时，可以先给更高优先级。`
+      : '当前复盘样本还不够，今天先按触发价、确认条件和市场环境执行。',
+    watchText: watch
+      ? `${watch.shortLabel} 最近更适合先观察，确认条件没到齐之前，不要把它当成已经成立的买点。`
+      : '观察类信号仍然只负责提醒，不负责替代执行确认。',
+    avoidText: weakest
+      ? `${weakest.shortLabel} 最近兑现度偏弱，今天即使触发，也要更看重量能和失效位，别主动放大仓位。`
+      : '暂时没有明确需要整体回避的一类信号。'
+  }
 })
 
 const getLocalDate = () => {
@@ -595,6 +715,12 @@ const riskTagType = (level) => {
 const accountFitType = (fit) => {
   if (fit === '适合') return 'success'
   if (fit === '一般') return 'warning'
+  return 'info'
+}
+
+const reviewBiasTagType = (label) => {
+  if (label === '复盘加分') return 'success'
+  if (label === '复盘降权') return 'danger'
   return 'info'
 }
 
@@ -733,26 +859,46 @@ const openBuyAnalysis = (point) => {
   buyAnalysisVisible.value = true
 }
 
+const clearFocusSector = () => {
+  const query = { ...route.query }
+  delete query.focus_sector
+  router.replace({ query })
+}
+
+const hardFilterLine = (point) => point.hard_filter_summary || '硬过滤状态未返回'
+
 const loadData = async () => {
   loading.value = true
+  loadError.value = ''
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
-    const res = await decisionApi.buyPoint(tradeDate, 30)
+    const res = await decisionApi.buyPoint(tradeDate, 30, { timeout: BUY_POINT_TIMEOUT })
     buyData.value = res.data.data
     if (buyData.value.available_buy_points?.length) activeTab.value = 'available'
     else if (buyData.value.observe_buy_points?.length) activeTab.value = 'observe'
     else activeTab.value = 'skip'
   } catch (error) {
+    loadError.value = '买点数据加载失败，请刷新重试。'
     ElMessage.error('加载失败')
   } finally {
     loading.value = false
   }
 }
 
+const loadReviewInsight = async () => {
+  try {
+    const res = await decisionApi.reviewStats(10, { timeout: REVIEW_STATS_TIMEOUT })
+    reviewStatsData.value = res.data.data || null
+  } catch (error) {
+    reviewStatsData.value = null
+  }
+}
+
 onMounted(() => {
   displayDate.value = getLocalDate()
   loadData()
+  loadReviewInsight()
 })
 </script>
 
@@ -778,6 +924,41 @@ onMounted(() => {
   color: var(--color-text-sec);
   letter-spacing: 0.02em;
   font-weight: 400;
+}
+
+.load-error {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 120, 120, 0.08);
+  border: 1px solid rgba(255, 120, 120, 0.16);
+  color: var(--color-text-main);
+  font-size: 13px;
+}
+
+.focus-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(84, 210, 164, 0.08);
+  border: 1px solid rgba(84, 210, 164, 0.16);
+  margin-bottom: 16px;
+}
+
+.focus-context-copy {
+  font-size: 13px;
+  color: var(--color-text-main);
+}
+
+.focus-context-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .decision-overview {
@@ -846,6 +1027,55 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.review-bridge {
+  padding: 16px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.04));
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.review-bridge-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.review-bridge-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.review-bridge-card {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: rgba(255,255,255,0.02);
+}
+
+.review-bridge-card-do {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.08);
+}
+
+.review-bridge-card-watch {
+  box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.08);
+}
+
+.review-bridge-card-avoid {
+  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
+}
+
+.review-bridge-label {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  margin-bottom: 8px;
+}
+
+.review-bridge-text {
+  line-height: 1.7;
+  color: var(--color-text-main);
 }
 
 .rule-chip {
@@ -962,6 +1192,11 @@ onMounted(() => {
   box-shadow: inset 0 1px 0 rgba(243, 194, 77, 0.12);
 }
 
+.signal-card-focused {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.24);
+  border-color: rgba(84, 210, 164, 0.26);
+}
+
 .signal-card-header {
   display: flex;
   justify-content: space-between;
@@ -1014,6 +1249,22 @@ onMounted(() => {
 .signal-intent-watch {
   background: rgba(243, 194, 77, 0.08);
   border-color: rgba(243, 194, 77, 0.16);
+}
+
+.hard-filter-strip {
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-sec);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.hard-filter-warn {
+  color: #f3c24d;
+  background: rgba(243, 194, 77, 0.08);
+  border-color: rgba(243, 194, 77, 0.2);
 }
 
 .quote-strip {

@@ -16,6 +16,14 @@
 
       <el-skeleton v-if="loading" :rows="8" animated />
       <template v-else>
+        <el-alert
+          v-if="loadError"
+          :title="loadError"
+          type="error"
+          show-icon
+          :closable="false"
+          class="load-error-alert"
+        />
         <div class="decision-overview">
           <div class="overview-copy">
             <div class="overview-title">{{ sellHeadline }}</div>
@@ -406,6 +414,7 @@ const loading = ref(false)
 const llmRefreshing = ref(false)
 const activeTab = ref('sell')
 const displayDate = ref('')
+const loadError = ref('')
 const sellData = ref({ sell_positions: [], reduce_positions: [], hold_positions: [], llm_status: null })
 const sellAnalysisVisible = ref(false)
 const sellAnalysisStock = ref({ tsCode: '', stockName: '' })
@@ -560,18 +569,30 @@ const openSellAnalysis = (point) => {
 
 const loadData = async (options = {}) => {
   const forceLlmRefresh = Boolean(options.forceLlmRefresh)
+  const includeLlm = forceLlmRefresh
   if (forceLlmRefresh) llmRefreshing.value = true
   else loading.value = true
+  if (!forceLlmRefresh) loadError.value = ''
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
-    const res = await decisionApi.sellPoint(tradeDate, { forceLlmRefresh })
+    const res = await decisionApi.sellPoint(tradeDate, {
+      forceLlmRefresh,
+      includeLlm,
+      timeout: 90000
+    })
     sellData.value = res.data.data
     if (sellData.value.sell_positions?.length) activeTab.value = 'sell'
     else if (sellData.value.reduce_positions?.length) activeTab.value = 'reduce'
     else activeTab.value = 'hold'
   } catch (error) {
-    ElMessage.error('加载失败')
+    const message = error?.response?.data?.message || error?.message || '加载失败'
+    if (forceLlmRefresh) {
+      ElMessage.error(`刷新解读失败: ${message}`)
+    } else {
+      loadError.value = `卖点分析加载失败：${message}`
+      ElMessage.error('卖点分析加载失败')
+    }
   } finally {
     loading.value = false
     llmRefreshing.value = false

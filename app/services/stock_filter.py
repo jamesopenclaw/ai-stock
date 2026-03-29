@@ -14,19 +14,26 @@ from app.models.schemas import (
     StockPoolTag,
     SectorProfileTag,
     StockRoleTag,
+    RepresentativeRoleTag,
     DayStrengthTag,
     StructureStateTag,
     NextTradeabilityTag,
     StockPoolsOutput,
     SectorMainlineTag,
     SectorTradeabilityTag,
+    SectorTierTag,
     AccountInput,
     SellPointResponse,
+    MarketEnvTag,
 )
 from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
 from app.services.account_adapter import AccountAdapterService
 from app.data.tushare_client import tushare_client, normalize_ts_code
+from app.services.strategy_config import (
+    DEFAULT_STOCK_FILTER_STRATEGY,
+    StockFilterStrategyConfig,
+)
 
 
 def merge_holdings_into_candidate_stocks(
@@ -85,6 +92,7 @@ def merge_holdings_into_candidate_stocks(
                 candidate_source_tag="持仓补齐",
                 volume=detail.get("volume"),
                 avg_price=detail.get("avg_price"),
+                concept_names=detail.get("concept_names") or [],
                 quote_time=detail.get("quote_time"),
                 data_source=detail.get("data_source"),
             )
@@ -99,27 +107,28 @@ def merge_holdings_into_candidate_stocks(
 class StockFilterService:
     """个股筛选服务"""
 
-    # 涨跌幅阈值
-    STRONG_CHANGE_THRESHOLD = 7.0   # 涨幅 > 7% 为强势
-    MEDIUM_CHANGE_THRESHOLD = 3.0  # 涨幅 > 3% 为中等
-    STRONG_SCORE_CONFIRM = 85.0    # 中高涨幅配合高分才升格为强势
-    MEDIUM_SCORE_THRESHOLD = 55.0  # 分数较高但涨幅一般时，保留为中性观察
-
-    # 换手率阈值
-    HIGH_TURNOVER = 15.0   # 高换手
-    MEDIUM_TURNOVER = 8.0  # 中等换手
-
-    # 选股预过滤阈值
-    MIN_AMOUNT = 30000.0  # 过低成交额不进入选股结果
-    MIN_CLOSE_PRICE = 2.0  # 低价股噪声较大
-
-    # 观察池最低标准
-    WATCH_POOL_MIN_SCORE = 55.0
-    DEFENSE_TRIAL_MIN_SCORE = 85.0
-
-    def __init__(self):
+    def __init__(self, strategy: Optional[StockFilterStrategyConfig] = None):
         self.market_env_service = market_env_service
         self.sector_scan_service = sector_scan_service
+        self.strategy = strategy or DEFAULT_STOCK_FILTER_STRATEGY
+        self.HARD_FILTER_RULE_LABELS = dict(self.strategy.hard_filter_rule_labels)
+        self.HARD_FILTER_FAIL_LABELS = dict(self.strategy.hard_filter_fail_labels)
+        self.STRONG_CHANGE_THRESHOLD = self.strategy.strong_change_threshold
+        self.MEDIUM_CHANGE_THRESHOLD = self.strategy.medium_change_threshold
+        self.STRONG_SCORE_CONFIRM = self.strategy.strong_score_confirm
+        self.MEDIUM_SCORE_THRESHOLD = self.strategy.medium_score_threshold
+        self.HIGH_TURNOVER = self.strategy.high_turnover
+        self.MEDIUM_TURNOVER = self.strategy.medium_turnover
+        self.MIN_AMOUNT = self.strategy.min_amount
+        self.MIN_CLOSE_PRICE = self.strategy.min_close_price
+        self.WATCH_POOL_MIN_SCORE = self.strategy.watch_pool_min_score
+        self.DEFENSE_TRIAL_MIN_SCORE = self.strategy.defense_trial_min_score
+        self.PURE_EMOTION_AMOUNT_MAX = self.strategy.pure_emotion_amount_max
+        self.HIGH_VOLATILITY_PCT = self.strategy.high_volatility_pct
+        self.MARKET_WATCH_LIMIT = self.strategy.market_watch_limit
+        self.TREND_RECOGNITION_LIMIT = self.strategy.trend_recognition_limit
+        self.ACCOUNT_EXECUTABLE_LIMIT = self.strategy.account_executable_limit
+        self.SECTOR_REPRESENTATIVE_LIMIT = self.strategy.sector_representative_limit
 
     def filter(self, trade_date: str, stocks: List[StockInput]) -> List[StockOutput]:
         return self.filter_with_context(trade_date, stocks)
@@ -130,6 +139,8 @@ class StockFilterService:
         stocks: List[StockInput],
         market_env=None,
         sector_scan=None,
+        account: Optional[AccountInput] = None,
+        holdings: Optional[List[Dict]] = None,
     ) -> List[StockOutput]:
         """
         个股筛选
@@ -150,11 +161,22 @@ class StockFilterService:
 
         # 筛选评分
         result = []
+        raw_stock_map = {}
         for stock in stocks:
+            raw_stock_map[normalize_ts_code(stock.ts_code)] = stock
             if self._should_skip_stock(stock):
                 continue
             output = self._score_stock(stock, market_env, sector_map)
             result.append(output)
+
+        result = self._apply_hard_filters(
+            result,
+            raw_stock_map,
+            market_env=market_env,
+            account=account,
+            holdings=holdings,
+            sector_map=sector_map,
+        )
 
         # 按综合分排序，涨幅作为次级排序键
         result.sort(key=lambda x: (x.stock_score, x.change_pct), reverse=True)
@@ -170,6 +192,7 @@ class StockFilterService:
         market_env=None,
         sector_scan=None,
         scored_stocks: Optional[List[StockOutput]] = None,
+        review_bias_profile: Optional[Dict] = None,
     ) -> StockPoolsOutput:
         """
         三池分类
@@ -188,6 +211,8 @@ class StockFilterService:
             stocks,
             market_env=market_env,
             sector_scan=sector_scan,
+            account=account,
+            holdings=holdings,
         )
 
         # 获取市场环境和板块
@@ -222,7 +247,30 @@ class StockFilterService:
             normalize_ts_code(stock.ts_code): stock
             for stock in scored_stocks
         }
+        holding_profile = self._build_holding_profile(
+            holdings,
+            account,
+            raw_stock_map=raw_stock_map,
+            scored_by_code=scored_by_code,
+            sector_map=sector_map,
+        )
         holding_process_codes = set()
+        allowed_new_pool_profiles = self._resolve_new_pool_profiles(
+            scored_stocks,
+            holding_codes,
+        )
+        allowed_new_pool_sectors = self._resolve_new_pool_sector_names(
+            sector_scan,
+            scored_stocks,
+            holding_codes,
+            allowed_new_pool_profiles,
+        )
+        representative_codes = self._select_representative_codes(
+            scored_stocks,
+            holding_codes,
+            allowed_new_pool_profiles,
+            allowed_new_pool_sectors,
+        )
 
         # 持仓必须全量进入持仓处理池，即使未通过预过滤也要兜底补评分。
         for holding_code in holding_codes:
@@ -270,6 +318,14 @@ class StockFilterService:
                     )
                     holding_process_codes.add(normalized_code)
             else:
+                if not self._allows_new_pool_entry(
+                    stock,
+                    allowed_new_pool_profiles,
+                    allowed_new_pool_sectors,
+                ):
+                    continue
+                if representative_codes and normalized_code not in representative_codes:
+                    continue
                 market_ok = self._should_enter_market_watch(stock)
                 trend_ok = self._should_enter_trend_recognition(stock)
                 account_ok, account_reason, account_position_hint = self._should_enter_account_pool(
@@ -277,6 +333,39 @@ class StockFilterService:
                     account,
                     market_env,
                 )
+                holding_score_delta = 0.0
+                if account_ok:
+                    holding_ok, holding_reason, holding_position_extra, holding_score_delta = self._assess_holding_fit(
+                        stock,
+                        holding_profile,
+                        account,
+                    )
+                    if not holding_ok:
+                        account_ok = False
+                        account_reason = holding_reason
+                        account_position_hint = None
+                    else:
+                        if holding_reason:
+                            account_reason = " ".join(
+                                part for part in [account_reason, holding_reason] if part
+                            )
+                        account_position_hint = self._merge_position_hint(
+                            account_position_hint,
+                            holding_position_extra,
+                        )
+                        if account_reason != "防守日仅保留最强核心股试错":
+                            (
+                                account_vote_ok,
+                                account_vote_reason,
+                            ) = self._passes_account_participation_gate(
+                                stock,
+                                account,
+                                holding_profile,
+                            )
+                            if not account_vote_ok:
+                                account_ok = False
+                                account_reason = account_vote_reason
+                                account_position_hint = None
                 if market_ok:
                     why = self._why_market_watch(stock)
                     market_watch.append(
@@ -296,6 +385,7 @@ class StockFilterService:
                                 StockPoolTag.MARKET_WATCH,
                                 why,
                             ),
+                            review_bias_profile=review_bias_profile,
                         )
                     )
                 if trend_ok:
@@ -317,6 +407,7 @@ class StockFilterService:
                                 StockPoolTag.TREND_RECOGNITION,
                                 why,
                             ),
+                            review_bias_profile=review_bias_profile,
                         )
                     )
                 if account_ok:
@@ -336,14 +427,41 @@ class StockFilterService:
                             StockPoolTag.ACCOUNT_EXECUTABLE,
                             account_reason,
                         ),
+                        review_bias_profile=review_bias_profile,
                     )
                     account_clone.pool_entry_reason = account_reason
                     account_clone.position_hint = account_position_hint
+                    account_clone.account_entry_score = round(
+                        max(0.0, float(account_clone.account_entry_score or 0) + holding_score_delta),
+                        1,
+                    )
                     account_executable.append(account_clone)
 
-        visible_market_watch = market_watch[:20]
-        visible_trend_recognition = trend_recognition[:10]
-        visible_account_executable = self._select_visible_account_executable(account_executable, limit=10)
+        market_watch.sort(
+            key=lambda stock: (
+                self._market_watch_vote_count(stock),
+                float(stock.review_bias_score or 0),
+                self._representative_total_score(stock),
+                float(stock.stock_score or 0),
+            ),
+            reverse=True,
+        )
+        trend_recognition.sort(
+            key=lambda stock: (
+                self._trend_recognition_vote_count(stock),
+                float(stock.review_bias_score or 0),
+                self._representative_total_score(stock),
+                float(stock.account_entry_score or 0),
+            ),
+            reverse=True,
+        )
+
+        visible_market_watch = market_watch[:self.MARKET_WATCH_LIMIT]
+        visible_trend_recognition = trend_recognition[:self.TREND_RECOGNITION_LIMIT]
+        visible_account_executable = self._select_visible_account_executable(
+            account_executable,
+            limit=self.ACCOUNT_EXECUTABLE_LIMIT,
+        )
 
         return StockPoolsOutput(
             trade_date=trade_date,
@@ -365,10 +483,393 @@ class StockFilterService:
         account_executable: List[StockOutput],
         limit: int = 10,
     ) -> List[StockOutput]:
-        """账户可参与池展示时保留结构多样性，避免单一买法占满前排。"""
+        """账户可参与池展示时，优先且仅保留 A 类主线；若没有，再走通用排序。"""
+        a_mainline = [
+            stock for stock in account_executable
+            if stock.sector_profile_tag == SectorProfileTag.A_MAINLINE
+            and stock.sector_tier_tag == SectorTierTag.A
+        ]
+        if not a_mainline:
+            return self._rank_account_executable_candidates(account_executable, limit)
+        return self._rank_account_executable_candidates(a_mainline, limit)
+
+    def _resolve_new_pool_profiles(
+        self,
+        scored_stocks: List[StockOutput],
+        holding_codes: set[str],
+    ) -> set[SectorProfileTag]:
+        """新开仓三池按 A 类主线优先；若没有 A，再放宽到 B 类次主线。"""
+        available_profiles = {
+            stock.sector_profile_tag
+            for stock in scored_stocks
+            if normalize_ts_code(stock.ts_code) not in holding_codes
+            and self._is_new_pool_code_allowed(stock.ts_code)
+        }
+        if SectorProfileTag.A_MAINLINE in available_profiles:
+            return {SectorProfileTag.A_MAINLINE}
+        if SectorProfileTag.B_SUB_MAINLINE in available_profiles:
+            return {SectorProfileTag.B_SUB_MAINLINE}
+        return set()
+
+    def _allows_new_pool_entry(
+        self,
+        stock: StockOutput,
+        allowed_profiles: set[SectorProfileTag],
+        allowed_sector_names: set[str],
+    ) -> bool:
+        """新开仓三池只放行当前允许的主线档位。"""
+        matched_visible_sector = self._resolve_allowed_sector_name_for_stock(
+            stock,
+            allowed_sector_names,
+        )
+        return (
+            self._is_new_pool_code_allowed(stock.ts_code)
+            and
+            bool(allowed_profiles)
+            and bool(allowed_sector_names)
+            and stock.sector_profile_tag in allowed_profiles
+            and bool(matched_visible_sector)
+        )
+
+    def _resolve_new_pool_sector_names(
+        self,
+        sector_scan,
+        scored_stocks: List[StockOutput],
+        holding_codes: set[str],
+        allowed_profiles: set[SectorProfileTag],
+    ) -> set[str]:
+        """三池新开仓范围只使用板块扫描页当前展示出来的前排主线板块。"""
+        if not sector_scan or not allowed_profiles:
+            return set()
+
+        def _visible_names(rows: List[object], limit: int) -> List[str]:
+            names: List[str] = []
+            for row in list(rows or [])[:limit]:
+                name = str(getattr(row, "sector_name", "") or "").strip()
+                if name and name not in names:
+                    names.append(name)
+            return names
+
+        if SectorProfileTag.A_MAINLINE in allowed_profiles:
+            candidate_names = _visible_names(getattr(sector_scan, "mainline_sectors", []), 5)
+        else:
+            candidate_names = _visible_names(getattr(sector_scan, "sub_mainline_sectors", []), 5)
+
+        available_names = set()
+        for stock in scored_stocks:
+            if normalize_ts_code(stock.ts_code) in holding_codes:
+                continue
+            if not self._is_new_pool_code_allowed(stock.ts_code):
+                continue
+            if stock.sector_profile_tag not in allowed_profiles:
+                continue
+            available_names.update(
+                {
+                    name
+                    for name in self._stock_sector_candidates(stock)
+                    if name in candidate_names
+                }
+            )
+        return {
+            name for name in candidate_names
+            if name in available_names
+        }
+
+    def _resolve_allowed_sector_name_for_stock(
+        self,
+        stock: StockOutput,
+        allowed_sector_names: set[str],
+    ) -> Optional[str]:
+        """返回股票命中的可见主线名，用于三池新开仓范围收口。"""
+        if not stock or not allowed_sector_names:
+            return None
+        for name in self._stock_sector_candidates(stock):
+            if name in allowed_sector_names:
+                return name
+        return None
+
+    def _is_new_pool_code_allowed(self, ts_code: str) -> bool:
+        """新开仓三池默认排除科创板 688 票。"""
+        code = normalize_ts_code(str(ts_code or "").strip())
+        return not code.startswith("688")
+
+    def _select_representative_codes(
+        self,
+        scored_stocks: List[StockOutput],
+        holding_codes: set[str],
+        allowed_profiles: set[SectorProfileTag],
+        allowed_sector_names: set[str],
+    ) -> set[str]:
+        """每条主线先压缩为 2-4 只代表票，再参与三池分类。"""
+        if not allowed_profiles or not allowed_sector_names:
+            return set()
+
+        grouped: Dict[str, List[StockOutput]] = {}
+        for stock in scored_stocks:
+            normalized_code = normalize_ts_code(stock.ts_code)
+            if normalized_code in holding_codes:
+                continue
+            if not self._is_new_pool_code_allowed(stock.ts_code):
+                continue
+            if stock.sector_profile_tag not in allowed_profiles:
+                continue
+            matched_sector_name = self._resolve_allowed_sector_name_for_stock(
+                stock,
+                allowed_sector_names,
+            )
+            if not matched_sector_name:
+                continue
+            grouped.setdefault(matched_sector_name, []).append(stock)
+
+        selected_codes: set[str] = set()
+        for sector_stocks in grouped.values():
+            for stock in self._pick_sector_representatives(sector_stocks):
+                selected_codes.add(normalize_ts_code(stock.ts_code))
+        return selected_codes
+
+    def _pick_sector_representatives(
+        self,
+        sector_stocks: List[StockOutput],
+    ) -> List[StockOutput]:
+        """按龙头/中军/趋势核心/弹性前排四类角色挑选代表票。"""
+        if not sector_stocks:
+            return []
+
+        ranked = sorted(
+            sector_stocks,
+            key=lambda stock: (
+                float(stock.review_bias_score or 0),
+                self._representative_total_score(stock),
+                float(stock.stock_score or 0),
+                float(stock.account_entry_score or 0),
+                float(stock.change_pct or 0),
+            ),
+            reverse=True,
+        )
+        eligible = [
+            stock for stock in ranked
+            if self._representative_role_bucket(stock) != "follow"
+        ]
+        if not eligible:
+            return []
+
+        target_count = min(self.SECTOR_REPRESENTATIVE_LIMIT, len(eligible))
+        selected: List[StockOutput] = []
+        selected_codes: set[str] = set()
+
+        selectors = [
+            lambda stocks: self._pick_best_matching(
+                stocks,
+                lambda stock: self._representative_role_bucket(stock) == "leader",
+                lambda stock: (
+                    self._front_strength_score(stock),
+                    self._representative_total_score(stock),
+                ),
+            ),
+            lambda stocks: self._pick_best_matching(
+                stocks,
+                lambda stock: self._representative_role_bucket(stock) == "mid_cap",
+                lambda stock: (
+                    self._capacity_recognition_score(stock),
+                    self._representative_total_score(stock),
+                ),
+            ),
+            lambda stocks: self._pick_best_matching(
+                stocks,
+                lambda stock: self._representative_role_bucket(stock) == "trend_core",
+                lambda stock: (
+                    self._continuity_potential_score(stock),
+                    self._trade_setup_score(stock),
+                ),
+            ),
+            lambda stocks: self._pick_best_matching(
+                stocks,
+                lambda stock: self._representative_role_bucket(stock) == "elastic_front",
+                lambda stock: (
+                    float(stock.change_pct or 0),
+                    float(stock.vol_ratio or 0),
+                    self._representative_total_score(stock),
+                ),
+            ),
+        ]
+
+        for selector in selectors:
+            candidate = selector(eligible)
+            if candidate and candidate.ts_code not in selected_codes:
+                selected.append(candidate)
+                selected_codes.add(candidate.ts_code)
+            if len(selected) >= target_count:
+                break
+
+        minimum_count = min(2, target_count)
+        for stock in eligible:
+            if len(selected) >= minimum_count:
+                break
+            if stock.ts_code in selected_codes:
+                continue
+            selected.append(stock)
+            selected_codes.add(stock.ts_code)
+
+        for stock in eligible:
+            if len(selected) >= target_count:
+                break
+            if stock.ts_code in selected_codes:
+                continue
+            selected.append(stock)
+            selected_codes.add(stock.ts_code)
+
+        return sorted(
+            selected,
+            key=lambda stock: (
+                float(stock.review_bias_score or 0),
+                self._representative_total_score(stock),
+                float(stock.stock_score or 0),
+            ),
+            reverse=True,
+        )
+
+    def _representative_role_bucket(self, stock: StockOutput) -> str:
+        """主线代表样本角色：龙头 / 中军 / 趋势核心 / 弹性前排 / 跟风。"""
+        tag = self._representative_role_tag(stock)
+        if tag == RepresentativeRoleTag.LEADER:
+            return "leader"
+        if tag == RepresentativeRoleTag.MID_CAPTAIN:
+            return "mid_cap"
+        if tag == RepresentativeRoleTag.TREND_CORE:
+            return "trend_core"
+        if tag == RepresentativeRoleTag.ELASTIC_FRONT:
+            return "elastic_front"
+        return "follow"
+
+    def _representative_role_tag(
+        self,
+        stock: StockOutput,
+    ) -> Optional[RepresentativeRoleTag]:
+        """返回主线样本角色标签，用于前端解释为何入选样本。"""
+        if stock.stock_role_tag == StockRoleTag.LEADER:
+            return RepresentativeRoleTag.LEADER
+        if stock.stock_role_tag == StockRoleTag.MID_CAPTAIN or (
+            stock.stock_core_tag == StockCoreTag.CORE and float(stock.amount or 0) >= 180000
+        ):
+            return RepresentativeRoleTag.MID_CAPTAIN
+        if (
+            stock.stock_core_tag == StockCoreTag.CORE
+            and stock.stock_continuity_tag != StockContinuityTag.CAUTION
+            and stock.structure_state_tag in {
+                StructureStateTag.START,
+                StructureStateTag.DIVERGENCE,
+                StructureStateTag.REPAIR,
+            }
+        ):
+            return RepresentativeRoleTag.TREND_CORE
+        if (
+            stock.stock_role_tag == StockRoleTag.FRONT
+            and stock.next_tradeability_tag in {
+                NextTradeabilityTag.RETRACE_CONFIRM,
+                NextTradeabilityTag.LOW_SUCK,
+                NextTradeabilityTag.BREAKTHROUGH,
+            }
+        ):
+            return RepresentativeRoleTag.ELASTIC_FRONT
+        return None
+
+    def _pick_best_matching(
+        self,
+        stocks: List[StockOutput],
+        predicate,
+        score_key,
+    ) -> Optional[StockOutput]:
+        matched = [stock for stock in stocks if predicate(stock)]
+        if not matched:
+            return None
+        return max(matched, key=score_key)
+
+    def _representative_total_score(self, stock: StockOutput) -> float:
+        return round(
+            self._front_strength_score(stock)
+            + self._capacity_recognition_score(stock)
+            + self._continuity_potential_score(stock)
+            + self._trade_setup_score(stock),
+            2,
+        )
+
+    def _front_strength_score(self, stock: StockOutput) -> float:
+        score = float(stock.change_pct or 0) * 3
+        score += self._calculate_close_quality(stock) * 18
+        if stock.day_strength_tag == DayStrengthTag.LIMIT_STRONG:
+            score += 14
+        elif stock.day_strength_tag == DayStrengthTag.TREND_STRONG:
+            score += 10
+        elif stock.day_strength_tag == DayStrengthTag.REBOUND_STRONG:
+            score += 6
+        if self._has_upper_shadow_risk(stock):
+            score -= 10
+        if float(stock.close or 0) < float(stock.open or 0):
+            score -= 4
+        return score
+
+    def _capacity_recognition_score(self, stock: StockOutput) -> float:
+        amount = float(stock.amount or 0)
+        if amount >= 300000:
+            score = 16.0
+        elif amount >= 180000:
+            score = 12.0
+        elif amount >= 100000:
+            score = 8.0
+        else:
+            score = 4.0
+
+        score += {
+            StockRoleTag.MID_CAPTAIN: 10.0,
+            StockRoleTag.LEADER: 8.0,
+            StockRoleTag.FRONT: 6.0,
+            StockRoleTag.FOLLOW: 2.0,
+            StockRoleTag.TRASH: 0.0,
+        }.get(stock.stock_role_tag, 0.0)
+        if stock.stock_core_tag == StockCoreTag.CORE:
+            score += 6.0
+        return score
+
+    def _continuity_potential_score(self, stock: StockOutput) -> float:
+        score = {
+            StockContinuityTag.SUSTAINABLE: 12.0,
+            StockContinuityTag.OBSERVABLE: 7.0,
+            StockContinuityTag.CAUTION: -8.0,
+        }.get(stock.stock_continuity_tag, 0.0)
+        score += {
+            StructureStateTag.START: 10.0,
+            StructureStateTag.DIVERGENCE: 12.0,
+            StructureStateTag.REPAIR: 11.0,
+            StructureStateTag.ACCELERATE: 4.0,
+            StructureStateTag.LATE_STAGE: -10.0,
+        }.get(stock.structure_state_tag, 0.0)
+        return score
+
+    def _trade_setup_score(self, stock: StockOutput) -> float:
+        score = {
+            NextTradeabilityTag.RETRACE_CONFIRM: 15.0,
+            NextTradeabilityTag.LOW_SUCK: 14.0,
+            NextTradeabilityTag.BREAKTHROUGH: 10.0,
+            NextTradeabilityTag.CHASE_ONLY: -8.0,
+            NextTradeabilityTag.NO_GOOD_ENTRY: -12.0,
+        }.get(stock.next_tradeability_tag, 0.0)
+        score += {
+            StockTradeabilityTag.TRADABLE: 6.0,
+            StockTradeabilityTag.CAUTION: 2.0,
+            StockTradeabilityTag.NOT_RECOMMENDED: -6.0,
+        }.get(stock.stock_tradeability_tag, 0.0)
+        return score
+
+    def _rank_account_executable_candidates(
+        self,
+        account_executable: List[StockOutput],
+        limit: int,
+    ) -> List[StockOutput]:
+        """账户可参与池单组排序，保留结构多样性，避免单一买法占满前排。"""
         ranked = sorted(
             account_executable,
             key=lambda stock: (
+                float(stock.review_bias_score or 0),
                 float(stock.account_entry_score or 0),
                 float(stock.stock_score or 0),
                 float(stock.change_pct or 0),
@@ -406,12 +907,244 @@ class StockFilterService:
         return sorted(
             visible[:limit],
             key=lambda stock: (
+                float(stock.review_bias_score or 0),
                 float(stock.account_entry_score or 0),
                 float(stock.stock_score or 0),
                 float(stock.change_pct or 0),
             ),
             reverse=True,
         )
+
+    def _build_holding_profile(
+        self,
+        holdings: Optional[List[Dict]],
+        account: Optional[AccountInput],
+        raw_stock_map: Optional[Dict[str, StockInput]] = None,
+        scored_by_code: Optional[Dict[str, StockOutput]] = None,
+        sector_map: Optional[Dict] = None,
+    ) -> Dict:
+        """提炼持仓结构，用于判断新开仓是否与现有暴露冲突。"""
+        sector_market_value: Dict[str, float] = {}
+        sector_holding_count: Dict[str, int] = {}
+        weak_holding_count = 0
+        t1_locked_count = 0
+        total_market_value = 0.0
+
+        for holding in holdings or []:
+            code = normalize_ts_code((holding.get("ts_code") or "").strip())
+            market_value = float(holding.get("holding_market_value") or 0)
+            pnl_pct = holding.get("pnl_pct")
+            can_sell_today = holding.get("can_sell_today")
+            ref = (scored_by_code or {}).get(code) or (raw_stock_map or {}).get(code)
+            sector_name = self._resolve_sector_name_for_stock(ref, sector_map or {})
+            if not sector_name:
+                sector_name = str(holding.get("sector_name") or "").strip()
+
+            total_market_value += market_value
+            if sector_name:
+                sector_market_value[sector_name] = sector_market_value.get(sector_name, 0.0) + market_value
+                sector_holding_count[sector_name] = sector_holding_count.get(sector_name, 0) + 1
+
+            if pnl_pct is not None and float(pnl_pct) <= -3:
+                weak_holding_count += 1
+            if can_sell_today is False:
+                t1_locked_count += 1
+
+        if total_market_value <= 0 and account:
+            total_market_value = max(float(account.total_asset or 0) - float(account.available_cash or 0), 0.0)
+
+        return {
+            "sector_market_value": sector_market_value,
+            "sector_holding_count": sector_holding_count,
+            "weak_holding_count": weak_holding_count,
+            "t1_locked_count": t1_locked_count,
+            "total_market_value": total_market_value,
+        }
+
+    def _assess_holding_fit(
+        self,
+        stock: StockOutput,
+        holding_profile: Dict,
+        account: Optional[AccountInput],
+    ) -> tuple[bool, Optional[str], Optional[str], float]:
+        """根据当前持仓结构修正账户可参与池准入与排序。"""
+        if not holding_profile:
+            return True, None, None, 0.0
+
+        sector_name = str(stock.sector_name or "").strip()
+        sector_market_value = float(holding_profile.get("sector_market_value", {}).get(sector_name, 0.0))
+        same_sector_count = int(holding_profile.get("sector_holding_count", {}).get(sector_name, 0))
+        total_market_value = float(holding_profile.get("total_market_value") or 0.0)
+        weak_holding_count = int(holding_profile.get("weak_holding_count") or 0)
+        t1_locked_count = int(holding_profile.get("t1_locked_count") or 0)
+        total_asset = float(account.total_asset or 0) if account else 0.0
+        total_position_ratio = float(account.total_position_ratio or 0) if account else 0.0
+        sector_asset_ratio = sector_market_value / total_asset if total_asset > 0 else 0.0
+        sector_hold_ratio = sector_market_value / total_market_value if total_market_value > 0 else 0.0
+
+        reason_notes: List[str] = []
+        hint_notes: List[str] = []
+        score_delta = 0.0
+
+        if (
+            sector_asset_ratio >= 0.35
+            or (same_sector_count >= 2 and total_position_ratio >= AccountAdapterService.POSITION_LOW)
+            or (sector_hold_ratio >= 0.5 and total_position_ratio >= AccountAdapterService.POSITION_MEDIUM)
+        ):
+            return (
+                False,
+                "同板块持仓已偏重，先处理已有仓位，不再新增同方向仓位。",
+                None,
+                -20.0,
+            )
+
+        if same_sector_count >= 1 or sector_asset_ratio >= 0.18 or sector_hold_ratio >= 0.3:
+            reason_notes.append("账户内已有同板块持仓，新仓只作为补充而非主攻。")
+            hint_notes.append("若执行，同方向总暴露控制在一档内")
+            score_delta -= 8.0
+
+        if weak_holding_count > 0:
+            weak_reason = f"账户内仍有{weak_holding_count}只弱势/亏损持仓待处理"
+            if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+                return (
+                    False,
+                    f"{weak_reason}，先处理旧仓，不做需要追价确认的新开仓。",
+                    None,
+                    -12.0,
+                )
+            reason_notes.append(f"{weak_reason}，新仓优先选择更舒服的回踩/低吸位。")
+            hint_notes.append("先处理弱票，再考虑加新仓")
+            score_delta -= 6.0
+
+        if t1_locked_count >= 2:
+            reason_notes.append("账户内 T+1 锁定仓位较多，次日可调度空间有限。")
+            hint_notes.append("新仓尽量控制为试错仓")
+            score_delta -= 4.0
+
+        return (
+            True,
+            " ".join(reason_notes) if reason_notes else None,
+            "；".join(hint_notes) if hint_notes else None,
+            score_delta,
+        )
+
+    def _merge_position_hint(
+        self,
+        base_hint: Optional[str],
+        extra_hint: Optional[str],
+    ) -> Optional[str]:
+        if base_hint and extra_hint:
+            return f"{base_hint}；{extra_hint}"
+        return base_hint or extra_hint
+
+    def _stock_sector_candidates(self, stock) -> List[str]:
+        """返回股票可用于匹配板块的候选名称，题材优先，行业兜底。"""
+        if not stock:
+            return []
+
+        names: List[str] = []
+        for name in getattr(stock, "concept_names", []) or []:
+            name_s = str(name or "").strip()
+            if name_s and name_s not in names:
+                names.append(name_s)
+
+        sector_name = str(getattr(stock, "sector_name", "") or "").strip()
+        if sector_name and sector_name not in names:
+            names.append(sector_name)
+        return names
+
+    def _resolve_sector_for_stock(self, stock, sector_map: Dict) -> tuple[Optional[object], str]:
+        """按题材优先、行业兜底，为股票解析最匹配的板块。"""
+        if not stock or not sector_map:
+            sector_name = str(getattr(stock, "sector_name", "") or "").strip()
+            return None, sector_name
+
+        matched_sectors = []
+        for index, name in enumerate(self._stock_sector_candidates(stock)):
+            sector = sector_map.get(name)
+            if sector:
+                matched_sectors.append((sector, name, index))
+
+        if matched_sectors:
+            sector, name, _ = max(
+                matched_sectors,
+                key=lambda item: self._sector_match_priority(
+                    sector=item[0],
+                    sector_name=item[1],
+                    candidate_index=item[2],
+                ),
+            )
+            return sector, name
+
+        sector_name = str(getattr(stock, "sector_name", "") or "").strip()
+        return None, sector_name
+
+    def _sector_match_priority(
+        self,
+        sector,
+        sector_name: str,
+        candidate_index: int,
+    ) -> tuple[int, int, int, float, int, int]:
+        """多个候选板块同时命中时，优先更强、更具体、更靠前的主线。"""
+        return (
+            self._sector_profile_priority(sector),
+            self._sector_tier_priority(getattr(sector, "sector_tier", None)),
+            0 if self._is_generic_sector_name(sector_name) else 1,
+            float(getattr(sector, "sector_score", 0.0) or 0.0),
+            -int(getattr(sector, "sector_strength_rank", 9999) or 9999),
+            -candidate_index,
+        )
+
+    def _sector_profile_priority(self, sector) -> int:
+        if not sector:
+            return 0
+        tag = getattr(sector, "sector_mainline_tag", None)
+        if tag == SectorMainlineTag.MAINLINE:
+            return 4
+        if tag == SectorMainlineTag.SUB_MAINLINE:
+            return 3
+        if str(tag or "") == "跟风":
+            return 2
+        if str(tag or "") == "杂毛":
+            return 1
+        return 0
+
+    def _sector_tier_priority(self, sector_tier) -> int:
+        if sector_tier == SectorTierTag.A:
+            return 3
+        if sector_tier == SectorTierTag.B:
+            return 2
+        if sector_tier == SectorTierTag.C:
+            return 1
+        return 0
+
+    def _is_generic_sector_name(self, sector_name: str) -> bool:
+        name = str(sector_name or "").strip()
+        if not name:
+            return True
+        generic_exact = {
+            "融资融券",
+            "深股通",
+            "沪股通",
+            "央企国企改革",
+            "沪深300样本股",
+            "上证380成份股",
+            "中证500成份股",
+            "同花顺果指数",
+        }
+        generic_keywords = (
+            "样本股",
+            "成份股",
+            "融资融券",
+            "股通",
+            "同花顺",
+        )
+        return name in generic_exact or any(keyword in name for keyword in generic_keywords)
+
+    def _resolve_sector_name_for_stock(self, stock, sector_map: Dict) -> str:
+        """返回股票用于板块暴露统计的解析后板块名。"""
+        _, sector_name = self._resolve_sector_for_stock(stock, sector_map)
+        return sector_name
 
     def _apply_holding_context(self, stock: StockOutput, holding: Optional[Dict]) -> StockOutput:
         """将持仓字段回填到持仓处理池股票上。"""
@@ -471,17 +1204,44 @@ class StockFilterService:
         why_this_pool: str,
         not_other_pools: List[str],
         pool_decision_summary: str,
+        review_bias_profile: Optional[Dict] = None,
     ) -> StockOutput:
         """复制股票对象，并挂上池内说明。"""
+        review_bias = self._resolve_review_bias(stock, pool_tag, review_bias_profile)
         return stock.model_copy(
             update={
                 "stock_pool_tag": pool_tag,
                 "why_this_pool": why_this_pool,
                 "not_other_pools": not_other_pools,
                 "pool_decision_summary": pool_decision_summary,
+                "review_bias_score": review_bias["score"],
+                "review_bias_label": review_bias["label"],
+                "review_bias_reason": review_bias["reason"],
             },
             deep=True,
         )
+
+    def _resolve_review_bias(
+        self,
+        stock: StockOutput,
+        pool_tag: StockPoolTag,
+        review_bias_profile: Optional[Dict],
+    ) -> Dict:
+        if not review_bias_profile:
+            return {"score": 0.0, "label": None, "reason": None}
+
+        snapshot_type = "pool_account" if pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE else "pool_market"
+        bucket = stock.candidate_bucket_tag or "未分层"
+        exact = (review_bias_profile.get("exact") or {}).get((snapshot_type, bucket))
+        bucket_entry = (review_bias_profile.get("bucket") or {}).get(bucket)
+        entry = exact or bucket_entry
+        if not entry:
+            return {"score": 0.0, "label": None, "reason": None}
+        return {
+            "score": float(entry.get("score") or 0.0),
+            "label": entry.get("label"),
+            "reason": entry.get("reason"),
+        }
 
     def _is_account_executable(self, stock: StockOutput, account: Optional[AccountInput]) -> bool:
         """校验账户是否具备执行条件。"""
@@ -552,40 +1312,222 @@ class StockFilterService:
             return True
         return False
 
+    def _apply_hard_filters(
+        self,
+        scored_stocks: List[StockOutput],
+        raw_stock_map: Dict[str, StockInput],
+        *,
+        market_env,
+        account: Optional[AccountInput],
+        holdings: Optional[List[Dict]],
+        sector_map: Dict,
+    ) -> List[StockOutput]:
+        """满足至少 4/5 条硬条件；若两条不满足，直接过滤。"""
+        if not scored_stocks:
+            return scored_stocks
+
+        holding_codes = {
+            normalize_ts_code((holding.get("ts_code") or "").strip())
+            for holding in (holdings or [])
+            if (holding.get("ts_code") or "").strip()
+        }
+        scored_by_code = {
+            normalize_ts_code(stock.ts_code): stock
+            for stock in scored_stocks
+        }
+        holding_profile = self._build_holding_profile(
+            holdings,
+            account,
+            raw_stock_map=raw_stock_map,
+            scored_by_code=scored_by_code,
+            sector_map=sector_map,
+        )
+
+        filtered: List[StockOutput] = []
+        for stock in scored_stocks:
+            code = normalize_ts_code(stock.ts_code)
+            source = str(stock.candidate_source_tag or "")
+            if "持仓补齐" in source or code in holding_codes:
+                self._attach_hard_filter_debug(
+                    stock,
+                    {key: (True, None) for key in self.HARD_FILTER_RULE_LABELS},
+                )
+                filtered.append(stock)
+                continue
+
+            passes = self._evaluate_hard_filter_conditions(
+                stock,
+                scored_stocks,
+                market_env=market_env,
+                account=account,
+                holding_profile=holding_profile,
+            )
+            self._attach_hard_filter_debug(stock, passes)
+            failed_count = sum(1 for passed, _ in passes.values() if not passed)
+            if failed_count >= 2:
+                continue
+            filtered.append(stock)
+        return filtered
+
+    def _attach_hard_filter_debug(
+        self,
+        stock: StockOutput,
+        passes: Dict[str, tuple[bool, Optional[str]]],
+    ) -> None:
+        failed_rules = [
+            (reason or self.HARD_FILTER_FAIL_LABELS.get(key) or self.HARD_FILTER_RULE_LABELS[key])
+            for key, (passed, reason) in passes.items()
+            if not passed and key in self.HARD_FILTER_RULE_LABELS
+        ]
+        total_rules = len(self.HARD_FILTER_RULE_LABELS)
+        stock.hard_filter_failed_rules = failed_rules
+        stock.hard_filter_failed_count = len(failed_rules)
+        stock.hard_filter_pass_count = total_rules - len(failed_rules)
+        if failed_rules:
+            stock.hard_filter_summary = (
+                f"硬过滤 {stock.hard_filter_pass_count}/{total_rules} 通过；"
+                f"未通过：{'、'.join(failed_rules)}"
+            )
+        else:
+            stock.hard_filter_summary = f"硬过滤 {total_rules}/{total_rules} 通过"
+
+    def _evaluate_hard_filter_conditions(
+        self,
+        stock: StockOutput,
+        scored_stocks: List[StockOutput],
+        *,
+        market_env,
+        account: Optional[AccountInput],
+        holding_profile: Dict,
+    ) -> Dict[str, tuple[bool, Optional[str]]]:
+        account_style_ok, account_style_reason = self._passes_account_style_filter(
+            stock,
+            market_env,
+            account,
+            holding_profile,
+        )
+        return {
+            "not_pure_emotion_small_cap": (self._passes_pure_emotion_filter(stock), None),
+            "not_hot_but_weak_logic": (self._passes_hot_weak_logic_filter(stock), None),
+            "not_weaker_than_group": (self._passes_group_trend_filter(stock, scored_stocks), None),
+            "not_chase_only_tomorrow": (
+                stock.next_tradeability_tag not in {
+                    NextTradeabilityTag.CHASE_ONLY,
+                    NextTradeabilityTag.NO_GOOD_ENTRY,
+                },
+                None,
+            ),
+            "not_account_style_conflict": (account_style_ok, account_style_reason),
+        }
+
+    def _passes_pure_emotion_filter(self, stock: StockOutput) -> bool:
+        source = str(stock.candidate_source_tag or "")
+        return not (
+            stock.sector_profile_tag == SectorProfileTag.NON_MAINSTREAM
+            and stock.stock_core_tag != StockCoreTag.CORE
+            and float(stock.amount or 0) <= self.PURE_EMOTION_AMOUNT_MAX
+            and (
+                "涨停入选" in source
+                or float(stock.change_pct or 0) >= self.STRONG_CHANGE_THRESHOLD
+            )
+        )
+
+    def _passes_hot_weak_logic_filter(self, stock: StockOutput) -> bool:
+        volatility_pct = self._intraday_volatility_pct(stock)
+        return not (
+            float(stock.turnover_rate or 0) >= 18
+            and volatility_pct >= self.HIGH_VOLATILITY_PCT
+            and (
+                stock.stock_core_tag != StockCoreTag.CORE
+                or stock.sector_profile_tag == SectorProfileTag.NON_MAINSTREAM
+                or stock.stock_continuity_tag == StockContinuityTag.CAUTION
+                or float(stock.stock_score or 0) < 70
+            )
+        )
+
+    def _passes_group_trend_filter(
+        self,
+        stock: StockOutput,
+        scored_stocks: List[StockOutput],
+    ) -> bool:
+        same_sector = [
+            peer for peer in scored_stocks
+            if peer.sector_name == stock.sector_name
+        ]
+        if len(same_sector) < 3:
+            return True
+
+        ranked = sorted(
+            same_sector,
+            key=lambda peer: (
+                float(peer.stock_score or 0),
+                float(peer.change_pct or 0),
+            ),
+            reverse=True,
+        )
+        best = ranked[0]
+        try:
+            rank = next(idx for idx, peer in enumerate(ranked, start=1) if peer.ts_code == stock.ts_code)
+        except StopIteration:
+            return True
+
+        return not (
+            rank >= 3
+            and float(best.stock_score or 0) - float(stock.stock_score or 0) >= 10
+            and (
+                stock.stock_role_tag in {StockRoleTag.FOLLOW, StockRoleTag.TRASH}
+                or stock.stock_strength_tag != StockStrengthTag.STRONG
+                or stock.stock_continuity_tag != StockContinuityTag.SUSTAINABLE
+            )
+        )
+
+    def _passes_account_style_filter(
+        self,
+        stock: StockOutput,
+        market_env,
+        account: Optional[AccountInput],
+        holding_profile: Dict,
+    ) -> tuple[bool, Optional[str]]:
+        if not account:
+            return True, None
+        if not self._is_account_executable(stock, account):
+            return False, self._account_executable_fail_reason(account)
+        holding_ok, holding_reason, _, _ = self._assess_holding_fit(stock, holding_profile, account)
+        if not holding_ok:
+            return False, holding_reason or "当前持仓结构不适合新增同方向仓位。"
+        if (
+            market_env.market_env_tag == MarketEnvTag.DEFENSE
+            and stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
+        ):
+            return False, "防守环境下不适合做需要突破确认的票。"
+        return True, None
+
+    def _account_executable_fail_reason(self, account: AccountInput) -> str:
+        if account.total_position_ratio >= AccountAdapterService.POSITION_MEDIUM:
+            return "账户总仓位已偏高，先控制仓位，不新增执行票。"
+        if account.holding_count >= AccountAdapterService.HOLDING_COUNT_HIGH:
+            return "当前持仓数量已偏多，先收缩持仓，再考虑新机会。"
+        if account.today_new_buy_count >= AccountAdapterService.NEW_BUY_COUNT_LIMIT:
+            return "当日新开仓次数已到上限，先不再新增。"
+        if account.available_cash < AccountAdapterService.AVAILABLE_CASH_MIN:
+            return "账户可用资金不足，暂不满足新开仓条件。"
+        return "账户当前不适合新增执行票。"
+
+    def _intraday_volatility_pct(self, stock: StockOutput) -> float:
+        pre_close = float(stock.pre_close or 0)
+        if pre_close <= 0:
+            return 0.0
+        return ((float(stock.high or 0) - float(stock.low or 0)) / pre_close) * 100
+
     def _should_enter_market_watch(self, stock: StockOutput) -> bool:
         """观察池只保留值得继续跟踪的候选。"""
-        if stock.sector_profile_tag == SectorProfileTag.NON_MAINSTREAM:
+        if float(stock.change_pct or 0) <= 0:
             return False
-        if stock.stock_role_tag in {StockRoleTag.LEADER, StockRoleTag.FRONT} and (
-            stock.day_strength_tag in {DayStrengthTag.LIMIT_STRONG, DayStrengthTag.TREND_STRONG}
-        ):
-            return True
-        if stock.stock_role_tag == StockRoleTag.MID_CAPTAIN and stock.stock_score >= 88:
-            return True
-        return False
+        return self._market_watch_vote_count(stock) >= 3
 
     def _should_enter_trend_recognition(self, stock: StockOutput) -> bool:
         """趋势辨识度观察池：不看谁最炸，看谁更耐打。"""
-        if stock.sector_profile_tag == SectorProfileTag.NON_MAINSTREAM:
-            return False
-        if stock.stock_role_tag not in {
-            StockRoleTag.LEADER,
-            StockRoleTag.FRONT,
-            StockRoleTag.MID_CAPTAIN,
-        }:
-            return False
-        if stock.structure_state_tag not in {
-            StructureStateTag.START,
-            StructureStateTag.DIVERGENCE,
-            StructureStateTag.REPAIR,
-        }:
-            return False
-        if stock.next_tradeability_tag in {
-            NextTradeabilityTag.CHASE_ONLY,
-            NextTradeabilityTag.NO_GOOD_ENTRY,
-        }:
-            return False
-        return stock.stock_continuity_tag != StockContinuityTag.CAUTION
+        return self._trend_recognition_vote_count(stock) >= 3
 
     def _should_enter_account_pool(
         self,
@@ -635,6 +1577,99 @@ class StockFilterService:
         if defense_allowed:
             return True, defense_reason, defense_position_hint
         return False, "交易性或账户条件不足，暂不进入账户可参与池。", None
+
+    def _market_watch_vote_count(self, stock: StockOutput) -> int:
+        votes = 0
+        if stock.sector_profile_tag in {
+            SectorProfileTag.A_MAINLINE,
+            SectorProfileTag.B_SUB_MAINLINE,
+        } and stock.stock_role_tag in {
+            StockRoleTag.LEADER,
+            StockRoleTag.FRONT,
+            StockRoleTag.MID_CAPTAIN,
+        }:
+            votes += 1
+        if stock.stock_role_tag in {StockRoleTag.LEADER, StockRoleTag.MID_CAPTAIN}:
+            votes += 1
+        if stock.day_strength_tag in {
+            DayStrengthTag.LIMIT_STRONG,
+            DayStrengthTag.TREND_STRONG,
+        } or self._front_strength_score(stock) >= 38:
+            votes += 1
+        if (
+            stock.stock_continuity_tag != StockContinuityTag.CAUTION
+            and stock.structure_state_tag != StructureStateTag.LATE_STAGE
+        ):
+            votes += 1
+        return votes
+
+    def _trend_recognition_vote_count(self, stock: StockOutput) -> int:
+        votes = 0
+        if stock.sector_profile_tag in {
+            SectorProfileTag.A_MAINLINE,
+            SectorProfileTag.B_SUB_MAINLINE,
+        }:
+            votes += 1
+        if stock.stock_core_tag == StockCoreTag.CORE or stock.stock_role_tag in {
+            StockRoleTag.LEADER,
+            StockRoleTag.MID_CAPTAIN,
+        }:
+            votes += 1
+        if stock.structure_state_tag in {
+            StructureStateTag.START,
+            StructureStateTag.DIVERGENCE,
+            StructureStateTag.REPAIR,
+        } and stock.stock_continuity_tag != StockContinuityTag.CAUTION:
+            votes += 1
+        if stock.next_tradeability_tag in {
+            NextTradeabilityTag.RETRACE_CONFIRM,
+            NextTradeabilityTag.LOW_SUCK,
+            NextTradeabilityTag.BREAKTHROUGH,
+        }:
+            votes += 1
+        return votes
+
+    def _passes_account_participation_gate(
+        self,
+        stock: StockOutput,
+        account: Optional[AccountInput],
+        holding_profile: Dict,
+    ) -> tuple[bool, Optional[str]]:
+        """账户可参与池用 5 问法做最后一道实战过滤。"""
+        comfortable_breakthrough = (
+            stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
+            and stock.structure_state_tag in {StructureStateTag.DIVERGENCE, StructureStateTag.REPAIR}
+            and float(stock.turnover_rate or 0) < 15
+            and not self._has_upper_shadow_risk(stock)
+        )
+        has_comfortable_entry = stock.next_tradeability_tag in {
+            NextTradeabilityTag.RETRACE_CONFIRM,
+            NextTradeabilityTag.LOW_SUCK,
+        } or comfortable_breakthrough
+        weak_holding_count = int(holding_profile.get("weak_holding_count") or 0)
+        t1_locked_count = int(holding_profile.get("t1_locked_count") or 0)
+
+        votes = [
+            self._is_account_executable(stock, account),
+            weak_holding_count == 0,
+            int(holding_profile.get("sector_holding_count", {}).get(str(stock.sector_name or "").strip(), 0)) == 0,
+            has_comfortable_entry,
+            float(stock.account_entry_score or 0) >= 80,
+        ]
+        if t1_locked_count >= 2:
+            votes[4] = False
+
+        hit_count = sum(1 for passed in votes if passed)
+        if hit_count >= 4:
+            return True, None
+
+        if weak_holding_count > 0:
+            return False, "账户里仍有弱票/低效仓待处理，先去弱，再考虑新机会。"
+        if not has_comfortable_entry:
+            return False, "次日缺少舒服买点，当前更适合观察，不进账户可参与池。"
+        if not votes[2]:
+            return False, "当前持仓方向已重复暴露，先处理旧仓，不新增同方向仓位。"
+        return False, "这只票更像市场答案，不是当前账户最优执行答案。"
 
     def _tradable_account_entry_reason(self, stock: StockOutput) -> str:
         if stock.next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
@@ -722,8 +1757,8 @@ class StockFilterService:
         Returns:
             评分后的个股
         """
-        # 获取所属板块
-        sector = sector_map.get(stock.sector_name)
+        # 获取所属板块：优先题材映射，其次行业兜底
+        sector, resolved_sector_name = self._resolve_sector_for_stock(stock, sector_map)
 
         # 计算强度评分
         strength_score = self._calculate_strength_score(stock, sector)
@@ -787,11 +1822,12 @@ class StockFilterService:
             next_tradeability_tag,
         )
 
-        return StockOutput(
+        output = StockOutput(
             ts_code=stock.ts_code,
             stock_name=stock.stock_name,
-            sector_name=stock.sector_name,
+            sector_name=resolved_sector_name or stock.sector_name,
             change_pct=stock.change_pct,
+            amount=stock.amount,
             close=stock.close,
             open=stock.open,
             high=stock.high,
@@ -807,12 +1843,14 @@ class StockFilterService:
             avg_price=stock.avg_price,
             quote_time=stock.quote_time,
             data_source=stock.data_source,
+            concept_names=list(stock.concept_names or []),
             stock_strength_tag=strength_tag,
             stock_continuity_tag=continuity_tag,
             stock_tradeability_tag=tradeability_tag,
             stock_core_tag=core_tag,
             stock_pool_tag=pool_tag,
             sector_profile_tag=sector_profile_tag,
+            sector_tier_tag=getattr(sector, "sector_tier", None) if sector else None,
             stock_role_tag=stock_role_tag,
             day_strength_tag=day_strength_tag,
             structure_state_tag=structure_state_tag,
@@ -821,6 +1859,8 @@ class StockFilterService:
             stock_comment=comment,
             pool_decision_summary=pool_decision_summary,
         )
+        output.representative_role_tag = self._representative_role_tag(output)
+        return output
 
     def _calculate_strength_score(self, stock: StockInput, sector) -> float:
         """计算强度评分 (0-100)"""

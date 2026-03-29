@@ -253,6 +253,14 @@ class StockRoleTag(str, Enum):
     TRASH = "杂毛"
 
 
+class RepresentativeRoleTag(str, Enum):
+    """主线样本角色"""
+    LEADER = "龙头"
+    MID_CAPTAIN = "中军"
+    TREND_CORE = "趋势核心"
+    ELASTIC_FRONT = "弹性前排"
+
+
 class DayStrengthTag(str, Enum):
     """当日强度画像"""
     LIMIT_STRONG = "涨停级别强"
@@ -304,6 +312,7 @@ class StockInput(BaseModel):
     intraday_volume_ratio: Optional[float] = Field(None, description="盘中实时相对放量")
     quote_time: Optional[str] = Field(None, description="行情时间")
     data_source: Optional[str] = Field(None, description="行情来源")
+    concept_names: List[str] = Field(default_factory=list, description="候选题材列表")
 
 
 class StockOutput(BaseModel):
@@ -312,6 +321,7 @@ class StockOutput(BaseModel):
     stock_name: str
     sector_name: str
     change_pct: float
+    amount: float = 0.0
     close: float = 0.0
     open: float = 0.0
     high: float = 0.0
@@ -328,6 +338,7 @@ class StockOutput(BaseModel):
     intraday_volume_ratio: Optional[float] = None
     quote_time: Optional[str] = Field(None, description="行情时间")
     data_source: Optional[str] = Field(None, description="行情来源")
+    concept_names: List[str] = Field(default_factory=list, description="候选题材列表")
     # 评分标签
     stock_strength_tag: StockStrengthTag
     stock_continuity_tag: StockContinuityTag
@@ -335,7 +346,9 @@ class StockOutput(BaseModel):
     stock_core_tag: StockCoreTag
     stock_pool_tag: StockPoolTag
     sector_profile_tag: Optional[SectorProfileTag] = None
+    sector_tier_tag: Optional[SectorTierTag] = None
     stock_role_tag: Optional[StockRoleTag] = None
+    representative_role_tag: Optional[RepresentativeRoleTag] = None
     day_strength_tag: Optional[DayStrengthTag] = None
     structure_state_tag: Optional[StructureStateTag] = None
     next_tradeability_tag: Optional[NextTradeabilityTag] = None
@@ -346,6 +359,10 @@ class StockOutput(BaseModel):
     why_this_pool: Optional[str] = None
     not_other_pools: List[str] = Field(default_factory=list)
     pool_decision_summary: Optional[str] = None
+    hard_filter_failed_rules: List[str] = Field(default_factory=list)
+    hard_filter_failed_count: int = 0
+    hard_filter_pass_count: int = 0
+    hard_filter_summary: Optional[str] = None
     # 持仓上下文（仅持仓处理池使用）
     holding_qty: Optional[int] = None
     cost_price: Optional[float] = None
@@ -368,6 +385,10 @@ class StockOutput(BaseModel):
     # LLM 辅助解释
     llm_plain_note: Optional[str] = None
     llm_risk_note: Optional[str] = None
+    # 复盘反馈
+    review_bias_score: float = Field(0.0, description="复盘反馈加减分")
+    review_bias_label: Optional[str] = Field(None, description="复盘反馈标签")
+    review_bias_reason: Optional[str] = Field(None, description="复盘反馈说明")
 
 
 # ========== 三池相关 ==========
@@ -376,6 +397,9 @@ class StockPoolsOutput(BaseModel):
     """三池输出"""
     trade_date: str
     resolved_trade_date: Optional[str] = Field(None, description="实际使用的候选行情交易日")
+    sector_scan_trade_date: Optional[str] = Field(None, description="三池实际使用的板块扫描请求日")
+    sector_scan_resolved_trade_date: Optional[str] = Field(None, description="三池实际使用的板块扫描数据日")
+    snapshot_version: Optional[int] = Field(None, description="三池规则快照版本")
     market_watch_pool: List[StockOutput] = Field(default_factory=list, description="市场最强观察池")
     trend_recognition_pool: List[StockOutput] = Field(default_factory=list, description="趋势辨识度观察池")
     account_executable_pool: List[StockOutput] = Field(default_factory=list, description="账户可参与池")
@@ -404,10 +428,15 @@ class BuyPointOutput(BaseModel):
     """买点分析输出"""
     ts_code: str
     stock_name: str
+    sector_name: str = Field(default="", description="所属板块/行业")
     candidate_source_tag: str = Field(default="", description="候选来源标签")
     candidate_bucket_tag: str = Field(default="", description="候选分层标签")
     stock_pool_tag: str = Field(default="", description="来源池标签")
     pool_entry_reason: str = Field(default="", description="入池原因")
+    hard_filter_failed_rules: List[str] = Field(default_factory=list, description="硬过滤未通过项")
+    hard_filter_failed_count: int = Field(default=0, description="硬过滤失败条数")
+    hard_filter_pass_count: int = Field(default=0, description="硬过滤通过条数")
+    hard_filter_summary: str = Field(default="", description="硬过滤摘要")
     # 买点信号
     buy_signal_tag: BuySignalTag
     buy_point_type: BuyPointType
@@ -430,6 +459,10 @@ class BuyPointOutput(BaseModel):
     buy_account_fit: str = Field(..., description="适合/一般/不适合")
     # 简评
     buy_comment: str = ""
+    # 复盘反馈
+    review_bias_score: float = Field(0.0, description="复盘反馈加减分")
+    review_bias_label: Optional[str] = Field(None, description="复盘反馈标签")
+    review_bias_reason: Optional[str] = Field(None, description="复盘反馈说明")
 
 
 class BuyPointRequest(BaseModel):

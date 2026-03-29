@@ -1,10 +1,12 @@
 """
 定时任务 API
 """
-from fastapi import APIRouter, BackgroundTasks
+import asyncio
 from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks
+from loguru import logger
 
 from app.tasks.scheduler import scheduler
 
@@ -15,6 +17,7 @@ class TaskRequest(BaseModel):
     """任务请求"""
     trade_date: Optional[str] = None
     mode: str = "daily"  # daily, sync, analyze, notify
+    force: bool = False
 
 
 class TaskResponse(BaseModel):
@@ -27,7 +30,7 @@ class TaskResponse(BaseModel):
 @router.post("/trigger", response_model=TaskResponse)
 async def trigger_task(
     request: TaskRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks = None,
 ):
     """
     手动触发定时任务
@@ -39,37 +42,40 @@ async def trigger_task(
     """
     trade_date = request.trade_date or datetime.now().strftime("%Y-%m-%d")
 
-    task_id = f"task_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    task_result = await scheduler.enqueue_task(
+        request.mode,
+        trade_date,
+        trigger_source="manual",
+        force=bool(request.force),
+    )
 
-    def run_task():
-        import asyncio
-        from app.tasks.main import run_daily_task
+    if task_result["created"]:
+        task_id = task_result["task_id"]
 
-        if request.mode == "daily":
-            asyncio.run(run_daily_task(trade_date))
-        elif request.mode == "sync":
-            asyncio.run(scheduler.sync_data(trade_date))
-        elif request.mode == "analyze":
-            asyncio.run(scheduler.run_analysis(trade_date))
-        elif request.mode == "notify":
-            # 需要先有分析数据
-            report_data = asyncio.run(scheduler.run_analysis(trade_date))
-            asyncio.run(scheduler.notify_report(trade_date, report_data))
+        async def run_task():
+            try:
+                await scheduler.execute_task_run(task_id)
+            except Exception as exc:
+                logger.exception(f"后台任务执行失败: task_id={task_id} error={exc}")
 
-    # 后台执行任务
-    background_tasks.add_task(run_task)
+        asyncio.create_task(run_task())
+        status = "started"
+        message = f"任务已启动，模式: {request.mode}, 日期: {trade_date}"
+    else:
+        status = "duplicate"
+        if task_result["reason"] == "already_finished":
+            message = f"相同任务已执行成功，直接复用结果，模式: {request.mode}, 日期: {trade_date}"
+        else:
+            message = f"相同任务正在执行，未重复启动，模式: {request.mode}, 日期: {trade_date}"
 
     return TaskResponse(
-        status="started",
-        message=f"任务已启动，模式: {request.mode}, 日期: {trade_date}",
-        task_id=task_id
+        status=status,
+        message=message,
+        task_id=task_result["task_id"]
     )
 
 
 @router.get("/status")
-async def get_task_status():
-    """获取任务状态（预留）"""
-    return {
-        "status": "ready",
-        "message": "定时任务服务就绪"
-    }
+async def get_task_status(task_id: Optional[str] = None, limit: int = 20):
+    """获取任务状态。"""
+    return await scheduler.get_task_status(task_id=task_id, limit=limit)

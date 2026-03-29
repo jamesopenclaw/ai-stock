@@ -24,6 +24,7 @@ from app.models.schemas import (
     StockCoreTag,
     StockPoolTag,
     StockPoolsOutput,
+    SectorProfileTag,
     StockRoleTag,
     DayStrengthTag,
     StructureStateTag,
@@ -40,6 +41,7 @@ from app.models.schemas import (
     SectorMainlineTag,
     SectorContinuityTag,
     SectorTradeabilityTag,
+    SectorTierTag,
 )
 from app.services.stock_filter import StockFilterService
 
@@ -268,6 +270,55 @@ class TestStockFilter:
         assert watched.next_tradeability_tag == NextTradeabilityTag.CHASE_ONLY
         assert "账户可参与池" in " ".join(watched.not_other_pools)
 
+    def test_negative_change_stock_cannot_enter_market_watch(self, service, mock_market_env_attack):
+        """
+        测试：市场最强观察池不应收负涨幅票
+        """
+        rebound_stock = StockInput(
+            ts_code="002101.SZ",
+            stock_name="错杀反抽",
+            sector_name="环保",
+            close=9.3,
+            change_pct=-3.2,
+            turnover_rate=14.0,
+            amount=160000,
+            vol_ratio=2.1,
+            high=9.8,
+            low=8.7,
+            open=8.9,
+            pre_close=9.61,
+            stage_tag="修复",
+            candidate_source_tag="量比异动",
+        )
+        sector = SectorOutput(
+            sector_name="环保",
+            sector_source_type="concept",
+            sector_change_pct=3.2,
+            sector_score=92.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+            sector_comment="主线",
+        )
+
+        pools = service.classify_pools(
+            "2026-03-20",
+            [rebound_stock],
+            holdings=[],
+            account=None,
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[sector],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert len(pools.market_watch_pool) == 0
+
     def test_trend_structure_stock_can_enter_trend_and_account_pools(self, service, mock_market_env_attack):
         """
         测试：主线前排但存在舒服回踩确认位时，可同时进入趋势池与账户池
@@ -330,6 +381,110 @@ class TestStockFilter:
         assert trend_item.stock_role_tag == StockRoleTag.FRONT
         assert account_item.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE
         assert "可参与池" in (account_item.why_this_pool or "")
+
+    def test_concept_alias_matches_mainline_sector_for_pool_scoring(self, service, mock_market_env_attack):
+        """
+        测试：个股原始行业名与板块扫描题材名不一致时，应优先按 concept_names 命中题材。
+        """
+        stock = StockInput(
+            ts_code="002210.SZ",
+            stock_name="电力核心",
+            sector_name="电气设备",
+            concept_names=["绿色电力"],
+            close=12.8,
+            change_pct=5.2,
+            turnover_rate=8.2,
+            amount=165000,
+            vol_ratio=1.7,
+            high=13.1,
+            low=12.1,
+            open=12.2,
+            pre_close=12.17,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        sector = SectorOutput(
+            sector_name="绿色电力",
+            sector_source_type="concept",
+            sector_change_pct=3.1,
+            sector_score=92.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+            sector_comment="主线",
+        )
+
+        scored = service._score_stock(
+            stock,
+            mock_market_env_attack,
+            {"绿色电力": sector},
+        )
+
+        assert scored.sector_name == "绿色电力"
+        assert scored.stock_core_tag == StockCoreTag.CORE
+        assert scored.sector_profile_tag.value.startswith("A")
+
+    def test_mainline_concept_should_beat_generic_market_labels(self, service, mock_market_env_attack):
+        """
+        测试：同一只票同时带有“融资融券”等泛标签与主线题材时，应优先命中主线题材。
+        """
+        stock = StockInput(
+            ts_code="002211.SZ",
+            stock_name="光纤核心",
+            sector_name="其他题材",
+            concept_names=["融资融券", "深股通", "光纤概念"],
+            close=18.6,
+            change_pct=6.4,
+            turnover_rate=10.8,
+            amount=182000,
+            vol_ratio=2.1,
+            high=18.9,
+            low=17.4,
+            open=17.8,
+            pre_close=17.48,
+            stage_tag="加速",
+            candidate_source_tag="涨幅前列",
+        )
+        mainline_sector = SectorOutput(
+            sector_name="光纤概念",
+            sector_source_type="concept",
+            sector_change_pct=4.6,
+            sector_score=99.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="主线",
+            sector_tier=SectorTierTag.A,
+        )
+        generic_sector = SectorOutput(
+            sector_name="融资融券",
+            sector_source_type="concept",
+            sector_change_pct=1.8,
+            sector_score=72.0,
+            sector_strength_rank=12,
+            sector_mainline_tag=SectorMainlineTag.SUB_MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.CAUTION,
+            sector_continuity_days=2,
+            sector_comment="泛标签",
+            sector_tier=SectorTierTag.B,
+        )
+
+        scored = service._score_stock(
+            stock,
+            mock_market_env_attack,
+            {
+                "光纤概念": mainline_sector,
+                "融资融券": generic_sector,
+            },
+        )
+
+        assert scored.sector_name == "光纤概念"
+        assert scored.sector_profile_tag == SectorProfileTag.A_MAINLINE
 
     def test_tradable_breakthrough_stock_can_enter_account_pool(self, service, mock_market_env_attack):
         """
@@ -444,6 +599,297 @@ class TestStockFilter:
         assert len(pools.account_executable_pool) == 1
         assert "回踩确认位" in (pools.account_executable_pool[0].pool_entry_reason or "")
 
+    def test_same_sector_heavy_holding_blocks_account_pool(self, service, mock_market_env_attack):
+        """
+        测试：同板块持仓过重时，不应继续把同方向新票放入账户可参与池
+        """
+        stock = StockInput(
+            ts_code="002203.SZ",
+            stock_name="算力加强",
+            sector_name="算力",
+            close=25.5,
+            change_pct=5.4,
+            turnover_rate=9.5,
+            amount=180000,
+            vol_ratio=1.6,
+            high=26.2,
+            low=23.4,
+            open=24.7,
+            pre_close=24.19,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        sector = SectorOutput(
+            sector_name="算力",
+            sector_source_type="concept",
+            sector_change_pct=2.8,
+            sector_score=90.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="主线",
+        )
+
+        pools = service.classify_pools(
+            "2026-03-20",
+            [stock],
+            holdings=[
+                {
+                    "ts_code": "300001.SZ",
+                    "stock_name": "算力老仓A",
+                    "sector_name": "算力",
+                    "holding_market_value": 22000,
+                    "pnl_pct": 6.0,
+                    "can_sell_today": True,
+                },
+                {
+                    "ts_code": "300002.SZ",
+                    "stock_name": "算力老仓B",
+                    "sector_name": "算力",
+                    "holding_market_value": 18000,
+                    "pnl_pct": 3.0,
+                    "can_sell_today": True,
+                },
+            ],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=55000,
+                total_position_ratio=0.45,
+                holding_count=2,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[sector],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert len(pools.account_executable_pool) == 0
+        assert len(pools.trend_recognition_pool) == 1
+        assert "同板块持仓已偏重" in " ".join(pools.trend_recognition_pool[0].not_other_pools)
+
+    def test_same_concept_holding_blocks_account_pool_when_stock_uses_industry_name(self, service, mock_market_env_attack):
+        """
+        测试：新票和持仓票都以行业名输入时，只要命中同一题材，也应按同板块暴露约束。
+        """
+        new_stock = StockInput(
+            ts_code="002211.SZ",
+            stock_name="电力新票",
+            sector_name="电气设备",
+            concept_names=["绿色电力"],
+            close=13.1,
+            change_pct=5.1,
+            turnover_rate=8.8,
+            amount=170000,
+            vol_ratio=1.8,
+            high=13.4,
+            low=12.4,
+            open=12.5,
+            pre_close=12.46,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        holding_stock = StockInput(
+            ts_code="300211.SZ",
+            stock_name="电力老仓",
+            sector_name="电气设备",
+            concept_names=["绿色电力"],
+            close=11.4,
+            change_pct=2.0,
+            turnover_rate=5.2,
+            amount=90000,
+            vol_ratio=1.1,
+            high=11.6,
+            low=11.0,
+            open=11.1,
+            pre_close=11.18,
+            stage_tag="回调",
+            candidate_source_tag="持仓补齐",
+        )
+        sector = SectorOutput(
+            sector_name="绿色电力",
+            sector_source_type="concept",
+            sector_change_pct=3.1,
+            sector_score=92.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+            sector_comment="主线",
+        )
+
+        pools = service.classify_pools(
+            "2026-03-20",
+            [new_stock, holding_stock],
+            holdings=[
+                {
+                    "ts_code": "300211.SZ",
+                    "stock_name": "电力老仓",
+                    "sector_name": "电气设备",
+                    "holding_market_value": 40000,
+                    "pnl_pct": 1.2,
+                    "can_sell_today": True,
+                },
+            ],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=55000,
+                total_position_ratio=0.45,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[sector],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert len(pools.account_executable_pool) == 0
+        assert len(pools.trend_recognition_pool) == 1
+        assert "同板块持仓已偏重" in " ".join(pools.trend_recognition_pool[0].not_other_pools)
+
+    def test_weak_holding_blocks_breakthrough_entry(self, service, mock_market_env_attack):
+        """
+        测试：存在待处理弱票时，不应继续放行需要追价确认的突破新仓
+        """
+        stock = StockInput(
+            ts_code="002204.SZ",
+            stock_name="突破确认",
+            sector_name="芯片",
+            close=26.1,
+            change_pct=6.2,
+            turnover_rate=16.2,
+            amount=210000,
+            vol_ratio=1.8,
+            high=26.5,
+            low=24.9,
+            open=25.0,
+            pre_close=24.58,
+            stage_tag="主升",
+            candidate_source_tag="涨幅前列",
+        )
+        sector = SectorOutput(
+            sector_name="芯片",
+            sector_source_type="concept",
+            sector_change_pct=2.8,
+            sector_score=90.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="主线",
+        )
+
+        pools = service.classify_pools(
+            "2026-03-20",
+            [stock],
+            holdings=[
+                {
+                    "ts_code": "000001.SZ",
+                    "stock_name": "弱票",
+                    "sector_name": "银行",
+                    "holding_market_value": 12000,
+                    "pnl_pct": -5.2,
+                    "can_sell_today": True,
+                },
+            ],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=78000,
+                total_position_ratio=0.22,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[sector],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert len(pools.account_executable_pool) == 0
+        assert len(pools.market_watch_pool) == 1
+        assert "先处理旧仓" in " ".join(pools.market_watch_pool[0].not_other_pools)
+
+    def test_moderate_same_sector_exposure_adds_account_caution(self, service, mock_market_env_attack):
+        """
+        测试：同板块已有轻仓时仍可参与，但要明确提示降低方向暴露
+        """
+        stock = StockInput(
+            ts_code="002205.SZ",
+            stock_name="回踩承接",
+            sector_name="算力",
+            close=18.6,
+            change_pct=4.2,
+            turnover_rate=8.0,
+            amount=160000,
+            vol_ratio=1.5,
+            high=18.9,
+            low=17.9,
+            open=18.0,
+            pre_close=17.85,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        sector = SectorOutput(
+            sector_name="算力",
+            sector_source_type="concept",
+            sector_change_pct=2.8,
+            sector_score=90.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="主线",
+        )
+
+        pools = service.classify_pools(
+            "2026-03-20",
+            [stock],
+            holdings=[
+                {
+                    "ts_code": "300010.SZ",
+                    "stock_name": "算力先手仓",
+                    "sector_name": "算力",
+                    "holding_market_value": 15000,
+                    "pnl_pct": 2.3,
+                    "can_sell_today": True,
+                },
+            ],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=80000,
+                total_position_ratio=0.2,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[sector],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert len(pools.account_executable_pool) == 1
+        account_stock = pools.account_executable_pool[0]
+        assert "已有同板块持仓" in (account_stock.pool_entry_reason or "")
+        assert "总暴露控制" in (account_stock.position_hint or "")
+
     def test_visible_account_pool_keeps_comfortable_entries(self, service):
         """
         测试：账户可参与池展示前 10 只时，应保留部分回踩/低吸类型，避免被突破票全部挤掉
@@ -515,6 +961,596 @@ class TestStockFilter:
         visible = service._select_visible_account_executable([breakthrough, retrace], limit=10)
 
         assert [stock.ts_code for stock in visible] == ["000002.SZ", "000001.SZ"]
+
+    def test_visible_account_pool_prioritizes_a_tier_mainline(self, service):
+        """
+        测试：账户可参与池有 A 类主线时，应仅从 A 类主线板块获取。
+        """
+        a_mainline = StockOutput(
+            ts_code="000003.SZ",
+            stock_name="A主线票",
+            sector_name="算力",
+            change_pct=3.5,
+            stock_score=84.0,
+            account_entry_score=82.0,
+            stock_strength_tag=StockStrengthTag.MEDIUM,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.CAUTION,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            sector_profile_tag=SectorProfileTag.A_MAINLINE,
+            sector_tier_tag=SectorTierTag.A,
+            next_tradeability_tag=NextTradeabilityTag.RETRACE_CONFIRM,
+        )
+        non_a_higher_score = StockOutput(
+            ts_code="000004.SZ",
+            stock_name="高分非A票",
+            sector_name="芯片",
+            change_pct=5.8,
+            stock_score=95.0,
+            account_entry_score=96.0,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            sector_profile_tag=SectorProfileTag.B_SUB_MAINLINE,
+            sector_tier_tag=SectorTierTag.B,
+            next_tradeability_tag=NextTradeabilityTag.BREAKTHROUGH,
+        )
+
+        visible = service._select_visible_account_executable(
+            [non_a_higher_score, a_mainline],
+            limit=10,
+        )
+
+        assert [stock.ts_code for stock in visible] == ["000003.SZ"]
+
+    def test_new_pools_only_use_a_mainline_when_available(self, service, mock_market_env_attack):
+        """
+        测试：新开仓三池有 A 类主线候选时，应只使用 A 类主线股票。
+        """
+        a_stock = StockInput(
+            ts_code="002201.SZ",
+            stock_name="A主线核心",
+            sector_name="机器人",
+            close=25.5,
+            change_pct=5.4,
+            turnover_rate=9.5,
+            amount=180000,
+            vol_ratio=1.6,
+            high=26.2,
+            low=23.4,
+            open=24.7,
+            pre_close=24.19,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        b_stock = StockInput(
+            ts_code="002202.SZ",
+            stock_name="B次主线核心",
+            sector_name="低空经济",
+            close=18.8,
+            change_pct=5.1,
+            turnover_rate=8.8,
+            amount=170000,
+            vol_ratio=1.5,
+            high=19.3,
+            low=17.4,
+            open=18.0,
+            pre_close=17.89,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        a_sector = SectorOutput(
+            sector_name="机器人",
+            sector_source_type="concept",
+            sector_change_pct=3.2,
+            sector_score=92.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="A主线",
+        )
+        b_sector = SectorOutput(
+            sector_name="低空经济",
+            sector_source_type="concept",
+            sector_change_pct=2.1,
+            sector_score=81.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.SUB_MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+            sector_comment="B次主线",
+        )
+
+        pools = service.classify_pools(
+            "2026-03-20",
+            [a_stock, b_stock],
+            holdings=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=85000,
+                total_position_ratio=0.15,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[a_sector],
+                sub_mainline_sectors=[b_sector],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert [stock.ts_code for stock in pools.market_watch_pool] == ["002201.SZ"]
+        assert [stock.ts_code for stock in pools.trend_recognition_pool] == ["002201.SZ"]
+        assert [stock.ts_code for stock in pools.account_executable_pool] == ["002201.SZ"]
+
+    def test_new_pools_fall_back_to_b_sub_mainline_when_no_a_mainline(self, service, mock_market_env_attack):
+        """
+        测试：当天没有 A 类主线候选时，新开仓三池可放宽到 B 类次主线。
+        """
+        b_stock = StockInput(
+            ts_code="002203.SZ",
+            stock_name="B次主线核心",
+            sector_name="低空经济",
+            close=18.8,
+            change_pct=5.1,
+            turnover_rate=8.8,
+            amount=170000,
+            vol_ratio=1.5,
+            high=19.3,
+            low=17.4,
+            open=18.0,
+            pre_close=17.89,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        b_sector = SectorOutput(
+            sector_name="低空经济",
+            sector_source_type="concept",
+            sector_change_pct=2.1,
+            sector_score=81.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.SUB_MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+            sector_comment="B次主线",
+        )
+
+        pools = service.classify_pools(
+            "2026-03-20",
+            [b_stock],
+            holdings=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=85000,
+                total_position_ratio=0.15,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[],
+                sub_mainline_sectors=[b_sector],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert [stock.ts_code for stock in pools.market_watch_pool] == ["002203.SZ"]
+        assert [stock.ts_code for stock in pools.trend_recognition_pool] == ["002203.SZ"]
+        assert [stock.ts_code for stock in pools.account_executable_pool] == ["002203.SZ"]
+
+    def test_new_pools_only_use_visible_mainline_sectors(self, service, mock_market_env_attack):
+        """
+        测试：三池新开仓池只从板块扫描页展示出来的前排主线板块中选股。
+        """
+        visible_stock = StockInput(
+            ts_code="002210.SZ",
+            stock_name="可见主线票",
+            sector_name="光纤概念",
+            close=21.2,
+            change_pct=8.6,
+            turnover_rate=12.2,
+            amount=220000,
+            vol_ratio=2.4,
+            high=21.8,
+            low=19.8,
+            open=20.1,
+            pre_close=19.52,
+            stage_tag="加速",
+            candidate_source_tag="涨停入选/涨幅前列",
+        )
+        hidden_stock = StockInput(
+            ts_code="002211.SZ",
+            stock_name="隐藏主线票",
+            sector_name="污水处理",
+            close=9.8,
+            change_pct=9.9,
+            turnover_rate=15.4,
+            amount=210000,
+            vol_ratio=3.0,
+            high=9.8,
+            low=8.95,
+            open=9.01,
+            pre_close=8.91,
+            stage_tag="加速",
+            candidate_source_tag="涨停入选/量比异动",
+        )
+        visible_mainlines = [
+            SectorOutput(
+                sector_name=name,
+                sector_source_type="concept",
+                sector_change_pct=5.0 - idx * 0.2,
+                sector_score=95.0 - idx,
+                sector_strength_rank=idx + 1,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                sector_continuity_days=3,
+                sector_comment="前排主线",
+            )
+            for idx, name in enumerate(["兵装重组概念", "光纤概念", "火力发电", "水力发电", "F5G概念"])
+        ]
+        hidden_mainline = SectorOutput(
+            sector_name="污水处理",
+            sector_source_type="concept",
+            sector_change_pct=3.1,
+            sector_score=88.0,
+            sector_strength_rank=6,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=2,
+            sector_comment="隐藏主线",
+        )
+
+        pools = service.classify_pools(
+            "2026-03-25",
+            [visible_stock, hidden_stock],
+            holdings=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=85000,
+                total_position_ratio=0.15,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=visible_mainlines + [hidden_mainline],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert [stock.ts_code for stock in pools.market_watch_pool] == ["002210.SZ"]
+        assert [stock.ts_code for stock in pools.trend_recognition_pool] == ["002210.SZ"]
+        assert [stock.ts_code for stock in pools.account_executable_pool] == ["002210.SZ"]
+
+    def test_new_pools_exclude_688_codes(self, service, mock_market_env_attack):
+        """
+        测试：三池新开仓应排除 688 开头的科创板股票。
+        """
+        star_stock = StockInput(
+            ts_code="688143.SH",
+            stock_name="科创主线票",
+            sector_name="光纤概念",
+            close=56.8,
+            change_pct=6.2,
+            turnover_rate=9.2,
+            amount=180000,
+            vol_ratio=2.1,
+            high=57.5,
+            low=55.0,
+            open=56.0,
+            pre_close=53.48,
+            stage_tag="修复",
+            candidate_source_tag="涨幅前列",
+        )
+        main_board_stock = StockInput(
+            ts_code="002902.SZ",
+            stock_name="主板主线票",
+            sector_name="F5G概念",
+            close=28.5,
+            change_pct=10.0,
+            turnover_rate=4.0,
+            amount=200000,
+            vol_ratio=1.4,
+            high=28.5,
+            low=27.5,
+            open=28.0,
+            pre_close=25.91,
+            stage_tag="加速",
+            candidate_source_tag="涨停入选",
+        )
+        visible_mainlines = [
+            SectorOutput(
+                sector_name="光纤概念",
+                sector_source_type="concept",
+                sector_change_pct=4.6,
+                sector_score=99.0,
+                sector_strength_rank=1,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                sector_continuity_days=4,
+                sector_comment="主线",
+                sector_tier=SectorTierTag.A,
+            ),
+            SectorOutput(
+                sector_name="F5G概念",
+                sector_source_type="concept",
+                sector_change_pct=4.2,
+                sector_score=96.0,
+                sector_strength_rank=2,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                sector_continuity_days=3,
+                sector_comment="主线",
+                sector_tier=SectorTierTag.A,
+            ),
+        ]
+
+        pools = service.classify_pools(
+            "2026-03-25",
+            [star_stock, main_board_stock],
+            holdings=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=85000,
+                total_position_ratio=0.15,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=visible_mainlines,
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert [stock.ts_code for stock in pools.market_watch_pool] == ["002902.SZ"]
+        assert all(not stock.ts_code.startswith("688") for stock in pools.market_watch_pool)
+        assert all(not stock.ts_code.startswith("688") for stock in pools.trend_recognition_pool)
+        assert all(not stock.ts_code.startswith("688") for stock in pools.account_executable_pool)
+
+    def test_new_pools_ignore_688_when_choosing_a_or_b_profiles(self, service, mock_market_env_attack):
+        """
+        测试：若 A 类主线只有 688 票，应忽略它并回退到非 688 的 B 类次主线。
+        """
+        star_a_stock = StockInput(
+            ts_code="688167.SH",
+            stock_name="科创A主线票",
+            sector_name="光纤概念",
+            close=340.0,
+            change_pct=5.5,
+            turnover_rate=8.0,
+            amount=260000,
+            vol_ratio=1.5,
+            high=345.0,
+            low=332.0,
+            open=334.0,
+            pre_close=322.0,
+            stage_tag="修复",
+            candidate_source_tag="涨幅前列",
+        )
+        main_board_b_stock = StockInput(
+            ts_code="002265.SZ",
+            stock_name="主板B主线票",
+            sector_name="兵装重组概念",
+            close=18.8,
+            change_pct=5.1,
+            turnover_rate=8.8,
+            amount=170000,
+            vol_ratio=1.5,
+            high=19.3,
+            low=17.4,
+            open=18.0,
+            pre_close=17.89,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        a_sector = SectorOutput(
+            sector_name="光纤概念",
+            sector_source_type="concept",
+            sector_change_pct=4.6,
+            sector_score=99.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="A主线",
+            sector_tier=SectorTierTag.A,
+        )
+        b_sector = SectorOutput(
+            sector_name="兵装重组概念",
+            sector_source_type="concept",
+            sector_change_pct=2.1,
+            sector_score=81.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.SUB_MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+            sector_comment="B次主线",
+            sector_tier=SectorTierTag.B,
+        )
+
+        pools = service.classify_pools(
+            "2026-03-25",
+            [star_a_stock, main_board_b_stock],
+            holdings=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=85000,
+                total_position_ratio=0.15,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[a_sector],
+                sub_mainline_sectors=[b_sector],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert [stock.ts_code for stock in pools.market_watch_pool] == ["002265.SZ"]
+        assert [stock.ts_code for stock in pools.trend_recognition_pool] == ["002265.SZ"]
+        assert [stock.ts_code for stock in pools.account_executable_pool] == ["002265.SZ"]
+
+    def test_sector_representatives_are_capped_at_four(self, service):
+        """
+        测试：单条主线的代表票应控制在 2-4 只，不应把整条线候选全部放进三池入口。
+        """
+        items = []
+        for idx in range(6):
+            items.append(
+                StockOutput(
+                    ts_code=f"00230{idx}.SZ",
+                    stock_name=f"主线票{idx}",
+                    sector_name="机器人",
+                    change_pct=7.0 - idx * 0.4,
+                    amount=220000 - idx * 10000,
+                    close=10.5 + idx,
+                    open=10.0 + idx,
+                    high=10.8 + idx,
+                    low=9.8 + idx,
+                    pre_close=9.9 + idx,
+                    turnover_rate=12.0 - idx * 0.5,
+                    vol_ratio=2.0 - idx * 0.1,
+                    stock_score=92.0 - idx,
+                    account_entry_score=88.0 - idx,
+                    stock_strength_tag=StockStrengthTag.STRONG,
+                    stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+                    stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+                    stock_core_tag=StockCoreTag.CORE,
+                    stock_pool_tag=StockPoolTag.MARKET_WATCH,
+                    sector_profile_tag=SectorProfileTag.A_MAINLINE,
+                    stock_role_tag=StockRoleTag.LEADER if idx == 0 else (
+                        StockRoleTag.MID_CAPTAIN if idx == 1 else StockRoleTag.FRONT
+                    ),
+                    day_strength_tag=DayStrengthTag.TREND_STRONG,
+                    structure_state_tag=StructureStateTag.DIVERGENCE if idx % 2 == 0 else StructureStateTag.REPAIR,
+                    next_tradeability_tag=NextTradeabilityTag.RETRACE_CONFIRM if idx % 2 == 0 else NextTradeabilityTag.BREAKTHROUGH,
+                )
+            )
+
+        selected = service._pick_sector_representatives(items)
+
+        assert 2 <= len(selected) <= 4
+
+    def test_sector_representatives_drop_follow_candidates_first(self, service):
+        """
+        测试：主线样本应优先删除跟风票，不把跟风票当代表样本。
+        """
+        leader = StockOutput(
+            ts_code="002401.SZ",
+            stock_name="龙头票",
+            sector_name="机器人",
+            change_pct=8.2,
+            amount=210000,
+            close=12.8,
+            open=12.0,
+            high=13.0,
+            low=11.9,
+            pre_close=11.82,
+            turnover_rate=14.0,
+            vol_ratio=2.3,
+            stock_score=95.0,
+            account_entry_score=82.0,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            sector_profile_tag=SectorProfileTag.A_MAINLINE,
+            stock_role_tag=StockRoleTag.LEADER,
+            day_strength_tag=DayStrengthTag.LIMIT_STRONG,
+            structure_state_tag=StructureStateTag.START,
+            next_tradeability_tag=NextTradeabilityTag.CHASE_ONLY,
+        )
+        follower = StockOutput(
+            ts_code="002402.SZ",
+            stock_name="跟风票",
+            sector_name="机器人",
+            change_pct=9.6,
+            amount=50000,
+            close=9.8,
+            open=9.2,
+            high=10.0,
+            low=9.1,
+            pre_close=8.95,
+            turnover_rate=26.0,
+            vol_ratio=3.0,
+            stock_score=88.0,
+            account_entry_score=20.0,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.CAUTION,
+            stock_tradeability_tag=StockTradeabilityTag.NOT_RECOMMENDED,
+            stock_core_tag=StockCoreTag.FOLLOW,
+            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            sector_profile_tag=SectorProfileTag.A_MAINLINE,
+            stock_role_tag=StockRoleTag.FOLLOW,
+            day_strength_tag=DayStrengthTag.SPIKE_FADE,
+            structure_state_tag=StructureStateTag.LATE_STAGE,
+            next_tradeability_tag=NextTradeabilityTag.CHASE_ONLY,
+        )
+
+        selected = service._pick_sector_representatives([leader, follower])
+
+        assert [stock.ts_code for stock in selected] == ["002401.SZ"]
+
+    def test_scored_stock_exposes_representative_role_tag(self, service, mock_market_env_attack):
+        """
+        测试：个股评分结果应透出主线样本角色标签，供前端直接展示。
+        """
+        stock = StockInput(
+            ts_code="002501.SZ",
+            stock_name="趋势核心票",
+            sector_name="机器人",
+            close=23.6,
+            change_pct=4.9,
+            turnover_rate=9.6,
+            amount=165000,
+            vol_ratio=1.8,
+            high=24.0,
+            low=22.4,
+            open=22.9,
+            pre_close=22.5,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        sector = SectorOutput(
+            sector_name="机器人",
+            sector_source_type="concept",
+            sector_change_pct=3.0,
+            sector_score=90.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+            sector_comment="主线",
+        )
+
+        output = service._score_stock(stock, mock_market_env_attack, {"机器人": sector})
+
+        assert output.representative_role_tag in {"中军", "趋势核心", "弹性前排"}
 
     def test_follow_stock_stays_out_of_formal_pools(self, service, mock_market_env_attack):
         """
@@ -599,6 +1635,202 @@ class TestStockFilter:
         )
 
         assert filtered == []
+
+    def test_hard_filter_removes_candidate_with_two_failures(self, service, mock_market_env_attack):
+        """
+        测试：若硬过滤条件有两条不满足，应直接从候选结果中移除
+        """
+        bad = StockInput(
+            ts_code="300888.SZ",
+            stock_name="情绪小票",
+            sector_name="边缘题材",
+            close=9.9,
+            change_pct=9.6,
+            turnover_rate=22.0,
+            amount=80000,
+            vol_ratio=2.8,
+            high=10.8,
+            low=9.2,
+            open=9.3,
+            pre_close=9.03,
+            candidate_source_tag="涨停入选",
+        )
+        good = StockInput(
+            ts_code="002200.SZ",
+            stock_name="趋势核心",
+            sector_name="算力",
+            close=25.5,
+            change_pct=5.4,
+            turnover_rate=9.5,
+            amount=180000,
+            vol_ratio=1.6,
+            high=26.2,
+            low=23.4,
+            open=24.7,
+            pre_close=24.19,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        sector = SectorOutput(
+            sector_name="算力",
+            sector_source_type="concept",
+            sector_change_pct=2.8,
+            sector_score=90.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="主线",
+        )
+
+        filtered = service.filter_with_context(
+            "2026-03-20",
+            [bad, good],
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[sector],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert [stock.ts_code for stock in filtered] == ["002200.SZ"]
+
+    def test_single_hard_filter_failure_does_not_remove_candidate(self, service, mock_market_env_attack):
+        """
+        测试：仅一条硬过滤条件不满足时，不应直接移除候选
+        """
+        stock = StockInput(
+            ts_code="002206.SZ",
+            stock_name="结构票",
+            sector_name="算力",
+            close=25.5,
+            change_pct=5.4,
+            turnover_rate=9.5,
+            amount=180000,
+            vol_ratio=1.6,
+            high=26.2,
+            low=23.4,
+            open=24.7,
+            pre_close=24.19,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        sector = SectorOutput(
+            sector_name="算力",
+            sector_source_type="concept",
+            sector_change_pct=2.8,
+            sector_score=90.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="主线",
+        )
+
+        filtered = service.filter_with_context(
+            "2026-03-20",
+            [stock],
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[sector],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=10000,
+                total_position_ratio=0.85,
+                holding_count=2,
+                today_new_buy_count=0,
+            ),
+            holdings=[],
+        )
+
+        assert [item.ts_code for item in filtered] == ["002206.SZ"]
+
+    def test_group_weaker_and_hot_weak_logic_candidate_is_filtered(self, service, mock_market_env_attack):
+        """
+        测试：同组里趋势明显偏弱，且高换手高波动但逻辑弱的票，应被硬过滤移除
+        """
+        leader_a = StockInput(
+            ts_code="002301.SZ",
+            stock_name="算力龙头A",
+            sector_name="算力",
+            close=31.5,
+            change_pct=6.8,
+            turnover_rate=10.2,
+            amount=260000,
+            vol_ratio=1.9,
+            high=31.9,
+            low=29.8,
+            open=30.1,
+            pre_close=29.49,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        leader_b = StockInput(
+            ts_code="002302.SZ",
+            stock_name="算力龙头B",
+            sector_name="算力",
+            close=28.4,
+            change_pct=5.6,
+            turnover_rate=9.8,
+            amount=210000,
+            vol_ratio=1.7,
+            high=28.8,
+            low=26.9,
+            open=27.2,
+            pre_close=26.89,
+            stage_tag="回调",
+            candidate_source_tag="涨幅前列",
+        )
+        weak = StockInput(
+            ts_code="002303.SZ",
+            stock_name="算力跟风",
+            sector_name="算力",
+            close=18.6,
+            change_pct=4.2,
+            turnover_rate=21.0,
+            amount=130000,
+            vol_ratio=1.1,
+            high=19.9,
+            low=17.9,
+            open=18.0,
+            pre_close=17.84,
+            stage_tag="震荡",
+            candidate_source_tag="涨幅前列",
+        )
+        sector = SectorOutput(
+            sector_name="算力",
+            sector_source_type="concept",
+            sector_change_pct=1.3,
+            sector_score=62.0,
+            sector_strength_rank=6,
+            sector_mainline_tag=SectorMainlineTag.FOLLOW,
+            sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.CAUTION,
+            sector_continuity_days=1,
+            sector_comment="跟风",
+        )
+
+        filtered = service.filter_with_context(
+            "2026-03-20",
+            [leader_a, leader_b, weak],
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                mainline_sectors=[],
+                sub_mainline_sectors=[],
+                follow_sectors=[sector],
+                trash_sectors=[],
+            ),
+        )
+
+        assert [stock.ts_code for stock in filtered] == ["002301.SZ", "002302.SZ"]
 
     def test_weak_not_recommended_stock_not_in_watch_pool(self, service, mock_market_env_attack):
         """

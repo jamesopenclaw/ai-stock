@@ -19,10 +19,10 @@ from app.data.tushare_client import tushare_client, normalize_ts_code
 from app.models.holding import Holding
 from app.core.database import async_session_factory
 from app.services.account_config_service import (
-    get_total_asset,
     get_config as get_account_config_from_db,
     update_config as update_account_config,
 )
+from app.services.portfolio_service import portfolio_service
 from sqlalchemy import select
 from loguru import logger
 
@@ -31,23 +31,7 @@ router = APIRouter()
 
 async def build_account_input(holdings: List[dict]) -> AccountInput:
     """根据实际持仓动态构建账户信息（总资产来自数据库配置）"""
-    market_value = sum(
-        h.get("holding_market_value") or (h.get("holding_qty", 0) * h.get("market_price", 0))
-        for h in holdings
-    )
-    total_asset = await get_total_asset()
-    available_cash = max(total_asset - market_value, 0)
-    total_position_ratio = market_value / total_asset if total_asset > 0 else 0
-    holding_count = len(holdings)
-
-    return AccountInput(
-        total_asset=total_asset,
-        available_cash=available_cash,
-        total_position_ratio=round(total_position_ratio, 4),
-        holding_count=holding_count,
-        today_new_buy_count=0,
-        t1_locked_positions=[]
-    )
+    return await portfolio_service.build_account_input_from_holdings(holdings)
 
 
 class AddPositionRequest(BaseModel):
@@ -91,10 +75,7 @@ async def get_stock_name(ts_code: str) -> str:
 
 async def get_holdings_from_db() -> List[dict]:
     """从数据库获取持仓"""
-    async with async_session_factory() as session:
-        result = await session.execute(select(Holding))
-        holdings = result.scalars().all()
-        return [h.to_dict() for h in holdings]
+    return await portfolio_service.get_holdings_from_db()
 
 
 async def save_holding_to_db(holding_data: dict) -> dict:
@@ -134,72 +115,14 @@ async def update_holding_in_db(ts_code: str, **kwargs) -> Optional[dict]:
         return None
 
 
-def _safe_float(val, default: float = 0.0) -> float:
-    try:
-        if val is None:
-            return default
-        v = float(val)
-        if v != v:  # NaN
-            return default
-        return v
-    except (TypeError, ValueError):
-        return default
-
-
 def refresh_holdings_price(holdings: List[dict]):
     """批量刷新持仓现价、昨收（统一复用个股详情链路，支持实时覆盖和交易日回退）"""
-    if not holdings:
-        return
-    try:
-        today = datetime.now().strftime("%Y%m%d")
-        for h in holdings:
-            ts_code = normalize_ts_code(h.get("ts_code") or "")
-            if not ts_code:
-                continue
-            detail = tushare_client.get_stock_detail(ts_code, today)
-            price = _safe_float(detail.get("close"), 0.0)
-            pre_close = _safe_float(detail.get("pre_close"), 0.0)
-            if price <= 0:
-                continue
-
-            h["ts_code"] = ts_code
-            h["stock_name"] = detail.get("stock_name") or h.get("stock_name") or ts_code
-            h["market_price"] = price
-            h["pre_close"] = pre_close or price
-            h["quote_time"] = detail.get("quote_time")
-            h["data_source"] = detail.get("data_source")
-
-            cost = _safe_float(h.get("cost_price"), 0.0)
-            qty = int(h.get("holding_qty") or 0)
-            if cost > 0:
-                h["pnl_pct"] = round((price - cost) / cost * 100, 2)
-            if qty > 0:
-                h["holding_market_value"] = round(qty * price, 2)
-    except Exception as e:
-        logger.error(f"刷新持仓现价失败: {e}")
+    portfolio_service.refresh_holdings_price(holdings)
 
 
 def enrich_holdings(holdings: List[dict]):
     """补充持股天数、浮盈金额、当日盈亏金额（依赖 refresh_holdings_price 已写入 market_price / pre_close）"""
-    today = datetime.now().date()
-    for h in holdings:
-        try:
-            buy = datetime.strptime(str(h.get("buy_date", "")), "%Y-%m-%d").date()
-            h["holding_days"] = max(0, (today - buy).days)
-        except Exception:
-            h["holding_days"] = 0
-
-        qty = int(h.get("holding_qty") or 0)
-        cost = _safe_float(h.get("cost_price"), 0.0)
-        price = _safe_float(h.get("market_price"), 0.0)
-        pre_close = h.get("pre_close")
-        if pre_close is None:
-            pre_close = price
-        else:
-            pre_close = _safe_float(pre_close, price)
-
-        h["pnl_amount"] = round((price - cost) * qty, 2)
-        h["today_pnl_amount"] = round((price - pre_close) * qty, 2)
+    portfolio_service.enrich_holdings(holdings)
 
 
 @router.get("/config", response_model=ApiResponse)

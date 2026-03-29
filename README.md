@@ -75,11 +75,16 @@ cd ai-stock
 
 # 2. 配置环境变量
 cp .env.example .env
-# 编辑 .env，填入 TUSHARE_TOKEN
+# 编辑 .env，填入 TUSHARE_TOKEN / SECRET_KEY
 
-# 3. 启动服务
+# 3. 初始化数据库结构（本地直接运行后端时需要）
+alembic upgrade head
+
+# 4. 启动服务
 docker-compose up -d
 ```
+
+使用 `docker-compose up -d` 时，后端容器会先执行 `alembic upgrade head`，再启动 API 服务。
 
 ### 配置说明
 
@@ -88,6 +93,9 @@ docker-compose up -d
 | `TUSHARE_TOKEN` | Tushare API Token |
 | `DATABASE_URL` | PostgreSQL 连接字符串 |
 | `REDIS_URL` | Redis 连接字符串 |
+| `SECRET_KEY` | 应用密钥，生产环境必须显式设置 |
+| `LLM_API_KEY` | 启用 LLM 时必填 |
+| `LLM_MODEL` | 启用 LLM 时必填 |
 
 ## 项目结构
 

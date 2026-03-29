@@ -12,6 +12,7 @@ from app.models.schemas import (
     SellPointResponse,
     FullDecisionResponse,
     DecisionSummary,
+    LlmCallStatus,
     ApiResponse
 )
 from app.services.sell_point import sell_point_service
@@ -23,6 +24,7 @@ from app.services.buy_point import buy_point_service
 from app.data.tushare_client import tushare_client
 from app.models.schemas import StockInput
 from app.services.decision_context import decision_context_service
+from app.services.decision_flow import decision_flow_service
 from app.services.review_snapshot import review_snapshot_service
 from app.services.llm_explainer import llm_explainer_service
 
@@ -75,6 +77,7 @@ def build_risk_alerts(market_env, account: AccountInput, buy_analysis, holdings)
 async def analyze_sell_point(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
     force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 解读缓存"),
+    include_llm: bool = Query(True, description="是否包含 LLM 卖点解读"),
 ) -> ApiResponse:
     """
     卖点分析
@@ -101,11 +104,19 @@ async def analyze_sell_point(
             market_env=context.market_env,
             sector_scan=context.sector_scan,
         )
-        llm_summary, llm_status = await llm_explainer_service.rewrite_sell_points_with_status(
-            result,
-            context.market_env,
-            force_refresh=force_llm_refresh,
+        llm_summary = None
+        llm_status = LlmCallStatus(
+            enabled=False,
+            success=False,
+            status="skipped",
+            message="已跳过 LLM 卖点解读",
         )
+        if include_llm:
+            llm_summary, llm_status = await llm_explainer_service.rewrite_sell_points_with_status(
+                result,
+                context.market_env,
+                force_refresh=force_llm_refresh,
+            )
 
         return ApiResponse(
             data={
@@ -138,49 +149,40 @@ async def get_decision_summary(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        context = await decision_context_service.build_context(
+        bundle = await decision_flow_service.build_candidate_analysis(
             trade_date,
             top_gainers=100,
             include_holdings=False,
         )
-        scored_stocks = stock_filter_service.filter_with_context(
-            trade_date,
-            context.stocks,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-        )
         account_output = account_adapter_service.adapt(
             trade_date,
-            context.account,
-            context.holdings,
-            market_env=context.market_env,
-        )
-        stock_pools = stock_filter_service.classify_pools(
-            trade_date,
-            context.stocks,
-            context.holdings_list,
-            context.account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
+            bundle.context.account,
+            bundle.context.holdings,
+            market_env=bundle.context.market_env,
         )
         buy_analysis = buy_point_service.analyze(
             trade_date,
-            context.stocks,
-            context.account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
-            stock_pools=stock_pools,
+            bundle.context.stocks,
+            bundle.context.account,
+            market_env=bundle.context.market_env,
+            sector_scan=bundle.context.sector_scan,
+            scored_stocks=bundle.scored_stocks,
+            stock_pools=bundle.stock_pools,
+            review_bias_profile=bundle.review_bias_profile,
         )
-        risk_alerts = build_risk_alerts(context.market_env, context.account, buy_analysis, context.holdings)
+        risk_alerts = build_risk_alerts(
+            bundle.context.market_env,
+            bundle.context.account,
+            buy_analysis,
+            bundle.context.holdings,
+        )
 
         # 生成摘要
         summary = _generate_summary(
             trade_date,
-            context.market_env,
+            bundle.context.market_env,
             account_output,
-            context.holdings
+            bundle.context.holdings
         )
 
         return ApiResponse(
@@ -204,43 +206,26 @@ async def analyze_buy_point(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        context = await decision_context_service.build_context(
+        bundle = await decision_flow_service.build_candidate_analysis(
             trade_date,
             top_gainers=max(100, min(limit, 200)),
             include_holdings=False,
         )
-        scored_stocks = stock_filter_service.filter_with_context(
-            trade_date,
-            context.stocks,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-        )
-        stock_pools = stock_filter_service.classify_pools(
-            trade_date,
-            context.stocks,
-            context.holdings_list,
-            context.account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
-        )
         result = buy_point_service.analyze(
             trade_date,
-            context.stocks,
-            context.account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
-            stock_pools=stock_pools,
+            bundle.context.stocks,
+            bundle.context.account,
+            market_env=bundle.context.market_env,
+            sector_scan=bundle.context.sector_scan,
+            scored_stocks=bundle.scored_stocks,
+            stock_pools=bundle.stock_pools,
+            review_bias_profile=bundle.review_bias_profile,
         )
-        try:
-            await review_snapshot_service.save_analysis_snapshot(
-                trade_date,
-                stock_pools=stock_pools,
-                buy_analysis=result,
-            )
-        except Exception as exc:
-            logger.warning("买点页快照写入失败: %s", exc)
+        await review_snapshot_service.save_analysis_snapshot_safe(
+            trade_date,
+            stock_pools=bundle.stock_pools,
+            buy_analysis=result,
+        )
 
         return ApiResponse(
             data={
@@ -269,95 +254,68 @@ async def full_decision_analyze(
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        context = await decision_context_service.build_context(
+        bundle = await decision_flow_service.build_full_decision(
             trade_date,
             top_gainers=200,
-            include_holdings=True,
         )
-        scored_stocks = stock_filter_service.filter_with_context(
-            trade_date,
-            context.stocks,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-        )
-
-        stock_pools = stock_filter_service.classify_pools(
-            trade_date,
-            context.stocks,
-            context.holdings_list,
-            context.account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
-        )
-
-        # 4. 买点分析
-        buy_analysis = buy_point_service.analyze(
-            trade_date,
-            context.stocks,
-            context.account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
-            stock_pools=stock_pools,
-        )
-
-        # 5. 卖点分析
-        sell_analysis = sell_point_service.analyze(
-            trade_date,
-            context.holdings,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-        )
-        stock_pools = stock_filter_service.attach_sell_analysis(stock_pools, sell_analysis)
 
         # 6. 账户适配
         account_fit = account_adapter_service.adapt(
             trade_date,
-            context.account,
-            context.holdings,
-            market_env=context.market_env,
+            bundle.context.account,
+            bundle.context.holdings,
+            market_env=bundle.context.market_env,
         )
 
         # 7. 执行摘要
-        summary = _generate_summary(trade_date, context.market_env, account_fit, context.holdings)
-        risk_alerts = build_risk_alerts(context.market_env, context.account, buy_analysis, context.holdings)
+        summary = _generate_summary(
+            trade_date,
+            bundle.context.market_env,
+            account_fit,
+            bundle.context.holdings,
+        )
+        risk_alerts = build_risk_alerts(
+            bundle.context.market_env,
+            bundle.context.account,
+            bundle.buy_analysis,
+            bundle.context.holdings,
+        )
         snapshot_count = await review_snapshot_service.save_analysis_snapshot(
             trade_date,
-            stock_pools,
-            buy_analysis,
+            bundle.stock_pools,
+            bundle.buy_analysis,
         )
 
         return ApiResponse(
             data={
                 "trade_date": trade_date,
                 "market_env": {
-                    "market_env_tag": context.market_env.market_env_tag.value,
-                    "breakout_allowed": context.market_env.breakout_allowed,
-                    "risk_level": context.market_env.risk_level.value,
-                    "market_comment": context.market_env.market_comment
+                    "market_env_tag": bundle.context.market_env.market_env_tag.value,
+                    "breakout_allowed": bundle.context.market_env.breakout_allowed,
+                    "risk_level": bundle.context.market_env.risk_level.value,
+                    "market_comment": bundle.context.market_env.market_comment
                 },
                 "sector_scan": {
-                    "mainline_sectors": [s.model_dump() for s in context.sector_scan.mainline_sectors[:5]],
-                    "sub_mainline_sectors": [s.model_dump() for s in context.sector_scan.sub_mainline_sectors[:5]],
-                    "follow_sectors": [s.model_dump() for s in context.sector_scan.follow_sectors[:10]],
-                    "trash_sectors": [s.model_dump() for s in context.sector_scan.trash_sectors[:10]],
-                    "mainline_count": len(context.sector_scan.mainline_sectors),
-                    "sub_mainline_count": len(context.sector_scan.sub_mainline_sectors),
+                    "mainline_sectors": [s.model_dump() for s in bundle.context.sector_scan.mainline_sectors[:5]],
+                    "sub_mainline_sectors": [s.model_dump() for s in bundle.context.sector_scan.sub_mainline_sectors[:5]],
+                    "follow_sectors": [s.model_dump() for s in bundle.context.sector_scan.follow_sectors[:10]],
+                    "trash_sectors": [s.model_dump() for s in bundle.context.sector_scan.trash_sectors[:10]],
+                    "mainline_count": len(bundle.context.sector_scan.mainline_sectors),
+                    "sub_mainline_count": len(bundle.context.sector_scan.sub_mainline_sectors),
                 },
                 "stock_pools": {
-                    "market_watch_count": len(stock_pools.market_watch_pool),
-                    "account_executable_count": len(stock_pools.account_executable_pool),
-                    "holding_process_count": len(stock_pools.holding_process_pool),
+                    "market_watch_count": len(bundle.stock_pools.market_watch_pool),
+                    "account_executable_count": len(bundle.stock_pools.account_executable_pool),
+                    "holding_process_count": len(bundle.stock_pools.holding_process_pool),
                 },
                 "buy_analysis": {
-                    "available_count": len(buy_analysis.available_buy_points),
-                    "observe_count": len(buy_analysis.observe_buy_points),
+                    "available_count": len(bundle.buy_analysis.available_buy_points),
+                    "observe_count": len(bundle.buy_analysis.observe_buy_points),
                 },
                 "sell_analysis": {
-                    "hold_count": len(sell_analysis.hold_positions),
-                    "reduce_count": len(sell_analysis.reduce_positions),
-                    "sell_count": len(sell_analysis.sell_positions),
+                    "hold_count": len(bundle.sell_analysis.hold_positions),
+                    "reduce_count": len(bundle.sell_analysis.reduce_positions),
+                    "sell_count": len(bundle.sell_analysis.sell_positions),
                 },
                 "account_fit": account_fit.model_dump(),
                 "summary": summary.model_dump(),
@@ -372,10 +330,18 @@ async def full_decision_analyze(
 @router.get("/review-stats", response_model=ApiResponse)
 async def get_review_stats(
     limit_days: int = Query(10, description="最近交易日数量", ge=1, le=30),
+    refresh_outcomes: bool = Query(False, description="是否同步补齐复盘收益"),
 ) -> ApiResponse:
     """获取最近若干交易日的分层复盘统计。"""
     try:
-        data = await review_snapshot_service.get_review_stats(limit_days=limit_days)
+        data = await review_snapshot_service.get_review_stats(
+            limit_days=limit_days,
+            refresh_outcomes=refresh_outcomes,
+        )
+        if data.get("pending_outcome_count", 0) > 0 and not data.get("refresh_in_progress"):
+            started = review_snapshot_service.ensure_background_refresh(limit_days=limit_days)
+            if started:
+                data["refresh_in_progress"] = True
         return ApiResponse(data=data)
     except Exception as e:
         return ApiResponse(code=500, message=f"获取复盘统计失败: {str(e)}")

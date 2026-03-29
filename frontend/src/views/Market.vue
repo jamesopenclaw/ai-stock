@@ -180,21 +180,44 @@ const brokenBoardClass = (r) => {
 
 const isRealtimeSource = (source) => String(source || '').startsWith('realtime_')
 
-const quoteSourceLabel = (source) => {
-  if (!source) return '日线回退'
-  if (String(source).startsWith('realtime_')) return '盘中实时'
-  if (source === 'mock') return '模拟数据'
-  return '日线回退'
+const normalizeTradeDate = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (raw.length === 8) return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+  return raw
 }
 
-const quoteMetaLine = (source, quoteTime, fallbackTradeDate) => {
-  const label = quoteSourceLabel(source)
-  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
-  const raw = String(fallbackTradeDate || '')
-  if (raw.length === 8) {
-    return `${label} ${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+const quoteSourceLabel = (source, sourceTradeDate, requestedTradeDate) => {
+  if (!source) return '日线数据'
+  if (String(source).startsWith('realtime_')) return '盘中实时'
+  if (source === 'mock') return '模拟数据'
+  const normalizedSourceDate = normalizeTradeDate(sourceTradeDate)
+  const normalizedRequestedDate = normalizeTradeDate(requestedTradeDate)
+  if (normalizedSourceDate && normalizedRequestedDate && normalizedSourceDate !== normalizedRequestedDate) {
+    return '日线回退'
   }
+  return '当日收盘'
+}
+
+const quoteMetaLine = (source, quoteTime, sourceTradeDate, requestedTradeDate = displayDate.value) => {
+  const normalizedSourceDate = normalizeTradeDate(sourceTradeDate)
+  const label = quoteSourceLabel(source, normalizedSourceDate, requestedTradeDate)
+  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
+  if (normalizedSourceDate) return `${label} ${normalizedSourceDate}`
   return label
+}
+
+const shouldShowSourceNotice = (source, sourceTradeDate, requestedTradeDate) => {
+  const normalizedSourceDate = normalizeTradeDate(sourceTradeDate)
+  const normalizedRequestedDate = normalizeTradeDate(requestedTradeDate)
+  if (!source) return false
+  if (source === 'mock') return true
+  if (isRealtimeSource(source)) return true
+  return Boolean(
+    normalizedSourceDate &&
+    normalizedRequestedDate &&
+    normalizedSourceDate !== normalizedRequestedDate
+  )
 }
 
 const isMixedMode = (indexRows, stats) => {
@@ -221,25 +244,51 @@ const loadData = async () => {
     marketStats.value = statsRes.data.data
     resolvedDate.value = envRes.data.data?.resolved_trade_date || indexRes.data.data?.resolved_trade_date || statsRes.data.data?.resolved_trade_date || ''
     const firstIndex = indexData.value?.[0]
-    indexNotice.value = firstIndex
-      ? `指数行情当前使用${quoteMetaLine(firstIndex.data_source, firstIndex.quote_time, firstIndex.trade_date)}；情绪统计仍按 ${statsRes.data.data?.resolved_trade_date || resolvedDate.value || tradeDate} 口径计算。`
+    indexNotice.value = firstIndex && shouldShowSourceNotice(
+      firstIndex.data_source,
+      firstIndex.trade_date,
+      tradeDate
+    )
+      ? `指数行情当前使用${quoteMetaLine(firstIndex.data_source, firstIndex.quote_time, firstIndex.trade_date, tradeDate)}；情绪统计按 ${statsRes.data.data?.resolved_trade_date || resolvedDate.value || tradeDate} 口径计算。`
       : ''
     const turnoverText = quoteMetaLine(
       statsRes.data.data?.turnover_data_source,
       statsRes.data.data?.turnover_quote_time,
-      statsRes.data.data?.resolved_trade_date?.replaceAll('-', '')
+      statsRes.data.data?.resolved_trade_date,
+      tradeDate
     )
     const breadthText = quoteMetaLine(
       statsRes.data.data?.up_down_data_source,
       statsRes.data.data?.up_down_quote_time,
-      statsRes.data.data?.resolved_trade_date?.replaceAll('-', '')
+      statsRes.data.data?.resolved_trade_date,
+      tradeDate
     )
     const limitText = quoteMetaLine(
       statsRes.data.data?.limit_stats_data_source,
       statsRes.data.data?.limit_stats_quote_time,
-      statsRes.data.data?.resolved_trade_date?.replaceAll('-', '')
+      statsRes.data.data?.resolved_trade_date,
+      tradeDate
     )
-    statsNotice.value = `涨跌家数使用${breadthText}，成交额使用${turnoverText}；涨跌停和炸板率使用${limitText}。`
+    const shouldShowStatsNotice = [
+      shouldShowSourceNotice(
+        statsRes.data.data?.up_down_data_source,
+        statsRes.data.data?.resolved_trade_date,
+        tradeDate
+      ),
+      shouldShowSourceNotice(
+        statsRes.data.data?.turnover_data_source,
+        statsRes.data.data?.resolved_trade_date,
+        tradeDate
+      ),
+      shouldShowSourceNotice(
+        statsRes.data.data?.limit_stats_data_source,
+        statsRes.data.data?.resolved_trade_date,
+        tradeDate
+      )
+    ].some(Boolean)
+    statsNotice.value = shouldShowStatsNotice
+      ? `涨跌家数使用${breadthText}，成交额使用${turnoverText}；涨跌停和炸板率使用${limitText}。`
+      : ''
     const notices = []
     if (isMixedMode(indexData.value, statsRes.data.data)) {
       notices.push(`当前环境判断使用混合口径：指数已切到盘中实时，但情绪指标仍有部分沿用 ${statsRes.data.data?.resolved_trade_date || resolvedDate.value || tradeDate}。`)

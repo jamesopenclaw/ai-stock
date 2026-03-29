@@ -14,6 +14,7 @@ from app.models.schemas import (  # noqa: E402
     BuySignalTag,
     MarketEnvOutput,
     MarketEnvTag,
+    NextTradeabilityTag,
     RiskLevel,
     StockContinuityTag,
     StockCoreTag,
@@ -49,6 +50,7 @@ def _sample_scored_stock(pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE):
         stock_core_tag=StockCoreTag.CORE,
         stock_pool_tag=pool_tag,
         structure_state_tag=StructureStateTag.START,
+        next_tradeability_tag=NextTradeabilityTag.RETRACE_CONFIRM,
         stock_falsification_cond="跌破MA10",
         stock_comment="趋势结构完整",
     )
@@ -294,12 +296,115 @@ async def test_buy_point_sop_service_marks_add_position_context(monkeypatch):
 
     assert result.account_context.current_use == "加仓"
     assert "同一只股票持仓" in result.account_context.same_direction_exposure
+    assert result.account_context.account_conclusion == "已有同一只股票持仓，只能按加仓语境处理"
     assert result.intraday_judgement.conclusion == "等确认"
     assert result.order_plan.low_absorb_price == "26.91-27.07"
     assert result.order_plan.breakout_price == "27.73-27.89"
     assert result.order_plan.give_up_price == "27.87"
     assert result.order_plan.below_no_buy == "26.50"
     assert "先看回踩后能否企稳" in result.order_plan.trigger_condition
+
+
+def test_buy_point_sop_account_context_blocks_breakthrough_when_weak_holding_pending():
+    account = SimpleNamespace(
+        total_asset=100000,
+        available_cash=78000,
+        total_position_ratio=0.22,
+        holding_count=1,
+        today_new_buy_count=0,
+    )
+    market_env = SimpleNamespace(market_env_tag=MarketEnvTag.ATTACK)
+    target_stock = _sample_scored_stock()
+    target_stock.sector_name = "芯片"
+    target_stock.next_tradeability_tag = NextTradeabilityTag.BREAKTHROUGH
+    exposure = buy_point_sop_service._build_direction_exposure(
+        "002463.SZ",
+        "芯片",
+        [{"ts_code": "000001.SZ", "sector_name": "银行"}],
+        "2026-03-23",
+    )
+
+    account_context = buy_point_sop_service._build_account_context(
+        account,
+        market_env,
+        exposure,
+        target_stock,
+        "002463.SZ",
+        [
+            {
+                "ts_code": "000001.SZ",
+                "stock_name": "弱票",
+                "sector_name": "银行",
+                "holding_market_value": 12000,
+                "pnl_pct": -5.2,
+                "can_sell_today": True,
+            }
+        ],
+    )
+    advice = buy_point_sop_service._build_position_advice(
+        account,
+        market_env,
+        account_context,
+        exposure,
+        SimpleNamespace(buy_point_level="A"),
+        SimpleNamespace(conclusion="买"),
+        SimpleNamespace(below_no_buy="27.20"),
+    )
+
+    assert "先处理旧仓" in account_context.account_conclusion
+    assert advice.suggestion == "不出手"
+    assert "先处理旧仓" in advice.reason
+
+
+def test_buy_point_sop_account_context_warns_same_sector_exposure_for_new_position():
+    account = SimpleNamespace(
+        total_asset=100000,
+        available_cash=80000,
+        total_position_ratio=0.2,
+        holding_count=1,
+        today_new_buy_count=0,
+    )
+    market_env = SimpleNamespace(market_env_tag=MarketEnvTag.ATTACK)
+    target_stock = _sample_scored_stock()
+    target_stock.sector_name = "算力"
+    target_stock.next_tradeability_tag = NextTradeabilityTag.RETRACE_CONFIRM
+    exposure = buy_point_sop_service._build_direction_exposure(
+        "002463.SZ",
+        "算力",
+        [{"ts_code": "300010.SZ", "sector_name": "算力"}],
+        "2026-03-23",
+    )
+
+    account_context = buy_point_sop_service._build_account_context(
+        account,
+        market_env,
+        exposure,
+        target_stock,
+        "002463.SZ",
+        [
+            {
+                "ts_code": "300010.SZ",
+                "stock_name": "算力先手仓",
+                "sector_name": "算力",
+                "holding_market_value": 15000,
+                "pnl_pct": 2.3,
+                "can_sell_today": True,
+            }
+        ],
+    )
+    advice = buy_point_sop_service._build_position_advice(
+        account,
+        market_env,
+        account_context,
+        exposure,
+        SimpleNamespace(buy_point_level="A"),
+        SimpleNamespace(conclusion="买"),
+        SimpleNamespace(below_no_buy="17.80"),
+    )
+
+    assert "已有同板块持仓" in account_context.account_conclusion
+    assert advice.suggestion == "轻仓试错"
+    assert "已有同板块持仓" in advice.reason
 
 
 def test_buy_point_sop_breakout_price_stays_above_low_absorb():

@@ -60,6 +60,12 @@ const routes = [
     name: 'LlmLogs',
     meta: { title: 'LLM调用记录' },
     component: () => import('../views/LlmLogs.vue')
+  },
+  {
+    path: '/tasks',
+    name: 'TaskRuns',
+    meta: { title: '任务调度' },
+    component: () => import('../views/TaskRuns.vue')
   }
 ]
 

@@ -12,82 +12,171 @@
             >
               实际候选日 {{ poolsData.resolved_trade_date }}
             </span>
+            <span
+              v-if="poolsData.sector_scan_trade_date && poolsData.sector_scan_trade_date !== displayDate"
+              class="header-date"
+            >
+              板块请求日 {{ poolsData.sector_scan_trade_date }}
+            </span>
+            <span
+              v-if="poolsData.sector_scan_resolved_trade_date"
+              class="header-date"
+            >
+              板块实际日 {{ poolsData.sector_scan_resolved_trade_date }}
+            </span>
           </div>
           <div class="header-actions">
-            <el-button @click="loadData()" :loading="loading">刷新</el-button>
-            <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
+            <el-button @click="loadData({ refresh: true })" :loading="loading">刷新</el-button>
           </div>
         </div>
       </template>
 
       <el-skeleton v-if="loading" :rows="8" animated />
       <template v-else>
+        <el-alert
+          v-if="loadError"
+          :title="loadError"
+          type="error"
+          show-icon
+          :closable="false"
+          class="page-alert"
+        />
         <div class="decision-overview">
-          <div class="overview-main">
-            <div class="overview-badge" :class="overviewBadgeClass">
-              {{ overviewBadge }}
+          <div v-if="focusSector" class="focus-context">
+            <div class="focus-context-copy">
+              当前按 <strong>{{ focusSector }}</strong> 方向查看三池，相关标的会优先排到前面。
             </div>
-            <div class="overview-copy">
-              <div class="overview-title">{{ overviewTitle }}</div>
-              <div class="overview-desc">{{ overviewDesc }}</div>
-              <div v-if="poolsData.llm_summary?.page_summary" class="overview-llm">
-                {{ poolsData.llm_summary.page_summary }}
+            <div class="focus-context-actions">
+              <el-switch v-model="focusOnly" size="small" inline-prompt active-text="只看当前方向" inactive-text="全部" />
+              <el-button link type="primary" size="small" @click="clearFocusSector">清除方向</el-button>
+            </div>
+          </div>
+          <div class="overview-hero">
+            <div class="overview-main">
+              <div class="overview-badge" :class="overviewBadgeClass">
+                {{ overviewBadge }}
+              </div>
+              <div class="overview-copy">
+                <div class="overview-title">{{ overviewTitle }}</div>
+                <div class="overview-desc">{{ overviewDesc }}</div>
               </div>
             </div>
-          </div>
-
-          <div class="overview-stats">
-            <div class="stat-card stat-market">
-              <span class="stat-label">市场观察</span>
-              <strong class="stat-value">{{ marketCount }}</strong>
-              <span class="stat-tip">看方向和最强结构</span>
-            </div>
-            <div class="stat-card stat-trend">
-              <span class="stat-label">趋势辨识</span>
-              <strong class="stat-value">{{ trendCount }}</strong>
-              <span class="stat-tip">看结构和持续生命力</span>
-            </div>
-            <div class="stat-card stat-account">
-              <span class="stat-label">账户可参与</span>
-              <strong class="stat-value">{{ accountCount }}</strong>
-              <span class="stat-tip">满足账户准入才动手</span>
-            </div>
-            <div class="stat-card stat-holding">
-              <span class="stat-label">持仓处理</span>
-              <strong class="stat-value">{{ holdingCount }}</strong>
-              <span class="stat-tip">优先处理已有仓位</span>
-            </div>
-          </div>
-
-          <div class="overview-rules">
-            <div v-for="rule in overviewRules" :key="rule" class="rule-chip">
-              {{ rule }}
-            </div>
-          </div>
-
-          <div v-if="llmStatusVisible" class="llm-status" :class="llmStatusClass">
-            <span class="llm-status-label">LLM 状态</span>
-            <span class="llm-status-text">{{ llmStatusText }}</span>
-          </div>
-
-          <div v-if="topFocusItems.length" class="top-focus">
-            <div class="top-focus-title">今天先看</div>
-            <div v-if="poolsData.llm_summary?.top_focus_summary" class="top-focus-summary">
-              {{ poolsData.llm_summary.top_focus_summary }}
-            </div>
-            <div class="top-focus-list">
-              <div v-for="item in topFocusItems" :key="`${item.poolKey}-${item.ts_code}`" class="top-focus-item">
-                <span class="top-focus-rank">{{ item.rank }}</span>
-                <div class="top-focus-main">
-                  <strong>{{ item.orderLabel }}{{ item.stock_name }}</strong>
-                  <span class="top-focus-meta">{{ item.meta }}</span>
-                </div>
-                <div class="top-focus-trigger">
-                  <span class="top-focus-trigger-label">重点</span>
-                  <span class="top-focus-trigger-text">{{ item.focus }}</span>
+            <aside class="overview-side">
+              <div class="overview-side-head">
+                <span class="section-kicker">快速判断</span>
+                <span class="overview-side-caption">{{ compactRuleSummary }}</span>
+              </div>
+              <div class="overview-mini-stats">
+                <div v-for="item in compactStatItems" :key="item.key" class="overview-mini-stat" :class="`overview-mini-stat-${item.key}`">
+                  <span class="overview-mini-label">{{ item.label }}</span>
+                  <strong class="overview-mini-value">{{ item.value }}</strong>
+                  <span class="overview-mini-tip">{{ item.tip }}</span>
                 </div>
               </div>
+              <div class="overview-side-actions">
+                <el-button v-if="focusSector" text @click="router.push('/sectors')">回板块扫描</el-button>
+                <el-button text type="primary" @click="router.push({ path: '/buy-point', query: focusSector ? { focus_sector: focusSector } : {} })">
+                  去买点分析
+                </el-button>
+              </div>
+            </aside>
+          </div>
+
+          <div class="decision-rail">
+            <div class="section-head">
+              <div>
+                <div class="section-kicker">今日流程</div>
+                <div class="section-title">先按这个顺序处理三池</div>
+              </div>
             </div>
+            <div class="decision-rail-grid">
+              <article
+                v-for="step in decisionSteps"
+                :key="step.key"
+                class="decision-step-card"
+                :class="[`decision-step-card-${step.tone}`, { 'decision-step-card-active': activeTab === step.tab }]"
+              >
+                <div class="decision-step-head">
+                  <span class="decision-step-rank">{{ step.rank }}</span>
+                  <div class="decision-step-copy">
+                    <div class="decision-step-title">{{ step.title }}</div>
+                    <div class="decision-step-desc">{{ step.desc }}</div>
+                  </div>
+                </div>
+                <div class="decision-step-meta">
+                  <span class="decision-step-chip">{{ step.countLabel }}</span>
+                  <span class="decision-step-chip">{{ step.rule }}</span>
+                </div>
+                <div class="decision-step-actions">
+                  <el-button size="small" @click="activeTab = step.tab">查看这一池</el-button>
+                  <span class="decision-step-hint">{{ step.hint }}</span>
+                </div>
+              </article>
+            </div>
+          </div>
+          <div v-if="topFocusItems.length || reviewInsight || focusSector" class="decision-support-grid">
+            <section v-if="topFocusItems.length" class="support-card support-card-focus">
+              <div class="support-card-head">
+                <div>
+                  <div class="section-kicker">优先名单</div>
+                  <div class="section-title">今天先盯这些票</div>
+                </div>
+              </div>
+              <div class="top-focus-list">
+                <div v-for="item in topFocusItems" :key="`${item.poolKey}-${item.ts_code}`" class="top-focus-item">
+                  <span class="top-focus-rank">{{ item.rank }}</span>
+                  <div class="top-focus-main">
+                    <strong>{{ item.orderLabel }}{{ item.stock_name }}</strong>
+                    <span class="top-focus-meta">{{ item.meta }}</span>
+                  </div>
+                  <div class="top-focus-trigger">
+                    <span class="top-focus-trigger-label">重点</span>
+                    <span class="top-focus-trigger-text">{{ item.focus }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="reviewInsight || focusSector" class="support-card support-card-insight">
+              <div class="support-card-head">
+                <div>
+                  <div class="section-kicker">辅助判断</div>
+                  <div class="section-title">复盘和方向怎么影响今天</div>
+                </div>
+              </div>
+              <div v-if="focusSector" class="focus-hit-inline">
+                <div class="focus-hit-inline-title">{{ focusSector }} 当前命中</div>
+                <div class="focus-hit-inline-grid">
+                  <div class="focus-hit-inline-item">
+                    <span>账户池</span>
+                    <strong>{{ focusMatches.account }}</strong>
+                  </div>
+                  <div class="focus-hit-inline-item">
+                    <span>趋势池</span>
+                    <strong>{{ focusMatches.trend }}</strong>
+                  </div>
+                  <div class="focus-hit-inline-item">
+                    <span>观察池</span>
+                    <strong>{{ focusMatches.market }}</strong>
+                  </div>
+                </div>
+                <div class="focus-hit-summary">{{ focusSummary }}</div>
+              </div>
+              <div v-if="reviewInsight" class="review-compact">
+                <div class="review-compact-row review-compact-row-do">
+                  <span class="review-compact-label">优先看</span>
+                  <span class="review-compact-text">{{ reviewInsight.doText }}</span>
+                </div>
+                <div class="review-compact-row review-compact-row-watch">
+                  <span class="review-compact-label">先观察</span>
+                  <span class="review-compact-text">{{ reviewInsight.watchText }}</span>
+                </div>
+                <div class="review-compact-row review-compact-row-avoid">
+                  <span class="review-compact-label">暂时少做</span>
+                  <span class="review-compact-text">{{ reviewInsight.avoidText }}</span>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
 
@@ -101,7 +190,7 @@
               <article
                 v-for="stock in marketPool"
                 :key="stock.ts_code"
-                class="signal-card signal-card-market"
+                :class="['signal-card', 'signal-card-market', { 'signal-card-focused': matchesFocusSector(stock) }]"
               >
                 <div class="signal-card-header">
                   <div>
@@ -110,6 +199,14 @@
                   </div>
                   <div class="signal-badges">
                     <el-tag size="small" type="primary">{{ stock.candidate_bucket_tag || '观察补充' }}</el-tag>
+                    <el-tag v-if="stock.representative_role_tag" size="small" type="danger">
+                      {{ stock.representative_role_tag }}
+                    </el-tag>
+                    <el-tooltip v-if="stock.review_bias_label" :content="stock.review_bias_reason || stock.review_bias_label" placement="top">
+                      <el-tag size="small" :type="reviewBiasTagType(stock.review_bias_label)">
+                        {{ stock.review_bias_label }}
+                      </el-tag>
+                    </el-tooltip>
                     <el-tag size="small" type="info">{{ stock.stock_core_tag }}</el-tag>
                   </div>
                 </div>
@@ -118,9 +215,15 @@
                   <span>{{ stock.sector_name || '无板块信息' }}</span>
                   <span>{{ stock.candidate_source_tag || '无来源标记' }}</span>
                 </div>
+                <div v-if="stock.representative_role_tag" class="sample-role-line">
+                  {{ representativeRoleLine(stock) }}
+                </div>
 
                 <div class="signal-intent signal-intent-market">
                   {{ marketActionLine(stock) }}
+                </div>
+                <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (stock.hard_filter_failed_count || 0) > 0 }">
+                  {{ hardFilterLine(stock) }}
                 </div>
 
                 <div class="quote-strip">
@@ -232,7 +335,7 @@
               <article
                 v-for="stock in trendPool"
                 :key="stock.ts_code"
-                class="signal-card signal-card-trend"
+                :class="['signal-card', 'signal-card-trend', { 'signal-card-focused': matchesFocusSector(stock) }]"
               >
                 <div class="signal-card-header">
                   <div>
@@ -240,7 +343,15 @@
                     <div class="signal-code">{{ stock.ts_code }}</div>
                   </div>
                   <div class="signal-badges">
+                    <el-tag v-if="stock.representative_role_tag" size="small" type="danger">
+                      {{ stock.representative_role_tag }}
+                    </el-tag>
                     <el-tag size="small" type="warning">{{ stock.structure_state_tag || '结构观察' }}</el-tag>
+                    <el-tooltip v-if="stock.review_bias_label" :content="stock.review_bias_reason || stock.review_bias_label" placement="top">
+                      <el-tag size="small" :type="reviewBiasTagType(stock.review_bias_label)">
+                        {{ stock.review_bias_label }}
+                      </el-tag>
+                    </el-tooltip>
                     <el-tag size="small" type="info">{{ stock.stock_role_tag || stock.stock_core_tag }}</el-tag>
                   </div>
                 </div>
@@ -249,9 +360,15 @@
                   <span>{{ stock.sector_name || '无板块信息' }}</span>
                   <span>{{ stock.candidate_source_tag || '无来源标记' }}</span>
                 </div>
+                <div v-if="stock.representative_role_tag" class="sample-role-line">
+                  {{ representativeRoleLine(stock) }}
+                </div>
 
                 <div class="signal-intent signal-intent-trend">
                   {{ trendActionLine(stock) }}
+                </div>
+                <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (stock.hard_filter_failed_count || 0) > 0 }">
+                  {{ hardFilterLine(stock) }}
                 </div>
 
                 <div class="quote-strip">
@@ -376,7 +493,7 @@
                   <article
                     v-for="stock in group.items"
                     :key="stock.ts_code"
-                    class="signal-card signal-card-account"
+                    :class="['signal-card', 'signal-card-account', { 'signal-card-focused': matchesFocusSector(stock) }]"
                   >
                     <div class="signal-card-header">
                       <div>
@@ -385,6 +502,14 @@
                       </div>
                       <div class="signal-badges">
                         <el-tag size="small" type="success">{{ stock.candidate_bucket_tag || '可参与' }}</el-tag>
+                        <el-tag v-if="stock.representative_role_tag" size="small" type="danger">
+                          {{ stock.representative_role_tag }}
+                        </el-tag>
+                        <el-tooltip v-if="stock.review_bias_label" :content="stock.review_bias_reason || stock.review_bias_label" placement="top">
+                          <el-tag size="small" :type="reviewBiasTagType(stock.review_bias_label)">
+                            {{ stock.review_bias_label }}
+                          </el-tag>
+                        </el-tooltip>
                         <el-tag size="small" :type="accountEntryTagType(stock)">{{ accountEntryTag(stock) }}</el-tag>
                       </div>
                     </div>
@@ -393,9 +518,15 @@
                       <span>{{ stock.sector_name || '无板块信息' }}</span>
                       <span>{{ stock.candidate_source_tag || '无来源标记' }}</span>
                     </div>
+                    <div v-if="stock.representative_role_tag" class="sample-role-line">
+                      {{ representativeRoleLine(stock) }}
+                    </div>
 
                     <div class="signal-intent signal-intent-account">
                       {{ accountActionLine(stock) }}
+                    </div>
+                    <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (stock.hard_filter_failed_count || 0) > 0 }">
+                      {{ hardFilterLine(stock) }}
                     </div>
 
                     <div class="quote-strip">
@@ -638,12 +769,12 @@
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
-import { stockApi } from '../api'
+import { useRoute, useRouter } from 'vue-router'
+import { stockApi, decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 
 const loading = ref(false)
-const llmRefreshing = ref(false)
 const activeTab = ref('holding')
 const displayDate = ref('')
 const poolsData = ref({
@@ -652,31 +783,79 @@ const poolsData = ref({
   account_executable_pool: [],
   holding_process_pool: [],
   resolved_trade_date: '',
-  llm_status: null,
+  sector_scan_trade_date: '',
+  sector_scan_resolved_trade_date: '',
 })
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
+const reviewStatsData = ref(null)
+const loadError = ref('')
+const POOLS_TIMEOUT = 90000
+const REVIEW_STATS_TIMEOUT = 90000
+const route = useRoute()
+const router = useRouter()
+const focusOnly = ref(false)
+
+const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 
 const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 0)
 const trendCount = computed(() => poolsData.value.trend_recognition_pool?.length || 0)
 const accountCount = computed(() => poolsData.value.account_executable_pool?.length || 0)
 const holdingCount = computed(() => poolsData.value.holding_process_pool?.length || 0)
 
-const marketPool = computed(() =>
-  [...(poolsData.value.market_watch_pool || [])].sort((a, b) => Number(b.stock_score || 0) - Number(a.stock_score || 0))
-)
-const trendPool = computed(() =>
-  [...(poolsData.value.trend_recognition_pool || [])].sort((a, b) => Number(b.stock_score || 0) - Number(a.stock_score || 0))
-)
-const accountPool = computed(() =>
-  [...(poolsData.value.account_executable_pool || [])].sort((a, b) => {
-    const scoreDiff = Number(b.account_entry_score || 0) - Number(a.account_entry_score || 0)
-    if (scoreDiff !== 0) return scoreDiff
-    const stockScoreDiff = Number(b.stock_score || 0) - Number(a.stock_score || 0)
-    if (stockScoreDiff !== 0) return stockScoreDiff
-    return Number(b.change_pct || 0) - Number(a.change_pct || 0)
+const matchesFocusSector = (stock) => {
+  if (!focusSector.value) return false
+  return String(stock.sector_name || '').includes(focusSector.value)
+}
+
+const sortByFocusSector = (rows = []) => {
+  const sorted = [...rows].sort((a, b) => Number(matchesFocusSector(b)) - Number(matchesFocusSector(a)))
+  if (focusSector.value && focusOnly.value) {
+    return sorted.filter((item) => matchesFocusSector(item))
+  }
+  return sorted
+}
+
+const marketPool = computed(() => sortByFocusSector(poolsData.value.market_watch_pool || []))
+const trendPool = computed(() => sortByFocusSector(poolsData.value.trend_recognition_pool || []))
+const accountPool = computed(() => sortByFocusSector(poolsData.value.account_executable_pool || []))
+const focusMatches = computed(() => ({
+  market: (poolsData.value.market_watch_pool || []).filter((stock) => matchesFocusSector(stock)).length,
+  trend: (poolsData.value.trend_recognition_pool || []).filter((stock) => matchesFocusSector(stock)).length,
+  account: (poolsData.value.account_executable_pool || []).filter((stock) => matchesFocusSector(stock)).length,
+}))
+const accountEmptyReason = computed(() => {
+  if (accountCount.value) return ''
+
+  const rawReasons = [...marketPool.value, ...trendPool.value]
+    .flatMap((stock) => stock.not_other_pools || [])
+    .map((reason) => String(reason || '').trim())
+    .filter((reason) => (
+      reason.includes('账户可参与池') ||
+      reason.includes('账户条件') ||
+      reason.includes('先处理旧仓') ||
+      reason.includes('舒服买点') ||
+      reason.includes('不直接执行')
+    ))
+
+  const normalizedReasons = []
+  rawReasons.forEach((reason) => {
+    const normalized = reason.replace(/^未进账户可参与池：/, '').trim()
+    if (normalized && !normalizedReasons.includes(normalized)) {
+      normalizedReasons.push(normalized)
+    }
   })
-)
+
+  if (!normalizedReasons.length) {
+    return holdingCount.value
+      ? '先处理持仓风险；当前没有满足账户准入的新标的。'
+      : '当前没有满足账户准入的新标的。'
+  }
+
+  const prefix = holdingCount.value ? '先处理持仓风险；' : ''
+  return `${prefix}当前没有满足账户准入的新标的，主要因为：${normalizedReasons.slice(0, 2).join('；')}`
+})
+
 const isComfortableAccountEntry = (stock) => ['回踩确认', '低吸预备'].includes(stock.next_tradeability_tag)
 const accountPoolGroups = computed(() => {
   const comfortable = accountPool.value.filter((stock) => isComfortableAccountEntry(stock))
@@ -709,6 +888,52 @@ const accountPoolGroups = computed(() => {
 const holdingPool = computed(() =>
   [...(poolsData.value.holding_process_pool || [])].sort(compareHoldingPriority)
 )
+
+const reviewSnapshotTypeLabel = (value) => {
+  if (value === 'buy_available') return '可买'
+  if (value === 'buy_observe') return '观察'
+  if (value === 'pool_account') return '可参与池'
+  if (value === 'pool_market') return '观察池'
+  return value || '-'
+}
+
+const reviewRowLabel = (row) => `${reviewSnapshotTypeLabel(row.snapshot_type)} / ${row.candidate_bucket_tag || '未分层'}`
+
+const reviewActionableRows = computed(() => (
+  (reviewStatsData.value?.bucket_stats || [])
+    .map((row) => ({
+      ...row,
+      shortLabel: reviewRowLabel(row),
+      resolvedWeight: Number(row.resolved_5d_count || row.resolved_3d_count || row.resolved_1d_count || 0),
+      qualityScore:
+        Number(row.avg_return_5d || 0) * 0.6 +
+        Number(row.win_rate_5d || 0) * 0.04 +
+        Number(row.avg_return_3d || 0) * 0.25 +
+        Number(row.win_rate_3d || 0) * 0.015 +
+        Number(row.count || 0) * 0.03
+    }))
+    .filter((row) => row.resolvedWeight > 0 && Number(row.count || 0) >= 2)
+    .sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0))
+))
+
+const reviewInsight = computed(() => {
+  const best = reviewActionableRows.value[0]
+  const weakest = [...reviewActionableRows.value].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))[0]
+  const watch = reviewActionableRows.value.find((row) => row.snapshot_type === 'buy_observe' || row.snapshot_type === 'pool_market')
+  if (!best && !weakest && !watch) return null
+
+  return {
+    doText: best
+      ? `最近 ${best.shortLabel} 胜率和均值更强，今天在观察池和账户池里遇到同类结构时，可以更优先盯。`
+      : '当前复盘样本还不够，今天先按当日盘面和账户准入为主。',
+    watchText: watch
+      ? `${watch.shortLabel} 更适合先当观察对象，先看承接和确认，不要因为进池就直接当执行信号。`
+      : '观察池仍然只负责缩小范围，不负责替代买点确认。',
+    avoidText: weakest
+      ? `${weakest.shortLabel} 最近表现偏弱，今天即使进池也先降优先级，别因为题材热度就直接提高权重。`
+      : '暂时没有明确需要整体降权的一类信号。'
+  }
+})
 
 const overviewBadge = computed(() => {
   if (holdingCount.value) return '先处理持仓'
@@ -753,16 +978,84 @@ const overviewRules = computed(() => {
   return ['观察池只负责缩小盯盘范围', '先看最强结构，再看账户是否允许', '没有执行确认就不要急着动']
 })
 
-const llmStatus = computed(() => poolsData.value.llm_status || null)
-const llmStatusVisible = computed(() => Boolean(llmStatus.value))
-const llmStatusClass = computed(() => {
-  if (llmStatus.value?.success) return 'llm-status-success'
-  if (llmStatus.value?.enabled) return 'llm-status-warning'
-  return 'llm-status-muted'
+const compactRuleSummary = computed(() => overviewRules.value.slice(0, 2).join(' · '))
+
+const compactStatItems = computed(() => [
+  { key: 'holding', label: '持仓处理', value: holdingCount.value, tip: '先清旧仓动作' },
+  { key: 'account', label: '账户可参与', value: accountCount.value, tip: '能做但仍要确认' },
+  { key: 'trend', label: '趋势辨识', value: trendCount.value, tip: '看结构锚' },
+  { key: 'market', label: '市场观察', value: marketCount.value, tip: '看方向样本' },
+])
+
+const decisionSteps = computed(() => {
+  const steps = []
+  if (holdingCount.value) {
+    steps.push({
+      key: 'holding',
+      rank: 1,
+      tab: 'holding',
+      tone: 'holding',
+      title: '先处理持仓',
+      desc: '先把已有仓位的卖、减、持动作排清楚，再决定要不要开新仓。',
+      countLabel: `${holdingCount.value} 只待处理`,
+      rule: '旧仓优先',
+      hint: '高优先级和明确卖减信号先处理',
+    })
+  }
+
+  if (accountCount.value) {
+    steps.push({
+      key: 'account',
+      rank: steps.length + 1,
+      tab: 'account',
+      tone: 'account',
+      title: '再看账户可参与',
+      desc: '这批票已经通过账户准入，但真正执行还要回买点页等确认。',
+      countLabel: `${accountCount.value} 只可参与`,
+      rule: '能做但别急追',
+      hint: '先看进池理由和仓位提示',
+    })
+  } else if (trendCount.value) {
+    steps.push({
+      key: 'trend',
+      rank: steps.length + 1,
+      tab: 'trend',
+      tone: 'trend',
+      title: '先盯趋势锚',
+      desc: '今天暂无直接可执行票，先看结构最耐打的趋势锚，不要急着抬手。',
+      countLabel: `${trendCount.value} 只趋势锚`,
+      rule: '盯结构',
+      hint: '重点看承接、修复和连续性',
+    })
+  }
+
+  steps.push({
+    key: 'market',
+    rank: steps.length + 1,
+    tab: 'market',
+    tone: 'market',
+    title: '最后回观察池',
+    desc: '观察池负责缩小范围和校准方向，不负责替代买点确认。',
+    countLabel: `${marketCount.value} 只观察票`,
+    rule: '只观察',
+    hint: '先看最强结构和板块一致性',
+  })
+
+  return steps.slice(0, 3)
 })
-const llmStatusText = computed(() => {
-  if (!llmStatus.value) return ''
-  return llmStatus.value.message || (llmStatus.value.success ? 'LLM 解释增强已生效' : 'LLM 当前未生效')
+
+const focusSummary = computed(() => {
+  if (!focusSector.value) return ''
+  if (focusMatches.value.account) {
+    return `${focusSector.value} 已经有 ${focusMatches.value.account} 只进入账户可参与池，可以先看账户池，再去买点页确认。`
+  }
+  if (focusMatches.value.trend) {
+    return `${focusSector.value} 还没走到可执行，但已经有 ${focusMatches.value.trend} 只在趋势池里，可以先盯结构，不要急着下手。`
+  }
+  if (focusMatches.value.market) {
+    return `${focusSector.value} 目前更多停留在市场观察池，说明这条线还在观察期，先看板块一致性和量能。`
+  }
+  return `${focusSector.value} 当前没有明显命中三池核心候选，说明这条线今天暂时不是主执行方向。`
 })
 
 const topFocusItems = computed(() => {
@@ -874,6 +1167,12 @@ const pctClass = (value) => {
   return 'text-neutral'
 }
 
+const reviewBiasTagType = (label) => {
+  if (label === '复盘加分') return 'success'
+  if (label === '复盘降权') return 'danger'
+  return 'info'
+}
+
 const isRealtimeSource = (source) => String(source || '').startsWith('realtime_')
 
 const quoteSourceLabel = (source) => {
@@ -915,11 +1214,14 @@ const accountEntryTagType = (stock) => {
 
 const stockProfileTags = (stock) => [
   stock.sector_profile_tag,
+  stock.representative_role_tag,
   stock.stock_role_tag,
   stock.day_strength_tag,
   stock.structure_state_tag,
   stock.next_tradeability_tag,
 ].filter(Boolean)
+
+const representativeRoleLine = (stock) => `主线样本：${stock.representative_role_tag}，用于代表这条线的结构和跟踪价值。`
 
 const notOtherPoolsLine = (stock) => {
   const reasons = stock.not_other_pools || []
@@ -929,24 +1231,23 @@ const notOtherPoolsLine = (stock) => {
 
 const emptyPoolText = (poolKey) => {
   if (poolKey === 'account') {
-    return holdingCount.value
-      ? '先处理持仓风险；当前没有满足账户准入的新标的'
-      : (poolsData.value.llm_summary?.pool_empty_reason || '当前没有满足账户准入的新标的')
+    return accountEmptyReason.value
   }
   if (poolKey === 'trend') {
-    return poolsData.value.llm_summary?.pool_empty_reason || '暂无结构清晰、值得持续盯的趋势锚。'
+    return '暂无结构清晰、值得持续盯的趋势锚。'
   }
-  return poolsData.value.llm_summary?.pool_empty_reason || '暂无需要观察的强势候选'
+  return '暂无需要观察的强势候选'
 }
 
-const marketActionLine = (stock) => stock.llm_plain_note || stock.stock_comment || '先观察这只票是否继续保持强势结构。'
+const marketActionLine = (stock) => stock.stock_comment || '先观察这只票是否继续保持强势结构。'
 const marketFooterLine = (stock) => `${stock.stock_strength_tag || '中'}强度，${stock.stock_continuity_tag || '可观察'}，继续等确认。`
-const trendActionLine = (stock) => stock.llm_plain_note || stock.why_this_pool || '这只票更适合盯结构和承接，不急着看日内最炸。'
+const trendActionLine = (stock) => stock.why_this_pool || '这只票更适合盯结构和承接，不急着看日内最炸。'
 const trendFooterLine = (stock) => `${stock.structure_state_tag || '结构'} / ${stock.next_tradeability_tag || '待确认'}，更适合做趋势锚。`
-const accountActionLine = (stock) => stock.llm_plain_note || stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但仍要等买点确认。'
+const accountActionLine = (stock) => stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但仍要等买点确认。'
 const accountFooterFlag = (stock) => ((stock.pool_entry_reason || '').includes('防守') ? '轻仓试错' : '等待买点页确认')
-const holdingActionLine = (stock) => stock.llm_plain_note || `${stock.sell_signal_tag || '观察'}：${stock.sell_reason || stock.sell_comment || '继续跟踪。'}`
+const holdingActionLine = (stock) => `${stock.sell_signal_tag || '观察'}：${stock.sell_reason || stock.sell_comment || '继续跟踪。'}`
 const holdingFooterFlag = (stock) => (stock.can_sell_today ? '今日可卖' : 'T+1锁定')
+const hardFilterLine = (stock) => stock.hard_filter_summary || '硬过滤状态未返回'
 
 const sellSignalRank = (value) => {
   if (value === '卖出') return 0
@@ -984,47 +1285,73 @@ const openCheckup = (stock, defaultTarget = '观察型') => {
   checkupVisible.value = true
 }
 
+const clearFocusSector = () => {
+  const query = { ...route.query }
+  delete query.focus_sector
+  router.replace({ query })
+}
+
 const loadData = async (options = {}) => {
-  const forceLlmRefresh = Boolean(options.forceLlmRefresh)
-  if (forceLlmRefresh) llmRefreshing.value = true
-  else loading.value = true
+  loading.value = true
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
-    const res = await stockApi.pools(tradeDate, 50, { forceLlmRefresh })
-    poolsData.value = res.data.data || {
+    loadError.value = ''
+    const res = await stockApi.pools(tradeDate, 50, { ...options, timeout: POOLS_TIMEOUT })
+    const payload = res.data.data || {
       market_watch_pool: [],
       trend_recognition_pool: [],
       account_executable_pool: [],
       holding_process_pool: [],
       resolved_trade_date: '',
-      llm_status: null,
+      sector_scan_trade_date: '',
+      sector_scan_resolved_trade_date: '',
     }
+    poolsData.value = payload
     if (holdingCount.value) activeTab.value = 'holding'
     else if (accountCount.value) activeTab.value = 'account'
     else if (trendCount.value) activeTab.value = 'trend'
     else activeTab.value = 'market'
+    if (options.refresh) {
+      if (payload.refresh_requested) {
+        ElMessage.success('已触发后台刷新，当前先展示已有三池结果。')
+      } else if (payload.refresh_in_progress) {
+        ElMessage.info('三池后台刷新仍在进行中，当前先展示已有结果。')
+      }
+    }
   } catch (error) {
-    ElMessage.error('加载失败')
+    loadError.value = error?.code === 'ECONNABORTED'
+      ? '三池分类加载超时，后端仍在重算候选池，请稍后刷新。'
+      : `三池分类加载失败：${error?.message || '未知错误'}`
+    ElMessage.error(loadError.value)
   } finally {
     loading.value = false
-    llmRefreshing.value = false
   }
 }
 
-const refreshLlm = async () => {
-  await loadData({ forceLlmRefresh: true })
+const loadReviewInsight = async () => {
+  try {
+    const res = await decisionApi.reviewStats(10, { timeout: REVIEW_STATS_TIMEOUT })
+    reviewStatsData.value = res.data.data || null
+  } catch (error) {
+    reviewStatsData.value = null
+  }
 }
 
 onMounted(() => {
   displayDate.value = getLocalDate()
   loadData()
+  loadReviewInsight()
 })
 </script>
 
 <style scoped>
 .pools-view {
   min-height: 100%;
+}
+
+.page-alert {
+  margin-bottom: 16px;
 }
 
 .card-header {
@@ -1057,7 +1384,7 @@ onMounted(() => {
 
 .decision-overview {
   display: grid;
-  gap: 18px;
+  gap: 16px;
   margin-bottom: 24px;
   padding: 20px;
   border-radius: 18px;
@@ -1067,10 +1394,210 @@ onMounted(() => {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.overview-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
 .overview-main {
   display: flex;
   align-items: center;
   gap: 18px;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.overview-side {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.overview-side-head {
+  display: grid;
+  gap: 6px;
+}
+
+.overview-side-caption {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  line-height: 1.5;
+}
+
+.overview-mini-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.overview-mini-stat {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.38);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.overview-mini-stat-holding {
+  box-shadow: inset 0 0 0 1px rgba(243, 157, 86, 0.12);
+}
+
+.overview-mini-stat-account {
+  box-shadow: inset 0 0 0 1px rgba(47, 207, 154, 0.12);
+}
+
+.overview-mini-stat-trend {
+  box-shadow: inset 0 0 0 1px rgba(198, 140, 255, 0.12);
+}
+
+.overview-mini-stat-market {
+  box-shadow: inset 0 0 0 1px rgba(103, 165, 255, 0.12);
+}
+
+.overview-mini-label,
+.overview-mini-tip {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.overview-mini-value {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.overview-side-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.section-title {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.decision-rail {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.decision-rail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.decision-step-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.decision-step-card-active {
+  box-shadow: inset 0 0 0 1px rgba(104, 158, 255, 0.22);
+}
+
+.decision-step-card-holding {
+  box-shadow: inset 0 0 0 1px rgba(243, 157, 86, 0.12);
+}
+
+.decision-step-card-account {
+  box-shadow: inset 0 0 0 1px rgba(47, 207, 154, 0.12);
+}
+
+.decision-step-card-trend {
+  box-shadow: inset 0 0 0 1px rgba(198, 140, 255, 0.12);
+}
+
+.decision-step-card-market {
+  box-shadow: inset 0 0 0 1px rgba(103, 165, 255, 0.12);
+}
+
+.decision-step-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.decision-step-rank {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #f1606c, #ff8f72);
+}
+
+.decision-step-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.decision-step-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.decision-step-desc {
+  line-height: 1.55;
+  color: var(--color-text-sec);
+  font-size: 13px;
+}
+
+.decision-step-meta,
+.decision-step-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.decision-step-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-text-main);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.decision-step-hint {
+  font-size: 12px;
+  color: var(--color-text-sec);
 }
 
 .overview-badge {
@@ -1115,81 +1642,50 @@ onMounted(() => {
   line-height: 1.6;
 }
 
-.overview-llm {
-  padding: 10px 12px;
-  border-radius: 12px;
-  line-height: 1.6;
-  color: var(--color-text-main);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.overview-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.overview-rules {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.llm-status {
+.focus-context {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(84, 210, 164, 0.08);
+  border: 1px solid rgba(84, 210, 164, 0.16);
 }
 
-.llm-status-label {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-text-sec);
-}
-
-.llm-status-text {
-  line-height: 1.5;
+.focus-context-copy {
+  font-size: 13px;
   color: var(--color-text-main);
 }
 
-.llm-status-success {
-  border-color: rgba(47, 207, 154, 0.25);
-  background: rgba(47, 207, 154, 0.08);
+.focus-context-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.llm-status-warning {
-  border-color: rgba(243, 194, 77, 0.25);
-  background: rgba(243, 194, 77, 0.08);
-}
-
-.llm-status-muted {
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-.top-focus {
+.decision-support-grid {
   display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 16px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 14px;
+}
+
+.support-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 18px;
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.top-focus-title {
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-text-sec);
-}
-
-.top-focus-summary {
-  color: var(--color-text-main);
-  line-height: 1.6;
+.support-card-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .top-focus-list {
@@ -1237,53 +1733,115 @@ onMounted(() => {
   color: var(--color-text-main);
 }
 
-.stat-card {
+.focus-hit-inline {
   display: grid;
-  gap: 6px;
-  padding: 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(15, 23, 42, 0.38);
+  gap: 10px;
 }
 
-.stat-market {
-  box-shadow: inset 0 0 0 1px rgba(103, 165, 255, 0.12);
+.focus-hit-inline-title {
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.stat-account {
-  box-shadow: inset 0 0 0 1px rgba(47, 207, 154, 0.12);
+.focus-hit-inline-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
-.stat-trend {
-  box-shadow: inset 0 0 0 1px rgba(198, 140, 255, 0.12);
+.focus-hit-inline-item {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.stat-holding {
-  box-shadow: inset 0 0 0 1px rgba(243, 157, 86, 0.12);
-}
-
-.stat-label {
+.focus-hit-inline-item span {
   font-size: 12px;
   color: var(--color-text-sec);
 }
 
-.stat-value {
-  font-size: 1.75rem;
+.focus-hit-inline-item strong {
+  font-size: 1.15rem;
   line-height: 1;
 }
 
-.stat-tip {
+.focus-hit-summary {
+  line-height: 1.6;
+  color: var(--color-text-main);
+  font-size: 13px;
+}
+
+.review-compact {
+  display: grid;
+  gap: 10px;
+}
+
+.review-compact-row {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.review-compact-row-do {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.08);
+}
+
+.review-compact-row-watch {
+  box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.08);
+}
+
+.review-compact-row-avoid {
+  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
+}
+
+.review-compact-label {
   font-size: 12px;
   color: var(--color-text-sec);
 }
 
-.rule-chip {
-  padding: 8px 12px;
-  border-radius: 999px;
-  font-size: 12px;
+.review-compact-text {
+  line-height: 1.6;
   color: var(--color-text-main);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 13px;
+}
+
+@media (max-width: 1200px) {
+  .overview-hero,
+  .decision-support-grid,
+  .decision-rail-grid,
+  .focus-hit-inline-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .overview-hero,
+  .decision-support-grid,
+  .overview-main,
+  .top-focus-item {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-main {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .overview-mini-stats,
+  .decision-rail-grid,
+  .focus-hit-inline-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .top-focus-item {
+    display: grid;
+  }
 }
 
 .tab-count {
@@ -1357,6 +1915,11 @@ onMounted(() => {
   box-shadow: inset 0 0 0 1px rgba(243, 157, 86, 0.08);
 }
 
+.signal-card-focused {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.24);
+  border-color: rgba(84, 210, 164, 0.26);
+}
+
 .signal-card-header {
   display: flex;
   justify-content: space-between;
@@ -1397,6 +1960,11 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.sample-role-line {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
 .signal-intent {
   padding: 18px 20px;
   border-radius: 20px;
@@ -1427,6 +1995,22 @@ onMounted(() => {
   color: #fff2df;
   background: rgba(204, 107, 40, 0.16);
   border: 1px solid rgba(243, 157, 86, 0.18);
+}
+
+.hard-filter-strip {
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-sec);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.hard-filter-warn {
+  color: #f3c24d;
+  background: rgba(243, 194, 77, 0.08);
+  border-color: rgba(243, 194, 77, 0.2);
 }
 
 .profile-section,

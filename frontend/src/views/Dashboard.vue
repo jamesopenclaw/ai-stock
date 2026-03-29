@@ -6,7 +6,7 @@
           <template #header>
             <div class="card-header">
               <span>今日执行摘要</span>
-              <el-button type="primary" @click="refreshData" :loading="loading">
+              <el-button type="primary" @click="refreshData()" :loading="refreshing">
                 <el-icon><Refresh /></el-icon> 刷新
               </el-button>
             </div>
@@ -135,7 +135,7 @@
           <template #header>
             <span>分层复盘统计</span>
           </template>
-          <el-skeleton v-if="loading && !reviewStats" :rows="4" animated />
+          <el-skeleton v-if="loadingState.reviewStats && !reviewStats" :rows="4" animated />
           <el-empty v-else-if="!reviewStats?.bucket_stats?.length" description="暂无复盘快照" />
           <el-table v-else :data="reviewStats.bucket_stats.slice(0, 8)" style="width: 100%">
             <el-table-column prop="snapshot_type" label="类型" width="100" />
@@ -149,32 +149,15 @@
       </el-col>
     </el-row>
 
-    <el-row v-if="loading" :gutter="20" style="margin-top: 20px;" class="equal-height">
-      <el-col :span="12">
-        <el-card class="fill-card dashboard-bottom-card">
-          <template #header>
-            <span>可买候选</span>
-          </template>
-          <el-skeleton :rows="5" animated class="fill-skeleton" />
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card class="fill-card dashboard-bottom-card">
-          <template #header>
-            <span>持仓处理</span>
-          </template>
-          <el-skeleton :rows="5" animated class="fill-skeleton" />
-        </el-card>
-      </el-col>
-    </el-row>
-    <el-row v-else :gutter="20" style="margin-top: 20px;" class="equal-height">
+    <el-row :gutter="20" style="margin-top: 20px;" class="equal-height">
       <el-col :span="12">
         <el-card class="fill-card dashboard-bottom-card">
           <template #header>
             <span>可买候选 ({{ buyPoints?.available_buy_points?.length || 0 }})</span>
           </template>
           <div class="bottom-card-body">
-            <el-empty v-if="!buyPoints?.available_buy_points?.length" description="暂无可买候选" />
+            <el-skeleton v-if="loadingState.buyPoints && !buyPoints" :rows="5" animated class="fill-skeleton" />
+            <el-empty v-else-if="!buyPoints?.available_buy_points?.length" description="暂无可买候选" />
             <el-table v-else :data="buyPoints.available_buy_points.slice(0, 5)" style="width: 100%">
               <el-table-column prop="ts_code" label="代码" width="100" />
               <el-table-column prop="stock_name" label="名称" width="100" />
@@ -192,8 +175,9 @@
             <span>持仓处理 ({{ (sellPoints?.sell_positions?.length || 0) + (sellPoints?.reduce_positions?.length || 0) }})</span>
           </template>
           <div class="bottom-card-body">
+            <el-skeleton v-if="loadingState.sellPoints && !sellPoints" :rows="5" animated class="fill-skeleton" />
             <el-empty
-              v-if="!sellPoints?.sell_positions?.length && !sellPoints?.reduce_positions?.length"
+              v-else-if="!sellPoints?.sell_positions?.length && !sellPoints?.reduce_positions?.length"
               description="暂无卖出/减仓信号"
             />
             <el-table v-else :data="sellPoints?.sell_positions?.slice(0, 5)" style="width: 100%">
@@ -210,11 +194,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { decisionApi, marketApi, sectorApi, accountApi } from '../api'
 import { ElMessage } from 'element-plus'
 
-const loading = ref(false)
 const summary = ref(null)
 const marketEnv = ref(null)
 const leaderSector = ref(null)
@@ -222,6 +206,16 @@ const accountProfile = ref(null)
 const buyPoints = ref(null)
 const sellPoints = ref(null)
 const reviewStats = ref(null)
+const loadingState = ref({
+  summary: false,
+  marketEnv: false,
+  leaderSector: false,
+  accountProfile: false,
+  buyPoints: false,
+  sellPoints: false,
+  reviewStats: false,
+})
+const refreshVersion = ref(0)
 
 const getActionClass = (action) => {
   if (action?.includes('少') || action?.includes('防守')) return 'text-red'
@@ -240,40 +234,174 @@ const formatMoney = (value) => {
   return (value / 10000).toFixed(2) + '万'
 }
 
-const refreshData = async () => {
-  loading.value = true
+const DASHBOARD_REQUEST_TIMEOUT = 90000
+const DASHBOARD_BUY_POINT_LIMIT = 10
+const DASHBOARD_CACHE_KEY = 'dashboard_snapshot_v1'
+
+const refreshing = computed(() => Object.values(loadingState.value).some(Boolean))
+
+const getTradeDate = () => {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+const setModuleLoading = (key, value) => {
+  loadingState.value = {
+    ...loadingState.value,
+    [key]: value
+  }
+}
+
+const persistDashboardCache = () => {
+  if (typeof window === 'undefined') return
+  const payload = {
+    summary: summary.value,
+    marketEnv: marketEnv.value,
+    leaderSector: leaderSector.value,
+    accountProfile: accountProfile.value,
+    buyPoints: buyPoints.value,
+    sellPoints: sellPoints.value,
+    reviewStats: reviewStats.value,
+    updatedAt: Date.now()
+  }
+  window.sessionStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(payload))
+}
+
+const hydrateDashboardCache = () => {
+  if (typeof window === 'undefined') return false
+  const raw = window.sessionStorage.getItem(DASHBOARD_CACHE_KEY)
+  if (!raw) return false
   try {
-    const tradeDate = new Date().toISOString().split('T')[0]
-    
-    const [summaryRes, marketRes, sectorRes, accountRes, buyRes, sellRes, reviewRes] = await Promise.all([
-      decisionApi.summary(tradeDate),
-      marketApi.getEnv(tradeDate),
-      sectorApi.leader(tradeDate),
-      accountApi.profile(),
-      decisionApi.buyPoint(tradeDate, 20),
-      decisionApi.sellPoint(tradeDate),
-      decisionApi.reviewStats(10)
-    ])
+    const payload = JSON.parse(raw)
+    summary.value = payload.summary || null
+    marketEnv.value = payload.marketEnv || null
+    leaderSector.value = payload.leaderSector || null
+    accountProfile.value = payload.accountProfile || null
+    buyPoints.value = payload.buyPoints || null
+    sellPoints.value = payload.sellPoints || null
+    reviewStats.value = payload.reviewStats || null
+    return true
+  } catch (error) {
+    window.sessionStorage.removeItem(DASHBOARD_CACHE_KEY)
+    return false
+  }
+}
 
-    summary.value = summaryRes.data.data
-    marketEnv.value = marketRes.data.data
-    leaderSector.value = sectorRes.data.data
-    accountProfile.value = accountRes.data.data
-    buyPoints.value = buyRes.data.data
-    sellPoints.value = sellRes.data.data
-    reviewStats.value = reviewRes.data.data
+const refreshData = async ({ silent = false } = {}) => {
+  const version = refreshVersion.value + 1
+  refreshVersion.value = version
+  try {
+    const tradeDate = getTradeDate()
+    const failedModules = []
 
-    ElMessage.success('数据刷新成功')
+    const loadModule = async (key, label, loader, assign) => {
+      setModuleLoading(key, true)
+      try {
+        const res = await loader()
+        if (refreshVersion.value !== version) return
+        assign(res.data.data)
+      } catch (error) {
+        console.error(`${label}加载失败:`, error)
+        if (refreshVersion.value === version) {
+          failedModules.push(label)
+        }
+      } finally {
+        if (refreshVersion.value === version) {
+          setModuleLoading(key, false)
+        }
+      }
+    }
+
+    await Promise.allSettled([
+      loadModule(
+      'marketEnv',
+      '市场环境',
+      () => marketApi.getEnv(tradeDate, { timeout: DASHBOARD_REQUEST_TIMEOUT }),
+      (data) => {
+        marketEnv.value = data
+      }
+    ),
+      loadModule(
+      'summary',
+      '执行摘要',
+      () => decisionApi.summary(tradeDate, { timeout: DASHBOARD_REQUEST_TIMEOUT }),
+      (data) => {
+        summary.value = data
+      }
+    ),
+      loadModule(
+      'leaderSector',
+      '主线板块',
+      () => sectorApi.leader(tradeDate, { timeout: DASHBOARD_REQUEST_TIMEOUT }),
+      (data) => {
+        leaderSector.value = data
+      }
+    ),
+      loadModule(
+      'accountProfile',
+      '账户概况',
+      () => accountApi.profile({ timeout: DASHBOARD_REQUEST_TIMEOUT }),
+      (data) => {
+        accountProfile.value = data
+      }
+    ),
+      loadModule(
+      'buyPoints',
+      '可买候选',
+      () => decisionApi.buyPoint(tradeDate, DASHBOARD_BUY_POINT_LIMIT, { timeout: DASHBOARD_REQUEST_TIMEOUT }),
+      (data) => {
+        buyPoints.value = data
+      }
+    ),
+      loadModule(
+      'sellPoints',
+      '持仓处理',
+      () => decisionApi.sellPoint(tradeDate, {
+        includeLlm: false,
+        timeout: DASHBOARD_REQUEST_TIMEOUT
+      }),
+      (data) => {
+        sellPoints.value = data
+      }
+    ),
+      loadModule(
+      'reviewStats',
+      '复盘统计',
+      () => decisionApi.reviewStats(10, { timeout: DASHBOARD_REQUEST_TIMEOUT }),
+      (data) => {
+        reviewStats.value = data
+      }
+    )])
+
+    if (refreshVersion.value !== version) return
+
+    if ([summary.value, marketEnv.value, leaderSector.value, accountProfile.value, buyPoints.value, sellPoints.value, reviewStats.value].some(Boolean)) {
+      persistDashboardCache()
+    }
+
+    if (failedModules.length === 7) {
+      throw new Error('全部接口加载失败')
+    }
+
+    if (failedModules.length && !silent) {
+      ElMessage.warning(`部分数据加载失败：${failedModules.join('、')}`)
+    } else if (!failedModules.length && !silent) {
+      ElMessage.success('数据刷新成功')
+    }
   } catch (error) {
     console.error('刷新数据失败:', error)
-    ElMessage.error('数据加载失败')
-  } finally {
-    loading.value = false
+    if (!silent) {
+      ElMessage.error('数据加载失败')
+    }
   }
 }
 
 onMounted(() => {
-  refreshData()
+  hydrateDashboardCache()
+  refreshData({ silent: true })
 })
 </script>
 

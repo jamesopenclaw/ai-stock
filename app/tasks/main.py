@@ -21,38 +21,25 @@ async def run_daily_task(trade_date: str = None):
     logger.info("开始执行每日任务")
     logger.info("=" * 50)
 
-    # 1. 数据同步
-    logger.info("[1/3] 同步数据...")
     try:
-        await scheduler.sync_data(trade_date)
-        logger.info("数据同步完成")
+        task = await scheduler.enqueue_task("daily", trade_date, trigger_source="cli")
+        result = await scheduler.execute_task_run(task["task_id"])
     except Exception as e:
-        logger.error(f"数据同步失败: {e}")
-        return {"status": "error", "step": "sync_data", "message": str(e)}
-
-    # 2. 执行分析
-    logger.info("[2/3] 执行分析...")
-    try:
-        report_data = await scheduler.run_analysis(trade_date)
-        logger.info("分析完成")
-    except Exception as e:
-        logger.error(f"分析执行失败: {e}")
-        return {"status": "error", "step": "run_analysis", "message": str(e)}
-
-    # 3. 推送通知
-    logger.info("[3/3] 推送通知...")
-    try:
-        await scheduler.notify_report(trade_date, report_data)
-        logger.info("通知推送完成")
-    except Exception as e:
-        logger.error(f"通知推送失败: {e}")
-        return {"status": "error", "step": "notify_report", "message": str(e)}
+        logger.error(f"每日任务执行失败: {e}")
+        return {"status": "error", "message": str(e)}
 
     logger.info("=" * 50)
     logger.info("每日任务执行完成")
     logger.info("=" * 50)
 
-    return {"status": "success", "trade_date": trade_date}
+    return {"status": "success", "trade_date": trade_date, "task_id": task["task_id"], "result": result}
+
+
+async def run_mode_task(mode: str, trade_date: str, *, force: bool = True):
+    """在同一个事件循环内完成入队和执行。"""
+    task = await scheduler.enqueue_task(mode, trade_date, trigger_source="cli", force=force)
+    execution = await scheduler.execute_task_run(task["task_id"])
+    return {"status": execution["status"], "task_id": task["task_id"], "result": execution.get("result")}
 
 
 async def test_notify():
@@ -99,13 +86,11 @@ def main():
     if args.mode == "daily":
         result = asyncio.run(run_daily_task(trade_date))
     elif args.mode == "sync":
-        asyncio.run(scheduler.sync_data(trade_date))
-        result = {"status": "success"}
+        result = asyncio.run(run_mode_task("sync", trade_date))
     elif args.mode == "analyze":
-        result = asyncio.run(scheduler.run_analysis(trade_date))
+        result = asyncio.run(run_mode_task("analyze", trade_date))
     elif args.mode == "notify":
-        report_data = asyncio.run(scheduler.run_analysis(trade_date))
-        result = asyncio.run(scheduler.notify_report(trade_date, report_data))
+        result = asyncio.run(run_mode_task("notify", trade_date))
     else:
         result = {"status": "unknown_mode"}
 

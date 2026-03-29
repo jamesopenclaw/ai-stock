@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from app.data.tushare_client import normalize_ts_code, tushare_client
+from app.services.market_data_gateway import market_data_gateway
 from app.models.schemas import (
     StockCheckupBasicInfo,
     StockCheckupBuyView,
@@ -64,7 +64,7 @@ class StockCheckupService:
         *,
         force_llm_refresh: bool = False,
     ) -> StockCheckupResponse:
-        normalized_code = normalize_ts_code(ts_code)
+        normalized_code = market_data_gateway.normalize_ts_code(ts_code)
         context = await decision_context_service.build_context(
             trade_date,
             top_gainers=120,
@@ -75,17 +75,23 @@ class StockCheckupService:
             context.stocks,
             normalized_code,
         )
-        target_input = next(
-            stock for stock in stocks if normalize_ts_code(stock.ts_code) == normalized_code
-        )
+        target_input = self._resolve_target_input(stocks, normalized_code)
+        if target_input is None:
+            raise ValueError(f"未找到目标股票: {normalized_code}")
         scored_stocks = stock_filter_service.filter_with_context(
             trade_date,
             stocks,
             market_env=context.market_env,
             sector_scan=context.sector_scan,
+            account=context.account,
+            holdings=context.holdings_list,
         )
-        target_scored = next(
-            stock for stock in scored_stocks if normalize_ts_code(stock.ts_code) == normalized_code
+        target_scored = self._resolve_target_scored_stock(
+            normalized_code,
+            scored_stocks,
+            target_input,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
         )
         stock_pools = stock_filter_service.classify_pools(
             trade_date,
@@ -172,6 +178,30 @@ class StockCheckupService:
             llm_status=llm_status,
         )
 
+    def _resolve_target_input(self, stocks, ts_code: str):
+        for stock in stocks:
+            if market_data_gateway.normalize_ts_code(stock.ts_code) == ts_code:
+                return stock
+        return None
+
+    def _resolve_target_scored_stock(
+        self,
+        ts_code: str,
+        scored_stocks: List[StockOutput],
+        target_input,
+        *,
+        market_env,
+        sector_scan,
+    ) -> StockOutput:
+        for stock in scored_stocks:
+            if market_data_gateway.normalize_ts_code(stock.ts_code) == ts_code:
+                return stock
+
+        sector_map = stock_filter_service._build_sector_map(sector_scan) if sector_scan else {}
+        fallback = stock_filter_service._score_stock(target_input, market_env, sector_map)
+        fallback.stock_pool_tag = StockPoolTag.NOT_IN_POOL
+        return fallback
+
     def _resolve_target_pool_stock(
         self,
         stock_pools,
@@ -185,13 +215,13 @@ class StockCheckupService:
         ]
         for group, pool_tag in groups:
             for stock in group:
-                if normalize_ts_code(stock.ts_code) == ts_code:
+                if market_data_gateway.normalize_ts_code(stock.ts_code) == ts_code:
                     return stock, pool_tag
         return None, StockPoolTag.NOT_IN_POOL
 
     def _resolve_target_holding(self, holdings, ts_code: str):
         for holding in holdings:
-            if normalize_ts_code(holding.ts_code) == ts_code:
+            if market_data_gateway.normalize_ts_code(holding.ts_code) == ts_code:
                 return holding
         return None
 
@@ -202,7 +232,7 @@ class StockCheckupService:
             sell_analysis.hold_positions,
         ):
             for point in group:
-                if normalize_ts_code(point.ts_code) == ts_code:
+                if market_data_gateway.normalize_ts_code(point.ts_code) == ts_code:
                     return point
         return None
 
@@ -211,17 +241,17 @@ class StockCheckupService:
         ts_code: str,
         trade_date: str,
     ) -> tuple[List[Dict], Dict, Optional[str]]:
-        if not getattr(tushare_client, "token", None) or not getattr(tushare_client, "pro", None):
+        if not market_data_gateway.token or not market_data_gateway.pro:
             return [], {}, None
         compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
-        resolved_trade_date = tushare_client._resolve_trade_date(compact_trade_date)
+        resolved_trade_date = market_data_gateway.resolve_trade_date(compact_trade_date)
         start_date = (
             datetime.strptime(resolved_trade_date, "%Y%m%d") - timedelta(days=140)
         ).strftime("%Y%m%d")
         history_rows: List[Dict] = []
         valuation_row: Dict = {}
         try:
-            df = tushare_client.pro.daily(
+            df = market_data_gateway.pro.daily(
                 ts_code=ts_code,
                 start_date=start_date,
                 end_date=resolved_trade_date,
@@ -234,7 +264,7 @@ class StockCheckupService:
         except Exception:
             history_rows = []
 
-        daily_basic = getattr(tushare_client.pro, "daily_basic", None)
+        daily_basic = getattr(market_data_gateway.pro, "daily_basic", None)
         if callable(daily_basic):
             try:
                 basic_df = daily_basic(

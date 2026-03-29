@@ -367,3 +367,142 @@ async def test_checkup_builds_holding_sell_view_when_stock_inserted(monkeypatch)
     assert result.rule_snapshot.strategy.current_strategy == "放弃"
     assert result.llm_report is None
     assert result.llm_status.status == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_checkup_falls_back_to_single_stock_score_when_filtered_out(monkeypatch):
+    market_env = MarketEnvOutput(
+        trade_date="2026-03-23",
+        market_env_tag=MarketEnvTag.ATTACK,
+        breakout_allowed=True,
+        risk_level=RiskLevel.LOW,
+        market_comment="进攻环境",
+        index_score=78,
+        sentiment_score=80,
+        overall_score=79,
+    )
+    target_input = SimpleNamespace(
+        ts_code="300723.SZ",
+        stock_name="一品红",
+        sector_name="医药",
+        close=32.47,
+        open=30.40,
+        high=33.10,
+        low=30.12,
+        pre_close=30.05,
+        change_pct=8.05,
+        turnover_rate=6.2,
+        amount=230000,
+        vol_ratio=1.6,
+        quote_time="2026-03-23 14:35:00",
+        data_source="realtime_sina",
+    )
+    context = SimpleNamespace(
+        trade_date="2026-03-23",
+        resolved_stock_trade_date="2026-03-23",
+        market_env=market_env,
+        sector_scan=SimpleNamespace(
+            mainline_sectors=[],
+            sub_mainline_sectors=[],
+            follow_sectors=[],
+            trash_sectors=[],
+        ),
+        stocks=[target_input],
+        holdings_list=[],
+        holdings=[],
+        account=SimpleNamespace(
+            total_asset=100000,
+            available_cash=80000,
+            total_position_ratio=0.2,
+            holding_count=1,
+            today_new_buy_count=0,
+        ),
+    )
+    fallback_scored = _sample_stock(pool_tag=StockPoolTag.NOT_IN_POOL)
+    fallback_scored.ts_code = "300723.SZ"
+    fallback_scored.stock_name = "一品红"
+    fallback_scored.sector_name = "医药"
+    fallback_scored.change_pct = 8.05
+    fallback_scored.close = 32.47
+    fallback_scored.open = 30.40
+    fallback_scored.high = 33.10
+    fallback_scored.low = 30.12
+    fallback_scored.pre_close = 30.05
+    fallback_scored.turnover_rate = 6.2
+    fallback_scored.vol_ratio = 1.6
+    fallback_scored.stock_pool_tag = StockPoolTag.NOT_IN_POOL
+    fallback_scored.pool_decision_summary = "未通过三池筛选，但可做单股体检"
+
+    async def fake_build_context(*args, **kwargs):
+        return context
+
+    monkeypatch.setattr(
+        "app.services.stock_checkup.decision_context_service.build_context",
+        fake_build_context,
+    )
+    monkeypatch.setattr(
+        "app.services.stock_checkup.decision_context_service.merge_single_stock_into_context",
+        lambda trade_date, stocks, ts_code: (stocks, False),
+    )
+    monkeypatch.setattr(
+        "app.services.stock_checkup.stock_filter_service.filter_with_context",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        stock_checkup_service,
+        "_resolve_target_scored_stock",
+        lambda *args, **kwargs: fallback_scored,
+    )
+    monkeypatch.setattr(
+        "app.services.stock_checkup.stock_filter_service.classify_pools",
+        lambda *args, **kwargs: StockPoolsOutput(trade_date="2026-03-23", total_count=0),
+    )
+    monkeypatch.setattr(
+        "app.services.stock_checkup.sell_point_service.analyze",
+        lambda *args, **kwargs: SellPointResponse(
+            trade_date="2026-03-23",
+            hold_positions=[],
+            reduce_positions=[],
+            sell_positions=[],
+            total_count=0,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.stock_checkup.stock_filter_service.attach_sell_analysis",
+        lambda stock_pools, sell_analysis: stock_pools,
+    )
+    monkeypatch.setattr(
+        "app.services.stock_checkup.buy_point_service._analyze_stock_buy_point",
+        lambda *args, **kwargs: SimpleNamespace(
+            buy_signal_tag=SimpleNamespace(value="观察"),
+            buy_point_type=SimpleNamespace(value="等待触发"),
+            buy_trigger_cond="等待回踩确认",
+            buy_confirm_cond="承接转强",
+            buy_invalid_cond="跌破防守位",
+            buy_comment="当前未过筛选，但可以继续单股跟踪",
+        ),
+    )
+    monkeypatch.setattr(
+        stock_checkup_service,
+        "_load_history_payload",
+        lambda *args, **kwargs: ([], {}, "2026-03-23"),
+    )
+
+    async def fake_llm(*args, **kwargs):
+        return None, LlmCallStatus(enabled=False, success=False, status="disabled", message="未启用")
+
+    monkeypatch.setattr(
+        "app.services.stock_checkup.llm_explainer_service.explain_stock_checkup_with_status",
+        fake_llm,
+    )
+
+    result = await stock_checkup_service.checkup(
+        "300723.SZ",
+        "2026-03-23",
+        StockCheckupTarget.TRADING,
+    )
+
+    assert result.stock_found_in_candidates is False
+    assert result.rule_snapshot.basic_info.stock_name == "一品红"
+    assert result.rule_snapshot.strategy.current_strategy == "观察"
+    assert result.rule_snapshot.buy_view.buy_trigger_cond == "等待回踩确认"

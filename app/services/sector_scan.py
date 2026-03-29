@@ -19,7 +19,7 @@ from app.models.schemas import (
     SectorScanResponse,
     LeaderSectorResponse,
 )
-from app.data.tushare_client import tushare_client
+from app.services.market_data_gateway import market_data_gateway
 
 
 class SectorScanService:
@@ -44,7 +44,7 @@ class SectorScanService:
     CONTINUITY_DAYS_MODERATE = 2  # 连续 2 天
 
     def __init__(self):
-        self.client = tushare_client
+        self.client = market_data_gateway
 
     def scan(
         self,
@@ -121,6 +121,21 @@ class SectorScanService:
             total_sectors=len(scored_sectors)
         )
 
+    def limit_scan_result(
+        self,
+        scan_result: SectorScanResponse,
+    ) -> SectorScanResponse:
+        """将完整板块扫描结果裁剪为页面展示尺寸。"""
+        return scan_result.model_copy(
+            update={
+                "mainline_sectors": list(scan_result.mainline_sectors[:5]),
+                "sub_mainline_sectors": list(scan_result.sub_mainline_sectors[:5]),
+                "follow_sectors": list(scan_result.follow_sectors[:10]),
+                "trash_sectors": list(scan_result.trash_sectors[:10]),
+            },
+            deep=True,
+        )
+
     def get_leader(
         self,
         trade_date: str,
@@ -140,6 +155,14 @@ class SectorScanService:
             limit_output=False,
             market_env=market_env,
         )
+        return self.build_leader_from_scan(trade_date, scan_result)
+
+    def build_leader_from_scan(
+        self,
+        trade_date: str,
+        scan_result: SectorScanResponse,
+    ) -> LeaderSectorResponse:
+        """基于已完成的板块扫描结果生成主线板块响应。"""
 
         if scan_result.mainline_sectors:
             leader = scan_result.mainline_sectors[0]
@@ -175,8 +198,8 @@ class SectorScanService:
 
     def _get_sector_data(self, trade_date: str) -> Dict[str, object]:
         """
-        获取板块数据：题材概念（涨停 theme 聚合）优先；
-        若无 theme，则退回涨停行业聚合；最后再用申万行业均值补充。
+        获取板块数据：优先走独立题材聚合；
+        若题材不可用，则退回涨停行业聚合；最后再用申万行业均值补充。
         """
         try:
             compact = trade_date.replace("-", "")
@@ -187,7 +210,7 @@ class SectorScanService:
             concept_rows = concept_meta.get("rows") or []
             limitup_industry_meta = None
             limitup_industry_rows: List[Dict] = []
-            if not concept_rows and concept_meta.get("status") == "missing_theme":
+            if not concept_rows and concept_meta.get("status") != "ok":
                 limitup_industry_meta = self.client.get_limitup_industry_sectors_with_meta(
                     actual_trade_date
                 )

@@ -84,6 +84,7 @@
           </view>
           <view class="badge-row">
             <text class="badge badge-blue">{{ item.candidate_bucket_tag || '观察补充' }}</text>
+            <text v-if="item.representative_role_tag" class="badge badge-red-soft">{{ item.representative_role_tag }}</text>
             <text class="badge badge-gray">{{ item.stock_core_tag }}</text>
           </view>
         </view>
@@ -92,8 +93,14 @@
           <text class="meta-chip">{{ item.sector_name || '无板块信息' }}</text>
           <text class="meta-chip">{{ item.candidate_source_tag || '无来源标记' }}</text>
         </view>
+        <view v-if="item.representative_role_tag" class="sample-role-line">
+          {{ representativeRoleLine(item) }}
+        </view>
 
         <view class="intent-box intent-market">{{ item.stock_comment || '先看这只票是否继续保持强势结构。' }}</view>
+        <view class="debug-box" :class="{ 'debug-box-warn': (item.hard_filter_failed_count || 0) > 0 }">
+          {{ item.hard_filter_summary || '硬过滤状态未返回' }}
+        </view>
 
         <view class="quote-grid">
           <view class="quote-card">
@@ -159,6 +166,7 @@
           </view>
           <view class="badge-row">
             <text class="badge badge-green">{{ item.candidate_bucket_tag || '可参与' }}</text>
+            <text v-if="item.representative_role_tag" class="badge badge-red-soft">{{ item.representative_role_tag }}</text>
             <text :class="['badge', (item.pool_entry_reason || '').includes('防守') ? 'badge-orange' : 'badge-green-soft']">
               {{ (item.pool_entry_reason || '').includes('防守') ? '防守试错' : '满足准入' }}
             </text>
@@ -169,9 +177,15 @@
           <text class="meta-chip">{{ item.sector_name || '无板块信息' }}</text>
           <text class="meta-chip">{{ item.candidate_source_tag || '无来源标记' }}</text>
         </view>
+        <view v-if="item.representative_role_tag" class="sample-role-line">
+          {{ representativeRoleLine(item) }}
+        </view>
 
         <view class="intent-box intent-account">
           {{ item.pool_entry_reason || item.stock_comment || '这只票已通过账户准入，但仍要等买点确认。' }}
+        </view>
+        <view class="debug-box" :class="{ 'debug-box-warn': (item.hard_filter_failed_count || 0) > 0 }">
+          {{ item.hard_filter_summary || '硬过滤状态未返回' }}
         </view>
 
         <view class="quote-grid">
@@ -330,12 +344,12 @@ const holdingCount = computed(() => pools.value.holding_process_pool?.length || 
 const marketPool = computed(() =>
   [...(pools.value.market_watch_pool || [])].sort((a, b) => Number(b.stock_score || 0) - Number(a.stock_score || 0))
 )
-const accountPool = computed(() =>
-  [...(pools.value.account_executable_pool || [])].sort((a, b) => Number(b.stock_score || 0) - Number(a.stock_score || 0))
-)
+const accountPool = computed(() => (pools.value.account_executable_pool || []))
 const holdingPool = computed(() =>
   [...(pools.value.holding_process_pool || [])].sort(compareHoldingPriority)
 )
+
+const representativeRoleLine = (item) => `主线样本：${item.representative_role_tag}，用于代表这条线的结构和跟踪价值。`
 
 const heroBadge = computed(() => {
   if (holdingCount.value) return '先处理持仓'
@@ -661,6 +675,11 @@ onMounted(() => {
   color: #c5cfdd;
 }
 
+.sample-role-line {
+  font-size: 22rpx;
+  color: #98a2b3;
+}
+
 .focus-panel {
   display: flex;
   flex-direction: column;
@@ -786,6 +805,23 @@ onMounted(() => {
   font-size: 30rpx;
   line-height: 1.65;
   font-weight: 700;
+}
+
+.debug-box {
+  margin-top: 16rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 18rpx;
+  font-size: 24rpx;
+  line-height: 1.5;
+  color: #718096;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1rpx dashed rgba(148, 163, 184, 0.5);
+}
+
+.debug-box-warn {
+  color: #b7791f;
+  background: rgba(250, 204, 21, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
 }
 
 .intent-market {

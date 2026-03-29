@@ -46,15 +46,19 @@ def test_enrich_holding_time_fields_same_day_is_t1_locked():
     assert enriched["can_sell_today"] is False
 
 
-def test_resolve_selection_trade_date_uses_last_completed_trade_date(monkeypatch):
+@pytest.mark.asyncio
+async def test_resolve_selection_trade_date_uses_sector_snapshot_lookup(monkeypatch):
     service = DecisionContextService()
 
+    async def fake_resolve_snapshot_lookup_trade_date(_trade_date):
+        return "2026-03-20"
+
     monkeypatch.setattr(
-        "app.services.decision_context.tushare_client.get_last_completed_trade_date",
-        lambda _trade_date: "20260320",
+        "app.services.decision_context.resolve_snapshot_lookup_trade_date",
+        fake_resolve_snapshot_lookup_trade_date,
     )
 
-    assert service._resolve_selection_trade_date("2026-03-24") == "2026-03-20"
+    assert await service._resolve_selection_trade_date("2026-03-24") == "2026-03-20"
 
 
 @pytest.mark.asyncio
@@ -91,11 +95,6 @@ async def test_build_context_passes_market_env_to_sector_scan(monkeypatch):
         "build_account_input_from_holdings",
         fake_account,
     )
-    monkeypatch.setattr(
-        service,
-        "_resolve_selection_trade_date",
-        lambda _trade_date: "2026-03-20",
-    )
     market_env_calls = []
 
     def fake_get_current_env(_trade_date):
@@ -105,6 +104,13 @@ async def test_build_context_passes_market_env_to_sector_scan(monkeypatch):
     monkeypatch.setattr(
         "app.services.decision_context.market_env_service.get_current_env",
         fake_get_current_env,
+    )
+    async def fake_get_sector_scan_snapshot(_trade_date):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.decision_context.sector_scan_snapshot_service.get_snapshot",
+        fake_get_sector_scan_snapshot,
     )
     monkeypatch.setattr(
         "app.services.decision_context.sector_scan_service.scan",
@@ -125,6 +131,15 @@ async def test_build_context_passes_market_env_to_sector_scan(monkeypatch):
         lambda *_args, **_kwargs: ([], "2026-03-20"),
     )
 
+    async def fake_resolve_selection_trade_date(_trade_date):
+        return "2026-03-20"
+
+    monkeypatch.setattr(
+        service,
+        "_resolve_selection_trade_date",
+        fake_resolve_selection_trade_date,
+    )
+
     context = await service.build_context("2026-03-23")
 
     assert captured["trade_date"] == "2026-03-20"
@@ -134,3 +149,5 @@ async def test_build_context_passes_market_env_to_sector_scan(monkeypatch):
     assert context.market_env == market_env
     assert context.realtime_market_env == market_env
     assert context.resolved_stock_trade_date == "2026-03-20"
+    assert context.sector_scan_trade_date is None
+    assert context.sector_scan_resolved_trade_date is None

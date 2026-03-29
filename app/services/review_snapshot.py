@@ -1,15 +1,22 @@
 """
 复盘快照与分层统计服务
 """
+import asyncio
+import json
+import logging
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import delete, select
 
 from app.core.database import async_session_factory
-from app.data.tushare_client import tushare_client
 from app.models.review_snapshot import ReviewSnapshot
+from app.models.schemas import StockPoolsOutput
+from app.models.stock_pool_snapshot import StockPoolSnapshot
+from app.services.market_data_gateway import market_data_gateway
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewSnapshotService:
@@ -21,6 +28,85 @@ class ReviewSnapshotService:
         "buy_available": "可买",
         "buy_observe": "观察",
     }
+
+    def __init__(self):
+        self._outcome_refresh_task: Optional[asyncio.Task] = None
+
+    async def get_stock_pools_page_snapshot(
+        self,
+        trade_date: str,
+        candidate_limit: int,
+    ) -> Optional[StockPoolsOutput]:
+        """读取完整三池页快照，命中后可直接返回页面结果。"""
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(StockPoolSnapshot).where(
+                    StockPoolSnapshot.trade_date == trade_date,
+                    StockPoolSnapshot.candidate_limit == candidate_limit,
+                )
+            )
+            row = result.scalar_one_or_none()
+
+        if not row or not row.payload_json:
+            return None
+
+        try:
+            payload = json.loads(row.payload_json)
+            if row.resolved_trade_date and not payload.get("resolved_trade_date"):
+                payload["resolved_trade_date"] = row.resolved_trade_date
+            return StockPoolsOutput.model_validate(payload)
+        except Exception as exc:
+            logger.warning("三池快照反序列化失败: %s", exc)
+            return None
+
+    async def save_stock_pools_page_snapshot(
+        self,
+        trade_date: str,
+        candidate_limit: int,
+        stock_pools: StockPoolsOutput,
+    ) -> int:
+        """保存完整三池页快照，供后续页面直接读取。"""
+        payload_json = json.dumps(
+            stock_pools.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+        async with async_session_factory() as session:
+            await session.execute(
+                delete(StockPoolSnapshot).where(
+                    StockPoolSnapshot.trade_date == trade_date,
+                    StockPoolSnapshot.candidate_limit == candidate_limit,
+                )
+            )
+            session.add(
+                StockPoolSnapshot(
+                    trade_date=trade_date,
+                    candidate_limit=candidate_limit,
+                    resolved_trade_date=stock_pools.resolved_trade_date or "",
+                    payload_json=payload_json,
+                )
+            )
+            await session.commit()
+
+        return 1
+
+    async def save_stock_pools_page_snapshot_safe(
+        self,
+        trade_date: str,
+        candidate_limit: int,
+        stock_pools: StockPoolsOutput,
+    ) -> int:
+        """安全保存完整三池页快照，失败时只记日志。"""
+        try:
+            return await self.save_stock_pools_page_snapshot(
+                trade_date,
+                candidate_limit,
+                stock_pools,
+            )
+        except Exception as exc:
+            logger.warning("三池页快照写入失败: %s", exc)
+            return 0
 
     async def save_analysis_snapshot(self, trade_date: str, stock_pools=None, buy_analysis=None) -> int:
         """保存某交易日的候选池与买点快照，支持三池页/买点页部分写入。"""
@@ -106,51 +192,140 @@ class ReviewSnapshotService:
 
         return len(rows)
 
-    async def refresh_snapshot_outcomes(self, limit_days: int = 20) -> int:
+    async def save_analysis_snapshot_safe(
+        self,
+        trade_date: str,
+        stock_pools=None,
+        buy_analysis=None,
+    ) -> int:
+        """安全保存分析快照，失败时只记日志。"""
+        try:
+            return await self.save_analysis_snapshot(
+                trade_date,
+                stock_pools=stock_pools,
+                buy_analysis=buy_analysis,
+            )
+        except Exception as exc:
+            logger.warning("分析快照写入失败: %s", exc)
+            return 0
+
+    async def refresh_snapshot_outcomes(
+        self,
+        limit_days: int = 20,
+        max_rows: Optional[int] = None,
+    ) -> int:
         """补齐未计算的 1/3/5 日表现。"""
         updated = 0
         today = datetime.now().strftime("%Y-%m-%d")
 
         async with async_session_factory() as session:
             result = await session.execute(
-                select(ReviewSnapshot)
+                select(
+                    ReviewSnapshot.id,
+                    ReviewSnapshot.trade_date,
+                    ReviewSnapshot.ts_code,
+                    ReviewSnapshot.base_price,
+                )
                 .where(ReviewSnapshot.resolved_days < 5)
-                .order_by(ReviewSnapshot.trade_date.desc())
-                .limit(limit_days * 200)
+                .order_by(ReviewSnapshot.trade_date.asc(), ReviewSnapshot.id.asc())
+                .limit(max_rows or (limit_days * 200))
             )
-            rows = result.scalars().all()
+            rows = [
+                {
+                    "id": row.id,
+                    "trade_date": row.trade_date,
+                    "ts_code": row.ts_code,
+                    "base_price": float(row.base_price or 0),
+                }
+                for row in result.all()
+            ]
 
-            for row in rows:
-                if row.trade_date >= today:
+        updates = []
+        for row in rows:
+            if row["trade_date"] >= today:
+                continue
+            compact = row["trade_date"].replace("-", "")
+            future_dates = market_data_gateway.get_future_trade_dates(compact, count=5)
+            if not future_dates:
+                continue
+
+            closes: List[float] = []
+            for d in future_dates:
+                detail = market_data_gateway.get_stock_detail(row["ts_code"], d)
+                close = float(detail.get("close") or 0)
+                if close > 0:
+                    closes.append(close)
+
+            if not closes or row["base_price"] <= 0:
+                continue
+
+            payload = {
+                "id": row["id"],
+                "resolved_days": len(closes),
+            }
+            if len(closes) >= 1:
+                payload["return_1d"] = round((closes[0] - row["base_price"]) / row["base_price"] * 100, 2)
+            if len(closes) >= 3:
+                payload["return_3d"] = round((closes[2] - row["base_price"]) / row["base_price"] * 100, 2)
+            if len(closes) >= 5:
+                payload["return_5d"] = round((closes[4] - row["base_price"]) / row["base_price"] * 100, 2)
+            updates.append(payload)
+
+        if not updates:
+            return 0
+
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(ReviewSnapshot).where(
+                    ReviewSnapshot.id.in_([item["id"] for item in updates])
+                )
+            )
+            row_map = {row.id: row for row in result.scalars().all()}
+
+            for payload in updates:
+                row = row_map.get(payload["id"])
+                if not row:
                     continue
-                compact = row.trade_date.replace("-", "")
-                future_dates = tushare_client.get_future_trade_dates(compact, count=5)
-                if not future_dates:
-                    continue
-
-                closes: List[float] = []
-                for d in future_dates:
-                    detail = tushare_client.get_stock_detail(row.ts_code, d)
-                    close = float(detail.get("close") or 0)
-                    if close > 0:
-                        closes.append(close)
-
-                if not closes or row.base_price <= 0:
-                    continue
-
-                if len(closes) >= 1:
-                    row.return_1d = round((closes[0] - row.base_price) / row.base_price * 100, 2)
-                if len(closes) >= 3:
-                    row.return_3d = round((closes[2] - row.base_price) / row.base_price * 100, 2)
-                if len(closes) >= 5:
-                    row.return_5d = round((closes[4] - row.base_price) / row.base_price * 100, 2)
-                row.resolved_days = len(closes)
+                row.return_1d = float(payload.get("return_1d") or 0)
+                row.return_3d = float(payload.get("return_3d") or 0)
+                row.return_5d = float(payload.get("return_5d") or 0)
+                row.resolved_days = int(payload["resolved_days"])
                 updated += 1
 
             if updated:
                 await session.commit()
 
         return updated
+
+    def is_refresh_running(self) -> bool:
+        """当前是否正在后台补齐复盘收益。"""
+        return bool(self._outcome_refresh_task and not self._outcome_refresh_task.done())
+
+    def ensure_background_refresh(self, limit_days: int = 20) -> bool:
+        """如未运行，则在后台启动一次收益补齐。"""
+        if self.is_refresh_running():
+            return False
+
+        async def _runner():
+            try:
+                total_updated = 0
+                while True:
+                    updated = await self.refresh_snapshot_outcomes(
+                        limit_days=limit_days,
+                        max_rows=10,
+                    )
+                    total_updated += updated
+                    if updated <= 0:
+                        break
+                    await asyncio.sleep(0.2)
+                logger.info("复盘收益后台补齐完成，累计更新 %s 条快照", total_updated)
+            except Exception as exc:
+                logger.warning("复盘收益后台补齐失败: %s", exc)
+            finally:
+                self._outcome_refresh_task = None
+
+        self._outcome_refresh_task = asyncio.create_task(_runner())
+        return True
 
     def _aggregate_bucket_stats(self, rows: Iterable[ReviewSnapshot]) -> List[Dict]:
         """聚合分层统计。"""
@@ -221,11 +396,121 @@ class ReviewSnapshotService:
         result.sort(key=lambda x: (x["snapshot_type"], x["count"]), reverse=False)
         return result
 
-    async def get_review_stats(self, limit_days: int = 10) -> Dict:
+    def _resolved_window_and_metrics(self, item: Dict) -> Tuple[int, float, float]:
+        if item["resolved_5d_count"] > 0:
+            return 5, float(item["avg_return_5d"] or 0), float(item["win_rate_5d"] or 0)
+        if item["resolved_3d_count"] > 0:
+            return 3, float(item["avg_return_3d"] or 0), float(item["win_rate_3d"] or 0)
+        if item["resolved_1d_count"] > 0:
+            return 1, float(item["avg_return_1d"] or 0), float(item["win_rate_1d"] or 0)
+        return 0, 0.0, 0.0
+
+    def _build_bias_entry(self, item: Dict) -> Optional[Dict]:
+        window, avg_return, win_rate = self._resolved_window_and_metrics(item)
+        resolved_count = int(
+            item["resolved_5d_count"] or item["resolved_3d_count"] or item["resolved_1d_count"] or 0
+        )
+        if window <= 0 or resolved_count < 2:
+            return None
+
+        raw_score = avg_return * 0.8 + (win_rate - 50.0) * 0.08
+        confidence = min(1.0, resolved_count / 8.0)
+        score = round(max(-8.0, min(8.0, raw_score * confidence)), 2)
+        if score >= 2:
+            label = "复盘加分"
+        elif score <= -2:
+            label = "复盘降权"
+        else:
+            label = "复盘中性"
+        return {
+            "score": score,
+            "label": label,
+            "reason": (
+                f"最近{window}日该类信号样本{resolved_count}条，均值{avg_return:.2f}%，"
+                f"胜率{win_rate:.2f}%，当前判定为{label}。"
+            ),
+            "resolved_count": resolved_count,
+        }
+
+    def _build_review_bias_profile_from_rows(self, rows: Iterable[ReviewSnapshot]) -> Dict:
+        bucket_stats = self._aggregate_bucket_stats(rows)
+        exact: Dict[Tuple[str, str], Dict] = {}
+        bucket_rollup: Dict[str, Dict] = {}
+
+        for item in bucket_stats:
+            entry = self._build_bias_entry(item)
+            if not entry:
+                continue
+            bucket = item["candidate_bucket_tag"] or "未分层"
+            exact[(item["snapshot_type"], bucket)] = entry
+
+            current = bucket_rollup.get(bucket)
+            if current is None or (
+                entry["resolved_count"], abs(entry["score"])
+            ) > (current["resolved_count"], abs(current["score"])):
+                bucket_rollup[bucket] = entry
+
+        return {"exact": exact, "bucket": bucket_rollup}
+
+    async def get_review_bias_profile(self, limit_days: int = 10) -> Dict:
+        """为三池/买点排序提供复盘反馈画像。"""
+        async with async_session_factory() as session:
+            date_rows = await session.execute(
+                select(ReviewSnapshot.trade_date)
+                .distinct()
+                .order_by(ReviewSnapshot.trade_date.desc())
+                .limit(limit_days)
+            )
+            trade_dates = [row[0] for row in date_rows.all()]
+            if not trade_dates:
+                return {"exact": {}, "bucket": {}}
+
+            result = await session.execute(
+                select(ReviewSnapshot)
+                .where(ReviewSnapshot.trade_date.in_(trade_dates))
+                .where(ReviewSnapshot.snapshot_type.in_(["buy_available", "buy_observe", "pool_account", "pool_market"]))
+            )
+            rows = result.scalars().all()
+
+        if not rows:
+            return {"exact": {}, "bucket": {}}
+        return self._build_review_bias_profile_from_rows(rows)
+
+    async def get_review_bias_profile_safe(self, limit_days: int = 10) -> Dict:
+        """安全读取复盘反馈画像，失败时回退为空画像而不影响主流程。"""
+        try:
+            return await self.get_review_bias_profile(limit_days=limit_days)
+        except Exception as exc:
+            logger.warning("读取复盘反馈画像失败，已降级为空画像: %s", exc)
+            return {"exact": {}, "bucket": {}}
+
+    async def get_review_stats(
+        self,
+        limit_days: int = 10,
+        refresh_outcomes: bool = False,
+    ) -> Dict:
         """获取最近 N 个交易日的分层复盘统计。"""
-        await self.refresh_snapshot_outcomes(limit_days=limit_days)
+        refreshed_count = 0
+        if refresh_outcomes:
+            refreshed_count = await self.refresh_snapshot_outcomes(limit_days=limit_days)
 
         async with async_session_factory() as session:
+            pending_1d_rows = await session.execute(
+                select(ReviewSnapshot.id)
+                .where(ReviewSnapshot.resolved_days < 1)
+            )
+            pending_3d_rows = await session.execute(
+                select(ReviewSnapshot.id)
+                .where(ReviewSnapshot.resolved_days < 3)
+            )
+            pending_5d_rows = await session.execute(
+                select(ReviewSnapshot.id)
+                .where(ReviewSnapshot.resolved_days < 5)
+            )
+            pending_1d_count = len(pending_1d_rows.all())
+            pending_3d_count = len(pending_3d_rows.all())
+            pending_5d_count = len(pending_5d_rows.all())
+
             date_rows = await session.execute(
                 select(ReviewSnapshot.trade_date)
                 .distinct()
@@ -258,6 +543,12 @@ class ReviewSnapshotService:
             "snapshot_count": len(rows),
             "bucket_stats": self._aggregate_bucket_stats(rows),
             "stats_mode": stats_mode,
+            "pending_outcome_count": pending_5d_count,
+            "pending_1d_count": pending_1d_count,
+            "pending_3d_count": pending_3d_count,
+            "pending_5d_count": pending_5d_count,
+            "refreshed_outcome_count": refreshed_count,
+            "refresh_in_progress": self.is_refresh_running(),
         }
 
 

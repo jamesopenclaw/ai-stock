@@ -1,27 +1,32 @@
 """
 定时任务调度器
 """
-from datetime import datetime, timedelta
-from loguru import logger
 import asyncio
+from datetime import datetime
 
-from app.services.market_env import market_env_service
-from app.services.sector_scan import sector_scan_service
-from app.services.stock_filter import stock_filter_service, merge_holdings_into_candidate_stocks
-from app.services.buy_point import buy_point_service
-from app.services.sell_point import sell_point_service
+from loguru import logger
+
 from app.services.account_adapter import account_adapter_service
-from app.services.decision_context import decision_context_service
+from app.services.decision_flow import decision_flow_service
+from app.core.config import settings
+from app.services.market_data_gateway import market_data_gateway
+from app.services.market_env import market_env_service
 from app.services.notify import notify_service
 from app.services.review_snapshot import review_snapshot_service
-from app.data.tushare_client import tushare_client
-from app.models.schemas import AccountInput, AccountPosition, StockInput
-from app.models.holding import Holding
-from app.core.config import settings
+from app.services.task_run_service import task_run_service
+from app.models.schemas import AccountInput
 
 
 class TaskScheduler:
     """定时任务调度器"""
+
+    TASK_RETRY_LIMITS = {
+        "daily": 2,
+        "sync": 2,
+        "analyze": 2,
+        "notify": 2,
+    }
+    RETRY_DELAY_SECONDS = 1.0
 
     def __init__(self):
         self.logger = logger
@@ -39,14 +44,7 @@ class TaskScheduler:
         self.logger.info(f"开始执行每日分析任务: {trade_date}")
 
         try:
-            # 1. 同步数据 (16:30)
-            await self.sync_data(trade_date)
-
-            # 2. 执行分析 (16:40)
-            report_data = await self.run_analysis(trade_date)
-
-            # 3. 推送通知
-            await self.notify_report(trade_date, report_data)
+            await self._run_daily_pipeline(trade_date)
 
             self.logger.info(f"每日分析任务完成: {trade_date}")
             return {"status": "success", "trade_date": trade_date}
@@ -60,29 +58,24 @@ class TaskScheduler:
         self.logger.info("同步数据...")
 
         # 获取当日行情数据
-        index_data = tushare_client.get_index_quote(trade_date.replace("-", ""))
-        sector_data = tushare_client.get_sector_data(trade_date.replace("-", ""))
-        stock_data = tushare_client.get_expanded_stock_list(
-            trade_date.replace("-", ""),
+        index_data = market_data_gateway.get_index_quote(trade_date)
+        sector_data = market_data_gateway.get_sector_data(trade_date)
+        stock_data = market_data_gateway.get_expanded_stock_list_with_meta(
+            trade_date,
             top_gainers=100,
         )
+        stock_rows = stock_data.get("rows") or []
 
-        self.logger.info(f"数据同步完成: 指数{len(index_data)}, 板块{len(sector_data)}, 个股{len(stock_data)}")
+        self.logger.info(f"数据同步完成: 指数{len(index_data)}, 板块{len(sector_data)}, 个股{len(stock_rows)}")
 
     async def run_analysis(self, trade_date: str) -> dict:
         """执行分析，返回完整报告数据"""
         self.logger.info("执行市场环境分析...")
-        context = await decision_context_service.build_context(
+        bundle = await decision_flow_service.build_full_decision(
             trade_date,
             top_gainers=200,
-            include_holdings=True,
         )
-        scored_stocks = stock_filter_service.filter_with_context(
-            trade_date,
-            context.stocks,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-        )
+        context = bundle.context
         market_env = context.market_env
         market_env_dict = {
             "market_env_tag": market_env.market_env_tag.value,
@@ -111,15 +104,7 @@ class TaskScheduler:
         account = context.account
 
         self.logger.info("执行三池分类...")
-        stock_pools = stock_filter_service.classify_pools(
-            trade_date,
-            stocks,
-            holdings_list,
-            account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
-        )
+        stock_pools = bundle.stock_pools
         pools_dict = {
             "market_watch_pool": [s.model_dump() for s in stock_pools.market_watch_pool[:10]],
             "trend_recognition_pool": [s.model_dump() for s in stock_pools.trend_recognition_pool[:10]],
@@ -132,15 +117,7 @@ class TaskScheduler:
         }
 
         self.logger.info("执行买点分析...")
-        buy_analysis = buy_point_service.analyze(
-            trade_date,
-            stocks,
-            account,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            scored_stocks=scored_stocks,
-            stock_pools=stock_pools,
-        )
+        buy_analysis = bundle.buy_analysis
         buy_dict = {
             "available_buy_points": [bp.model_dump() for bp in buy_analysis.available_buy_points[:5]],
             "observe_buy_points": [bp.model_dump() for bp in buy_analysis.observe_buy_points[:5]],
@@ -148,13 +125,7 @@ class TaskScheduler:
         }
 
         self.logger.info("执行卖点分析...")
-        sell_analysis = sell_point_service.analyze(
-            trade_date,
-            holdings,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-        )
-        stock_pools = stock_filter_service.attach_sell_analysis(stock_pools, sell_analysis)
+        sell_analysis = bundle.sell_analysis
         pools_dict["holding_process_pool"] = [s.model_dump() for s in stock_pools.holding_process_pool]
         sell_dict = {
             "sell_positions": [sp.model_dump() for sp in sell_analysis.sell_positions],
@@ -276,6 +247,99 @@ class TaskScheduler:
         }
 
         return summary
+
+    async def enqueue_task(
+        self,
+        mode: str,
+        trade_date: str | None = None,
+        *,
+        trigger_source: str = "manual",
+        force: bool = False,
+    ) -> dict:
+        """创建任务运行记录并执行幂等判定。"""
+        resolved_trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
+        created = await task_run_service.create_task_run(
+            mode,
+            resolved_trade_date,
+            trigger_source=trigger_source,
+            max_attempts=self.TASK_RETRY_LIMITS.get(mode, 1),
+            force=force,
+        )
+        run = created["run"]
+        return {
+            "created": bool(created["created"]),
+            "reason": created["reason"],
+            "task_id": run["id"],
+            "trade_date": run["trade_date"],
+            "mode": run["mode"],
+            "status": run["status"],
+        }
+
+    async def execute_task_run(self, task_id: str) -> dict:
+        """执行已登记任务，带重试和状态更新。"""
+        run = await task_run_service.get_task_run(task_id)
+        if run is None:
+            raise ValueError(f"任务不存在: {task_id}")
+
+        if run["status"] == "success":
+            return {"status": "success", "task_id": task_id, "deduplicated": True, "result": run.get("result")}
+
+        last_error = ""
+        started_at = None
+        for attempt in range(1, run["max_attempts"] + 1):
+            started_at = datetime.utcnow()
+            await task_run_service.mark_running(task_id, attempt)
+            self.logger.info(f"开始执行任务 {task_id}: mode={run['mode']} trade_date={run['trade_date']} attempt={attempt}/{run['max_attempts']}")
+            try:
+                result = await self._execute_mode(run["mode"], run["trade_date"])
+                await task_run_service.mark_success(task_id, result, started_at)
+                self.logger.info(f"任务执行成功 {task_id}: mode={run['mode']} trade_date={run['trade_date']}")
+                return {"status": "success", "task_id": task_id, "result": result}
+            except Exception as exc:
+                last_error = str(exc)
+                self.logger.warning(
+                    f"任务执行失败 {task_id}: mode={run['mode']} trade_date={run['trade_date']} attempt={attempt}/{run['max_attempts']} error={last_error}"
+                )
+                if attempt < run["max_attempts"]:
+                    await task_run_service.mark_retrying(task_id, attempt, last_error)
+                    await asyncio.sleep(self.RETRY_DELAY_SECONDS)
+                else:
+                    await task_run_service.mark_failed(task_id, last_error, started_at, attempt)
+                    raise
+
+        raise RuntimeError(last_error or "任务执行失败")
+
+    async def get_task_status(self, task_id: str | None = None, limit: int = 20) -> dict:
+        """返回任务运行状态。"""
+        if task_id:
+            run = await task_run_service.get_task_run(task_id)
+            if run is None:
+                return {"status": "missing", "task": None}
+            return {"status": "ok", "task": run}
+        runs = await task_run_service.list_task_runs(limit=limit)
+        return {"status": "ok", "tasks": runs}
+
+    async def _execute_mode(self, mode: str, trade_date: str) -> dict:
+        if mode == "daily":
+            report = await self._run_daily_pipeline(trade_date)
+            return {"trade_date": trade_date, "pipeline": "daily", "report": report}
+        if mode == "sync":
+            await self.sync_data(trade_date)
+            return {"trade_date": trade_date, "pipeline": "sync"}
+        if mode == "analyze":
+            report = await self.run_analysis(trade_date)
+            return {"trade_date": trade_date, "pipeline": "analyze", "report": report}
+        if mode == "notify":
+            report = await self.run_analysis(trade_date)
+            await self.notify_report(trade_date, report)
+            return {"trade_date": trade_date, "pipeline": "notify"}
+        raise ValueError(f"不支持的任务模式: {mode}")
+
+    async def _run_daily_pipeline(self, trade_date: str) -> dict:
+        await self.sync_data(trade_date)
+        report_data = await self.run_analysis(trade_date)
+        await self.notify_report(trade_date, report_data)
+        return report_data
 
 
 # 全局调度器实例

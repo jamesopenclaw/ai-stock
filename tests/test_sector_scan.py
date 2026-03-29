@@ -19,6 +19,7 @@ from app.models.schemas import (
     MarketEnvOutput,
     MarketEnvTag,
     RiskLevel,
+    SectorScanResponse,
     SectorOutput,
     SectorMainlineTag,
     SectorContinuityTag,
@@ -680,6 +681,50 @@ class TestSectorScan:
         assert payload["rows"][0]["sector_source_type"] == "limitup_industry"
         assert len(payload["rows"]) == 2
 
+    def test_get_sector_data_falls_back_to_limitup_industry_when_ths_concept_unavailable(self, service, monkeypatch):
+        """
+        测试：独立题材链路异常时，也应退回涨停行业聚合，而不是直接退到行业均值。
+        """
+        monkeypatch.setattr(
+            service.client,
+            "get_sector_data_with_meta",
+            lambda _trade_date: {
+                "rows": [
+                    {"sector_name": "电力", "sector_change_pct": 0.88},
+                ],
+                "data_trade_date": "20260323",
+                "used_mock": False,
+            },
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_concept_sectors_from_limitup_with_meta",
+            lambda _trade_date: {
+                "rows": [],
+                "data_trade_date": "20260323",
+                "status": "ths_error",
+                "message": "同花顺题材聚合异常: no permission",
+            },
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_limitup_industry_sectors_with_meta",
+            lambda _trade_date: {
+                "rows": [
+                    {"sector_name": "电力", "sector_change_pct": 4.20, "stock_count": 3},
+                ],
+                "data_trade_date": "20260323",
+                "status": "ok",
+                "message": "涨停行业聚合成功，共 1 个行业",
+            },
+        )
+
+        payload = service._get_sector_data("20260323")
+
+        assert payload["sector_data_mode"] == "limitup_industry_hybrid"
+        assert payload["concept_data_status"] == "limitup_industry_ok"
+        assert payload["rows"][0]["sector_source_type"] == "limitup_industry"
+
 
 class TestSectorScanAPI:
     """板块扫描 API 测试（模拟 API 响应格式）"""
@@ -823,6 +868,313 @@ class TestSectorScanEdgeCases:
         sectors = [{"sector_name": "暴跌板块", "sector_change_pct": -8.0}]
         scored = service._score_sectors(sectors)
         assert scored[0].sector_mainline_tag == SectorMainlineTag.TRASH
+
+
+@pytest.mark.asyncio
+async def test_sector_scan_api_prefers_saved_snapshot(monkeypatch):
+    from app.api.v1 import sector as sector_api
+
+    service = SectorScanService()
+    mainline = service._score_sectors(
+        [{"sector_name": f"主线{i}", "sector_change_pct": 5.5 - i * 0.1} for i in range(7)]
+    )
+    cached = SectorScanResponse(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_data_mode="hybrid",
+        threshold_profile="strict",
+        mainline_sectors=mainline,
+        sub_mainline_sectors=[],
+        follow_sectors=[],
+        trash_sectors=[],
+        total_sectors=len(mainline),
+    )
+
+    async def fake_get_snapshot(trade_date):
+        assert trade_date == "2026-03-24"
+        return cached
+
+    def should_not_recompute(*args, **kwargs):
+        raise AssertionError("cache hit should skip sector recompute")
+
+    monkeypatch.setattr(sector_api.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
+    monkeypatch.setattr(sector_api.sector_scan_service, "scan", should_not_recompute)
+
+    response = await sector_api.scan_sectors(trade_date="2026-03-24", refresh=False)
+
+    assert response.code == 200
+    assert response.data["trade_date"] == "2026-03-24"
+    assert len(response.data["mainline_sectors"]) == 5
+    assert response.data["total_sectors"] == 7
+
+
+@pytest.mark.asyncio
+async def test_sector_scan_api_recomputes_and_saves_snapshot_when_missing(monkeypatch):
+    from app.api.v1 import sector as sector_api
+
+    service = SectorScanService()
+    full_scan = SectorScanResponse(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_data_mode="hybrid",
+        threshold_profile="strict",
+        concept_data_status="ok",
+        concept_data_message="题材聚合正常",
+        mainline_sectors=service._score_sectors(
+            [{"sector_name": "机器人", "sector_change_pct": 4.8}]
+        ),
+        sub_mainline_sectors=service._score_sectors(
+            [{"sector_name": "低空经济", "sector_change_pct": 2.1}]
+        ),
+        follow_sectors=[],
+        trash_sectors=[],
+        total_sectors=2,
+    )
+
+    async def fake_get_snapshot(trade_date):
+        assert trade_date == "2026-03-24"
+        return None
+
+    save_calls = []
+
+    async def fake_save_snapshot(trade_date, scan_result):
+        save_calls.append((trade_date, scan_result))
+        return 1
+
+    monkeypatch.setattr(sector_api.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
+    monkeypatch.setattr(sector_api.sector_scan_snapshot_service, "save_snapshot", fake_save_snapshot)
+    monkeypatch.setattr(
+        sector_api.market_env_service,
+        "get_current_env",
+        lambda trade_date: MarketEnvOutput(
+            trade_date=trade_date,
+            market_env_tag=MarketEnvTag.NEUTRAL,
+            index_score=60,
+            sentiment_score=58,
+            overall_score=59,
+            breakout_allowed=True,
+            risk_level=RiskLevel.MEDIUM,
+            market_comment="中性",
+        ),
+    )
+    monkeypatch.setattr(
+        sector_api.sector_scan_service,
+        "scan",
+        lambda trade_date, limit_output=False, market_env=None: full_scan,
+    )
+
+    response = await sector_api.scan_sectors(trade_date="2026-03-24", refresh=False)
+
+    assert response.code == 200
+    assert response.data["trade_date"] == "2026-03-24"
+    assert response.data["mainline_sectors"][0]["sector_name"] == "机器人"
+    assert len(save_calls) == 1
+    assert save_calls[0][0] == "2026-03-24"
+    assert save_calls[0][1] is full_scan
+
+
+@pytest.mark.asyncio
+async def test_leader_sector_api_uses_saved_snapshot(monkeypatch):
+    from app.api.v1 import sector as sector_api
+
+    service = SectorScanService()
+    mainline = service._score_sectors(
+        [{"sector_name": "算力", "sector_change_pct": 5.2}]
+    )
+    cached = SectorScanResponse(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_data_mode="hybrid",
+        threshold_profile="strict",
+        mainline_sectors=mainline,
+        sub_mainline_sectors=[],
+        follow_sectors=[],
+        trash_sectors=[],
+        total_sectors=1,
+    )
+
+    async def fake_get_snapshot(trade_date):
+        return cached
+
+    def fake_pick_leaders(trade_date, sector, count=3):
+        return []
+
+    def should_not_recompute(*args, **kwargs):
+        raise AssertionError("leader endpoint should reuse cached scan")
+
+    monkeypatch.setattr(sector_api.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
+    monkeypatch.setattr(sector_api.sector_scan_service, "_pick_leader_stocks", fake_pick_leaders)
+    monkeypatch.setattr(sector_api.sector_scan_service, "scan", should_not_recompute)
+
+    response = await sector_api.get_leader_sector(trade_date="2026-03-24", refresh=False)
+
+    assert response.code == 200
+    assert response.data["sector"]["sector_name"] == "算力"
+
+
+@pytest.mark.asyncio
+async def test_sector_scan_api_before_close_uses_previous_trade_day_snapshot(monkeypatch):
+    from app.api.v1 import sector as sector_api
+
+    service = SectorScanService()
+    cached = SectorScanResponse(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_data_mode="hybrid",
+        threshold_profile="strict",
+        mainline_sectors=service._score_sectors(
+            [{"sector_name": "机器人", "sector_change_pct": 4.5}]
+        ),
+        sub_mainline_sectors=[],
+        follow_sectors=[],
+        trash_sectors=[],
+        total_sectors=1,
+    )
+
+    get_calls = []
+
+    async def fake_get_snapshot(trade_date):
+        get_calls.append(trade_date)
+        if trade_date == "2026-03-25":
+            return None
+        if trade_date == "2026-03-24":
+            return cached
+        raise AssertionError(f"unexpected snapshot lookup: {trade_date}")
+
+    def should_not_recompute(*args, **kwargs):
+        raise AssertionError("cache hit should skip recompute")
+
+    monkeypatch.setattr(sector_api, "_today_trade_date", lambda: "2026-03-25")
+    monkeypatch.setattr(
+        sector_api.tushare_client,
+        "get_last_completed_trade_date",
+        lambda trade_date: "20260324",
+    )
+    monkeypatch.setattr(sector_api.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
+    monkeypatch.setattr(sector_api.sector_scan_service, "scan", should_not_recompute)
+
+    response = await sector_api.scan_sectors(trade_date="2026-03-25", refresh=False)
+
+    assert response.code == 200
+    assert response.data["trade_date"] == "2026-03-24"
+    assert response.data["mainline_sectors"][0]["sector_name"] == "机器人"
+    assert get_calls == ["2026-03-25", "2026-03-24"]
+
+
+@pytest.mark.asyncio
+async def test_sector_scan_api_after_close_without_refresh_stays_on_previous_snapshot(monkeypatch):
+    from app.api.v1 import sector as sector_api
+
+    service = SectorScanService()
+    cached = SectorScanResponse(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_data_mode="hybrid",
+        threshold_profile="strict",
+        mainline_sectors=service._score_sectors(
+            [{"sector_name": "光通信", "sector_change_pct": 4.2}]
+        ),
+        sub_mainline_sectors=[],
+        follow_sectors=[],
+        trash_sectors=[],
+        total_sectors=1,
+    )
+
+    get_calls = []
+
+    async def fake_get_snapshot(trade_date):
+        get_calls.append(trade_date)
+        if trade_date == "2026-03-25":
+            return None
+        if trade_date == "2026-03-24":
+            return cached
+        raise AssertionError(f"unexpected snapshot lookup: {trade_date}")
+
+    def should_not_recompute(*args, **kwargs):
+        raise AssertionError("post-close without refresh should stay on previous snapshot")
+
+    monkeypatch.setattr(sector_api, "_today_trade_date", lambda: "2026-03-25")
+    monkeypatch.setattr(
+        sector_api.tushare_client,
+        "get_last_completed_trade_date",
+        lambda trade_date: "20260325",
+    )
+    monkeypatch.setattr(
+        sector_api.tushare_client,
+        "_recent_open_dates",
+        lambda trade_date, count=2: ["20260325", "20260324"],
+    )
+    monkeypatch.setattr(
+        sector_api.tushare_client,
+        "_resolve_trade_date",
+        lambda trade_date: "20260325",
+    )
+    monkeypatch.setattr(sector_api.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
+    monkeypatch.setattr(sector_api.sector_scan_service, "scan", should_not_recompute)
+
+    response = await sector_api.scan_sectors(trade_date="2026-03-25", refresh=False)
+
+    assert response.code == 200
+    assert response.data["trade_date"] == "2026-03-24"
+    assert response.data["mainline_sectors"][0]["sector_name"] == "光通信"
+    assert get_calls == ["2026-03-25", "2026-03-24"]
+
+
+@pytest.mark.asyncio
+async def test_sector_scan_api_after_close_refresh_switches_to_today(monkeypatch):
+    from app.api.v1 import sector as sector_api
+
+    service = SectorScanService()
+    today_scan = SectorScanResponse(
+        trade_date="2026-03-25",
+        resolved_trade_date="2026-03-25",
+        sector_data_mode="hybrid",
+        threshold_profile="strict",
+        mainline_sectors=service._score_sectors(
+            [{"sector_name": "算力", "sector_change_pct": 5.1}]
+        ),
+        sub_mainline_sectors=[],
+        follow_sectors=[],
+        trash_sectors=[],
+        total_sectors=1,
+    )
+
+    save_calls = []
+
+    async def fake_save_snapshot(trade_date, scan_result):
+        save_calls.append((trade_date, scan_result))
+        return 1
+
+    monkeypatch.setattr(sector_api, "_today_trade_date", lambda: "2026-03-25")
+    monkeypatch.setattr(
+        sector_api.market_env_service,
+        "get_current_env",
+        lambda trade_date: MarketEnvOutput(
+            trade_date=trade_date,
+            market_env_tag=MarketEnvTag.NEUTRAL,
+            index_score=60,
+            sentiment_score=58,
+            overall_score=59,
+            breakout_allowed=True,
+            risk_level=RiskLevel.MEDIUM,
+            market_comment="中性",
+        ),
+    )
+    monkeypatch.setattr(
+        sector_api.sector_scan_service,
+        "scan",
+        lambda trade_date, limit_output=False, market_env=None: today_scan,
+    )
+    monkeypatch.setattr(sector_api.sector_scan_snapshot_service, "save_snapshot", fake_save_snapshot)
+
+    response = await sector_api.scan_sectors(trade_date="2026-03-25", refresh=True)
+
+    assert response.code == 200
+    assert response.data["trade_date"] == "2026-03-25"
+    assert response.data["mainline_sectors"][0]["sector_name"] == "算力"
+    assert len(save_calls) == 1
+    assert save_calls[0][0] == "2026-03-25"
+    assert save_calls[0][1] is today_scan
 
 
 if __name__ == "__main__":

@@ -16,26 +16,25 @@ from app.models.schemas import (
 )
 from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
-from app.data.tushare_client import tushare_client
+from app.services.market_data_gateway import market_data_gateway
+from app.services.strategy_config import (
+    DEFAULT_SELL_POINT_STRATEGY,
+    SellPointStrategyConfig,
+)
 
 
 class SellPointService:
     """卖点分析服务"""
 
-    # 止损阈值
-    STOP_LOSS_PCT = -5.0  # 亏损超过5%止损
-    STOP_LOSS_PCT_STRICT = -3.0  # 严格止损
-
-    # 止盈阈值
-    STOP_PROFIT_PCT = 15.0  # 盈利超过15%考虑止盈
-    STOP_PROFIT_PCT_TIGHT = 10.0  # 10%可部分止盈
-
-    # 减仓阈值
-    REDUCE_PCT = 8.0  # 盈利超过8%可减仓
-
-    def __init__(self):
+    def __init__(self, strategy: SellPointStrategyConfig | None = None):
         self.market_env_service = market_env_service
         self.sector_scan_service = sector_scan_service
+        self.strategy = strategy or DEFAULT_SELL_POINT_STRATEGY
+        self.STOP_LOSS_PCT = self.strategy.stop_loss_pct
+        self.STOP_LOSS_PCT_STRICT = self.strategy.stop_loss_pct_strict
+        self.STOP_PROFIT_PCT = self.strategy.stop_profit_pct
+        self.STOP_PROFIT_PCT_TIGHT = self.strategy.stop_profit_pct_tight
+        self.REDUCE_PCT = self.strategy.reduce_pct
 
     def analyze(
         self,
@@ -153,7 +152,7 @@ class SellPointService:
     def _resolve_position_sector(self, ts_code: str, trade_date: str) -> str:
         """获取持仓所属板块名称。"""
         try:
-            detail = tushare_client.get_stock_detail(ts_code, trade_date.replace("-", ""))
+            detail = market_data_gateway.get_stock_detail(ts_code, trade_date)
             return detail.get("sector_name", "")
         except Exception:
             return ""

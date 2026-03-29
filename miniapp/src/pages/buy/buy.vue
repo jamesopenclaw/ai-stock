@@ -60,6 +60,10 @@
               <text class="detail-content">{{ item.buy_account_fit }}</text>
             </view>
             <view class="detail-section">
+              <text class="detail-title">硬过滤</text>
+              <text class="detail-content">{{ item.hard_filter_summary || '-' }}</text>
+            </view>
+            <view class="detail-section">
               <text class="detail-title">简评</text>
               <text class="detail-content">{{ item.buy_comment }}</text>
             </view>
@@ -90,6 +94,10 @@
             <view class="detail-section">
               <text class="detail-title">风险提示</text>
               <text class="detail-content">{{ item.buy_comment }}</text>
+            </view>
+            <view class="detail-section">
+              <text class="detail-title">硬过滤</text>
+              <text class="detail-content">{{ item.hard_filter_summary || '-' }}</text>
             </view>
           </view>
         </view>

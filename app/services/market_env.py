@@ -12,7 +12,7 @@ from app.models.schemas import (
     RiskLevel,
     IndexQuote
 )
-from app.data.tushare_client import tushare_client
+from app.services.market_data_gateway import market_data_gateway
 
 
 class MarketEnvService:
@@ -33,7 +33,7 @@ class MarketEnvService:
     SENTIMENT_BAD = 40       # 情绪评分 < 40
 
     def __init__(self):
-        self.client = tushare_client
+        self.client = market_data_gateway
 
     def analyze(self, market_data: MarketEnvInput) -> MarketEnvOutput:
         """

@@ -97,6 +97,8 @@ class BuyPointSopService:
             stocks,
             market_env=context.market_env,
             sector_scan=context.sector_scan,
+            account=context.account,
+            holdings=context.holdings_list,
         )
         stock_pools = stock_filter_service.classify_pools(
             trade_date,
@@ -142,6 +144,7 @@ class BuyPointSopService:
             context.account,
             realtime_market_env,
             direction_exposure,
+            target_scored,
             normalized_code,
             context.holdings_list,
         )
@@ -268,11 +271,13 @@ class BuyPointSopService:
             if holding_code == target_code:
                 same_code = True
                 continue
-            try:
-                detail = tushare_client.get_stock_detail(holding_code, compact_trade_date)
-            except Exception:
-                detail = {}
-            sector_name = str(detail.get("sector_name") or "")
+            sector_name = str(holding.get("sector_name") or "")
+            if not sector_name:
+                try:
+                    detail = tushare_client.get_stock_detail(holding_code, compact_trade_date)
+                except Exception:
+                    detail = {}
+                sector_name = str(detail.get("sector_name") or "")
             if sector_name and sector_name == target_sector:
                 same_sector_codes.append(holding_code)
 
@@ -294,21 +299,35 @@ class BuyPointSopService:
         account,
         market_env,
         direction_exposure: DirectionExposureSnapshot,
+        target_stock: StockOutput,
         target_code: str,
         holdings_list: List[dict],
     ) -> BuyPointSopAccountContext:
         position_status = self._position_status(account.total_position_ratio, account.holding_count)
         current_use = "加仓" if direction_exposure.has_same_code else "新开仓"
         market_suitability = self._market_suitability(market_env.market_env_tag)
+        holding_ok = True
+        holding_reason = None
+
+        if not direction_exposure.has_same_code:
+            holding_ok, holding_reason, _, _ = self._resolve_holding_constraint(
+                target_stock,
+                account,
+                holdings_list,
+            )
 
         if account.total_position_ratio >= AccountAdapterService.POSITION_HIGH:
             conclusion = "当前不适合承担 T+1 风险"
         elif account.today_new_buy_count >= AccountAdapterService.NEW_BUY_COUNT_LIMIT:
             conclusion = "当前不适合承担 T+1 风险"
+        elif direction_exposure.has_same_code:
+            conclusion = "已有同一只股票持仓，只能按加仓语境处理"
+        elif not holding_ok and holding_reason:
+            conclusion = holding_reason
         elif market_env.market_env_tag == MarketEnvTag.DEFENSE:
             conclusion = "弱市环境，只能低吸，不追高"
-        elif direction_exposure.has_same_code or direction_exposure.same_sector_codes:
-            conclusion = "有同方向持仓，不宜重复暴露"
+        elif holding_reason:
+            conclusion = holding_reason
         elif account.total_position_ratio < AccountAdapterService.POSITION_LOW:
             conclusion = "轻仓新开仓，可试错"
         else:
@@ -320,6 +339,24 @@ class BuyPointSopService:
             current_use=current_use,
             market_suitability=market_suitability,
             account_conclusion=conclusion,
+        )
+
+    def _resolve_holding_constraint(
+        self,
+        target_stock: StockOutput,
+        account,
+        holdings_list: List[dict],
+    ) -> tuple[bool, Optional[str], Optional[str], float]:
+        if not holdings_list:
+            return True, None, None, 0.0
+        holding_profile = stock_filter_service._build_holding_profile(
+            holdings_list,
+            account,
+        )
+        return stock_filter_service._assess_holding_fit(
+            target_stock,
+            holding_profile,
+            account,
         )
 
     def _build_daily_judgement(
@@ -554,12 +591,15 @@ class BuyPointSopService:
         order_plan: BuyPointSopOrderPlan,
     ) -> BuyPointSopPositionAdvice:
         if (
-            account_context.account_conclusion == "当前不适合承担 T+1 风险"
+            self._account_conclusion_blocks_entry(account_context.account_conclusion)
             or daily_judgement.buy_point_level == "D"
             or intraday_judgement.conclusion == "放弃"
         ):
             suggestion = "不出手"
-            reason = "账户或结构至少有一项没有过关，不值得承担当天买错跑不掉的风险。"
+            if self._account_conclusion_blocks_entry(account_context.account_conclusion):
+                reason = account_context.account_conclusion
+            else:
+                reason = "账户或结构至少有一项没有过关，不值得承担当天买错跑不掉的风险。"
         elif (
             daily_judgement.buy_point_level == "A"
             and intraday_judgement.conclusion == "买"
@@ -567,12 +607,18 @@ class BuyPointSopService:
             and account.total_position_ratio < AccountAdapterService.POSITION_LOW
             and not direction_exposure.has_same_code
             and not direction_exposure.same_sector_codes
+            and "同板块持仓" not in str(account_context.account_conclusion or "")
         ):
             suggestion = "中仓参与"
             reason = "环境、结构、分时和账户都比较匹配，可以按计划仓位参与。"
         else:
             suggestion = "轻仓试错"
-            reason = "买点还需要盘中确认或账户已有约束，只适合试错仓位。"
+            if direction_exposure.has_same_code:
+                reason = "当前是加仓语境，只能等更强确认后用试错仓处理。"
+            elif "同板块持仓" in str(account_context.account_conclusion or ""):
+                reason = account_context.account_conclusion
+            else:
+                reason = "买点还需要盘中确认或账户已有约束，只适合试错仓位。"
 
         invalidation_level = order_plan.below_no_buy
         return BuyPointSopPositionAdvice(
@@ -766,15 +812,29 @@ class BuyPointSopService:
         return "分化市"
 
     def _is_account_tight(self, account_context: BuyPointSopAccountContext) -> bool:
-        position_status = str(account_context.position_status or "")
-        exposure = str(account_context.same_direction_exposure or "")
-        current_use = str(account_context.current_use or "")
+        position_status = str(getattr(account_context, "position_status", "") or "")
+        exposure = str(getattr(account_context, "same_direction_exposure", "") or "")
+        current_use = str(getattr(account_context, "current_use", "") or "")
+        conclusion = str(getattr(account_context, "account_conclusion", "") or "")
         return (
             position_status.startswith("中仓")
             or position_status.startswith("重仓")
             or current_use == "加仓"
             or "同方向" in exposure
             or "同一只股票持仓" in exposure
+            or "同板块持仓" in conclusion
+            or "弱势/亏损持仓" in conclusion
+        )
+
+    def _account_conclusion_blocks_entry(self, conclusion: str) -> bool:
+        text = str(conclusion or "")
+        return any(
+            token in text
+            for token in [
+                "当前不适合承担 T+1 风险",
+                "不再新增同方向仓位",
+                "先处理旧仓，不做需要追价确认的新开仓",
+            ]
         )
 
     def _select_low_absorb_ref(
