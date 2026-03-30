@@ -578,3 +578,83 @@ async def test_buy_point_sop_prefers_realtime_single_stock_input_for_intraday(mo
     assert "站均价线上" in result.intraday_judgement.price_vs_avg_line
     assert result.intraday_judgement.volume_quality == "实时放量跟随（相对放量 2.2）"
     assert "[需确认]" not in result.intraday_judgement.intraday_structure
+
+
+@pytest.mark.asyncio
+async def test_buy_point_sop_falls_back_when_target_input_and_scored_stock_missing(monkeypatch):
+    market_env = MarketEnvOutput(
+        trade_date="2026-03-30",
+        market_env_tag=MarketEnvTag.NEUTRAL,
+        breakout_allowed=False,
+        risk_level=RiskLevel.MEDIUM,
+        market_comment="中性环境",
+        index_score=50,
+        sentiment_score=51,
+        overall_score=50,
+    )
+    context = SimpleNamespace(
+        trade_date="2026-03-30",
+        resolved_stock_trade_date="2026-03-27",
+        market_env=market_env,
+        sector_scan=SimpleNamespace(),
+        stocks=[],
+        holdings_list=[],
+        holdings=[],
+        account=SimpleNamespace(
+            total_asset=100000,
+            available_cash=80000,
+            total_position_ratio=0.2,
+            holding_count=1,
+            today_new_buy_count=0,
+        ),
+    )
+    pools = StockPoolsOutput(
+        trade_date="2026-03-30",
+        total_count=0,
+    )
+
+    async def fake_build_context(*args, **kwargs):
+        return context
+
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.build_context",
+        fake_build_context,
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.merge_single_stock_into_context",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("context missing")),
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.build_single_stock_input",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("detail missing")),
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.stock_filter_service.filter_with_context",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.stock_filter_service.classify_pools",
+        lambda *args, **kwargs: pools,
+    )
+    monkeypatch.setattr(
+        buy_point_sop_service,
+        "_load_history_payload",
+        lambda *args, **kwargs: (_history_rows(), "2026-03-27"),
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.buy_point_service._analyze_stock_buy_point",
+        lambda *args, **kwargs: SimpleNamespace(
+            buy_signal_tag=BuySignalTag.OBSERVE,
+            buy_point_type=BuyPointType.RETRACE_SUPPORT,
+            buy_trigger_cond="先看回踩承接",
+            buy_confirm_cond="站稳后再看",
+            buy_invalid_cond="跌破就放弃",
+            buy_invalid_price=0.0,
+        ),
+    )
+
+    result = await buy_point_sop_service.analyze("002463.SZ", "2026-03-30")
+
+    assert result.basic_info.ts_code == "002463.SZ"
+    assert result.basic_info.data_source == "fallback"
+    assert result.basic_info.candidate_bucket_tag == ""

@@ -101,6 +101,47 @@ class MarketDataGateway:
         """兼容旧服务与测试直接访问私有方法。"""
         return self.fetch_realtime_quote_map(ts_codes)
 
+    def fetch_recent_stock_daily_df(self, trade_date: str) -> Dict:
+        return tushare_client._fetch_recent_stock_daily_df(str(trade_date).replace("-", ""))
+
+    def _fetch_recent_stock_daily_df(self, trade_date: str) -> Dict:
+        """兼容旧服务与测试直接访问私有方法。"""
+        return self.fetch_recent_stock_daily_df(trade_date)
+
+    def get_stock_basic_snapshot_map(self) -> Dict:
+        return tushare_client._get_stock_basic_snapshot_map()
+
+    def _get_stock_basic_snapshot_map(self) -> Dict:
+        """兼容旧服务与测试直接访问私有方法。"""
+        return self.get_stock_basic_snapshot_map()
+
+    def build_daily_stock_source_df(
+        self,
+        df,
+        stock_meta_map,
+        *,
+        daily_basic_df=None,
+    ):
+        return tushare_client._build_daily_stock_source_df(
+            df,
+            stock_meta_map,
+            daily_basic_df=daily_basic_df,
+        )
+
+    def _build_daily_stock_source_df(
+        self,
+        df,
+        stock_meta_map,
+        *,
+        daily_basic_df=None,
+    ):
+        """兼容旧服务与测试直接访问私有方法。"""
+        return self.build_daily_stock_source_df(
+            df,
+            stock_meta_map,
+            daily_basic_df=daily_basic_df,
+        )
+
     @property
     def pro(self):
         return getattr(tushare_client, "pro", None)

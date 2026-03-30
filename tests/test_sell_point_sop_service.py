@@ -444,3 +444,168 @@ def test_sell_point_sop_price_vs_avg_line_uses_realtime_avg():
     )
 
     assert "压均价线下" in relation
+
+
+def test_sell_point_sop_order_plan_uses_live_holding_price_for_profitable_reduce():
+    holding = _sample_holding(
+        ts_code="603906.SH",
+        stock_name="龙蟠科技",
+        cost_price=20.51,
+        market_price=22.41,
+        pnl_pct=9.26,
+        holding_reason="进攻仓，趋势延续",
+    )
+    scored = _sample_scored_stock()
+    scored.ts_code = "603906.SH"
+    scored.stock_name = "龙蟠科技"
+    scored.close = 20.44
+    scored.open = 20.31
+    scored.high = 20.56
+    scored.low = 20.18
+    scored.structure_state_tag = StructureStateTag.DIVERGENCE
+
+    target_input = SimpleNamespace(
+        ts_code="603906.SH",
+        stock_name="龙蟠科技",
+        close=20.44,
+        open=20.31,
+        high=20.56,
+        low=20.18,
+        vol_ratio=1.6,
+    )
+    sell_point = SellPointOutput(
+        ts_code="603906.SH",
+        stock_name="龙蟠科技",
+        market_price=22.41,
+        cost_price=20.51,
+        pnl_pct=9.26,
+        holding_qty=500,
+        holding_days=4,
+        can_sell_today=True,
+        quote_time="2026-03-29 10:32:00",
+        data_source="realtime_sina",
+        sell_signal_tag=SellSignalTag.REDUCE,
+        sell_point_type=SellPointType.REDUCE_POSITION,
+        sell_trigger_cond="保护利润",
+        sell_reason="先落袋为安",
+        sell_priority=SellPriority.MEDIUM,
+        sell_comment="先减风险",
+    )
+    account_context = SimpleNamespace(role="进攻仓", pnl_status="厚利")
+    daily_judgement = SimpleNamespace(current_stage="松动", sell_point_level="B")
+    intraday_judgement = SimpleNamespace(conclusion="减")
+    levels = SimpleNamespace(
+        ma5=20.44,
+        ma10=20.28,
+        ma20=19.82,
+        prev_high=20.56,
+        prev_low=20.32,
+        range_high_20d=20.56,
+        range_low_20d=18.96,
+    )
+
+    result = sell_point_sop_service._build_order_plan(
+        target_input,
+        holding,
+        scored,
+        sell_point,
+        account_context,
+        daily_judgement,
+        intraday_judgement,
+        levels,
+    )
+
+    assert result.proactive_take_profit_price == "22.43-22.57"
+    assert result.rebound_sell_price == "20.32-20.56"
+    assert "锁利润" in result.take_profit_condition
+
+
+@pytest.mark.asyncio
+async def test_sell_point_sop_falls_back_to_holding_snapshot_when_single_stock_input_missing(monkeypatch):
+    market_env = MarketEnvOutput(
+        trade_date="2026-03-30",
+        market_env_tag=MarketEnvTag.NEUTRAL,
+        breakout_allowed=False,
+        risk_level=RiskLevel.MEDIUM,
+        market_comment="中性环境",
+        index_score=50,
+        sentiment_score=51,
+        overall_score=50,
+    )
+    holding = _sample_holding(
+        market_price=31.8,
+        pnl_pct=6.0,
+        quote_time="2026-03-30 10:20:00",
+        data_source="realtime_sina",
+    )
+    context = SimpleNamespace(
+        trade_date="2026-03-30",
+        resolved_stock_trade_date="2026-03-27",
+        market_env=market_env,
+        sector_scan=SimpleNamespace(),
+        stocks=[],
+        holdings_list=[holding.model_dump()],
+        holdings=[holding],
+        account=SimpleNamespace(
+            total_asset=100000,
+            available_cash=50000,
+            total_position_ratio=0.4,
+            holding_count=2,
+            today_new_buy_count=0,
+        ),
+    )
+    sell_point = SellPointOutput(
+        ts_code="002463.SZ",
+        stock_name="沪电股份",
+        market_price=31.8,
+        cost_price=30.0,
+        pnl_pct=6.0,
+        holding_qty=300,
+        holding_days=3,
+        can_sell_today=True,
+        quote_time="2026-03-30 10:20:00",
+        data_source="realtime_sina",
+        sell_signal_tag=SellSignalTag.HOLD,
+        sell_point_type=SellPointType.REDUCE_POSITION,
+        sell_trigger_cond="守不住再处理",
+        sell_reason="趋势未坏",
+        sell_priority=SellPriority.LOW,
+        sell_comment="先观察",
+    )
+
+    async def fake_build_context(*args, **kwargs):
+        return context
+
+    monkeypatch.setattr(
+        "app.services.sell_point_sop.decision_context_service.build_context",
+        fake_build_context,
+    )
+    monkeypatch.setattr(
+        "app.services.sell_point_sop.decision_context_service.build_single_stock_input",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("detail missing")),
+    )
+    monkeypatch.setattr(
+        "app.services.sell_point_sop.stock_filter_service.filter_with_context",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        sell_point_sop_service,
+        "_load_history_payload",
+        lambda *args, **kwargs: (_history_rows(), "2026-03-27"),
+    )
+    monkeypatch.setattr(
+        "app.services.sell_point_sop.sell_point_service.analyze",
+        lambda *args, **kwargs: SellPointResponse(
+            trade_date="2026-03-30",
+            hold_positions=[sell_point],
+            reduce_positions=[],
+            sell_positions=[],
+            total_count=1,
+        ),
+    )
+
+    result = await sell_point_sop_service.analyze("002463.SZ", "2026-03-30")
+
+    assert result.basic_info.stock_name == "沪电股份"
+    assert result.basic_info.data_source == "realtime_sina"
+    assert result.intraday_judgement.conclusion == "拿"

@@ -17,6 +17,14 @@
           {{ loadError }}
         </div>
         <div v-if="buyData.market_env_tag" class="decision-overview">
+          <div v-if="reviewBucketFilter" class="focus-context focus-context-review">
+            <div class="focus-context-copy">
+              当前按复盘来源 <strong>{{ reviewSourceLabel }}</strong> 的 <strong>{{ reviewBucketFilter }}</strong> 结构查看买点。
+            </div>
+            <div class="focus-context-actions">
+              <el-button link type="primary" size="small" @click="clearReviewFilter">清除筛选</el-button>
+            </div>
+          </div>
           <div v-if="focusSector" class="focus-context">
             <div class="focus-context-copy">
               当前按 <strong>{{ focusSector }}</strong> 方向查看买点，相关机会会优先排到前面。
@@ -548,7 +556,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { decisionApi } from '../api'
 import { authState } from '../auth'
@@ -578,6 +586,8 @@ const route = useRoute()
 const router = useRouter()
 const BUY_POINT_CACHE_PREFIX = 'ai_stock_buy_point'
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
+const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
+const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
 const focusOnly = ref(false)
 
 const matchesFocusSector = (point) => {
@@ -593,9 +603,18 @@ const sortByFocusSector = (points = []) => {
   return sorted
 }
 
-const availablePoints = computed(() => sortByFocusSector(buyData.value.available_buy_points || []))
-const observePoints = computed(() => sortByFocusSector(buyData.value.observe_buy_points || []))
-const notBuyPoints = computed(() => sortByFocusSector(buyData.value.not_buy_points || []))
+const matchesReviewBucket = (point) => {
+  if (!reviewBucketFilter.value) return true
+  return String(point.candidate_bucket_tag || '').trim() === reviewBucketFilter.value
+}
+
+const applyPageFilters = (points = []) => sortByFocusSector(points).filter(matchesReviewBucket)
+
+const availablePoints = computed(() => applyPageFilters(buyData.value.available_buy_points || []))
+const observePoints = computed(() => applyPageFilters(buyData.value.observe_buy_points || []))
+const notBuyPoints = computed(() => applyPageFilters(buyData.value.not_buy_points || []))
+
+const reviewSourceLabel = computed(() => reviewSnapshotTypeLabel(reviewSourceFilter.value))
 
 const primaryAvailableLimit = computed(() => {
   if (buyData.value.market_env_tag === '进攻') return 5
@@ -644,11 +663,23 @@ const backupAvailablePoints = computed(() => {
 })
 
 const reviewSnapshotTypeLabel = (value) => {
-  if (value === 'buy_available') return '可买'
-  if (value === 'buy_observe') return '观察'
-  if (value === 'pool_account') return '可参与池'
-  if (value === 'pool_market') return '观察池'
+  if (value === 'buy_available') return '买点-可买'
+  if (value === 'buy_observe') return '买点-观察'
+  if (value === 'pool_account') return '三池-可参与池'
+  if (value === 'pool_market') return '三池-观察池'
   return value || '-'
+}
+
+const resolveDefaultTab = (payload) => {
+  if (reviewSourceFilter.value === 'buy_available') {
+    return payload?.available_buy_points?.length ? 'available' : payload?.observe_buy_points?.length ? 'observe' : 'skip'
+  }
+  if (reviewSourceFilter.value === 'buy_observe') {
+    return payload?.observe_buy_points?.length ? 'observe' : payload?.available_buy_points?.length ? 'available' : 'skip'
+  }
+  if (payload?.available_buy_points?.length) return 'available'
+  if (payload?.observe_buy_points?.length) return 'observe'
+  return 'skip'
 }
 
 const reviewRowLabel = (row) => `${reviewSnapshotTypeLabel(row.snapshot_type)} / ${row.candidate_bucket_tag || '未分层'}`
@@ -776,9 +807,7 @@ const applyBuyData = (payload) => {
     observe_buy_points: [],
     not_buy_points: [],
   }
-  if (buyData.value.available_buy_points?.length) activeTab.value = 'available'
-  else if (buyData.value.observe_buy_points?.length) activeTab.value = 'observe'
-  else activeTab.value = 'skip'
+  activeTab.value = resolveDefaultTab(buyData.value)
 }
 
 const persistBuyPointCache = () => {
@@ -995,6 +1024,13 @@ const clearFocusSector = () => {
   router.replace({ query })
 }
 
+const clearReviewFilter = () => {
+  const query = { ...route.query }
+  delete query.review_bucket
+  delete query.review_source
+  router.replace({ query })
+}
+
 const hardFilterLine = (point) => point.hard_filter_summary || '硬过滤状态未返回'
 
 const loadData = async ({ silent = false } = {}) => {
@@ -1004,11 +1040,17 @@ const loadData = async ({ silent = false } = {}) => {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
     const res = await decisionApi.buyPoint(tradeDate, 30, { timeout: BUY_POINT_TIMEOUT })
-    applyBuyData(res.data.data)
+    const payload = res.data || {}
+    const responseCode = payload.code ?? 200
+    if (responseCode !== 200 || !payload.data) {
+      throw new Error(payload.message || '买点数据加载失败，请刷新重试。')
+    }
+    applyBuyData(payload.data)
     persistBuyPointCache()
   } catch (error) {
-    loadError.value = '买点数据加载失败，请刷新重试。'
-    ElMessage.error('加载失败')
+    const message = error?.response?.data?.message || error?.message || '买点数据加载失败，请刷新重试。'
+    loadError.value = message
+    ElMessage.error(message)
   } finally {
     loading.value = false
   }
@@ -1030,6 +1072,10 @@ onMounted(() => {
   const hydrated = hydrateBuyPointCache(tradeDate)
   loadData({ silent: hydrated })
   scheduleReviewInsightLoad()
+})
+
+watch(reviewSourceFilter, () => {
+  activeTab.value = resolveDefaultTab(buyData.value)
 })
 </script>
 

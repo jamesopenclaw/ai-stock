@@ -1,0 +1,26 @@
+- generic [ref=e197]:
+  - generic [ref=e198]:
+    - generic [ref=e199]: Iteration 1
+    - heading "轻舟交易系统" [level=1] [ref=e200]
+    - paragraph [ref=e201]: 先完成登录与权限骨架，后续再叠加多账户能力。
+  - generic [ref=e202]:
+    - generic [ref=e204]:
+      - generic [ref=e205]: 账号登录
+      - generic [ref=e206]: 默认管理员在后端启动时自动初始化
+    - generic [ref=e208]:
+      - generic [ref=e209]:
+        - generic [ref=e210]: 用户名
+        - textbox "用户名" [ref=e214]:
+          - /placeholder: 请输入用户名
+          - text: hehq
+      - generic [ref=e215]:
+        - generic [ref=e216]: 密码
+        - generic [ref=e219]:
+          - textbox "密码" [ref=e220]:
+            - /placeholder: 请输入密码
+            - text: hehq123456
+          - img [ref=e230] [cursor=pointer]
+      - button "登录" [disabled]:
+        - generic:
+          - img
+        - generic: 登录

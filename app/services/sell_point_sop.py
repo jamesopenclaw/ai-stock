@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 from app.data.tushare_client import normalize_ts_code
@@ -85,7 +86,7 @@ class SellPointSopService:
                     stock for stock in context.stocks if normalize_ts_code(stock.ts_code) == normalized_code
                 )
             except StopIteration:
-                raise ValueError("未找到目标股票的行情数据")
+                target_input = self._build_fallback_target_input(target_holding)
             target_input.quote_time = target_holding.quote_time or target_input.quote_time
             target_input.data_source = target_holding.data_source or target_input.data_source
             if getattr(target_holding, "market_price", None):
@@ -194,6 +195,30 @@ class SellPointSopService:
                 if normalize_ts_code(point.ts_code) == ts_code:
                     return point
         return None
+
+    def _build_fallback_target_input(self, holding: AccountPosition):
+        """当单股行情输入不可用时，退化为基于持仓快照的最小分析输入。"""
+        price = float(getattr(holding, "market_price", None) or getattr(holding, "cost_price", None) or 0)
+        pre_close = float(getattr(holding, "cost_price", None) or price or 0)
+        change_pct = float(getattr(holding, "pnl_pct", None) or 0)
+        return SimpleNamespace(
+            ts_code=holding.ts_code,
+            stock_name=holding.stock_name,
+            sector_name="未知",
+            close=price,
+            open=price,
+            high=price,
+            low=price,
+            pre_close=pre_close,
+            change_pct=change_pct,
+            turnover_rate=0.0,
+            amount=0.0,
+            avg_price=price,
+            intraday_volume_ratio=None,
+            vol_ratio=0.0,
+            quote_time=getattr(holding, "quote_time", None),
+            data_source=getattr(holding, "data_source", None) or "holding_snapshot",
+        )
 
     def _build_daily_levels(self, target_input, history_rows: List[Dict]) -> SellDailyLevels:
         closes = [float(row.get("close") or 0) for row in history_rows if float(row.get("close") or 0) > 0]
@@ -356,7 +381,8 @@ class SellPointSopService:
         intraday_judgement: SellPointSopIntradayJudgement,
         levels: SellDailyLevels,
     ) -> SellPointSopOrderPlan:
-        price = float(target_input.close or holding.market_price or 0)
+        live_holding_price = self._round_price(getattr(holding, "market_price", None))
+        price = float(live_holding_price or target_input.close or 0)
         sell_style = self._resolve_sell_style(
             target_scored,
             account_context,
@@ -393,10 +419,18 @@ class SellPointSopService:
             sell_style,
             intraday_judgement.conclusion,
         )
+        allow_proactive_take_profit = proactive_ref is not None and (
+            sell_style == "strong_profit"
+            or (
+                holding.pnl_pct > 0
+                and intraday_judgement.conclusion == "减"
+                and sell_style != "weak_exit"
+            )
+        )
 
         proactive_zone = (
             self._format_zone(proactive_ref, self._proactive_buffer_pct(sell_style, target_input))
-            if proactive_ref is not None and sell_style == "strong_profit"
+            if allow_proactive_take_profit
             else "[当前不适用]"
         )
         rebound_zone = (
@@ -423,6 +457,10 @@ class SellPointSopService:
                 f"守住 {self._display_price(observe_ref)} 且没有明显派发，可以继续拿剩余仓位观察。"
                 if observe_ref is not None
                 else "继续观察位 [需确认]"
+            )
+        elif allow_proactive_take_profit:
+            take_profit_condition = (
+                f"当前位置已有利润垫，冲到 {proactive_zone} 一带若继续放缓或站不稳，可先兑现 1/3 锁利润。"
             )
         elif sell_style in {"observation_exit", "weak_exit"}:
             rebound_condition = (
@@ -667,7 +705,7 @@ class SellPointSopService:
         sell_style: str,
         holding: AccountPosition,
     ) -> Optional[float]:
-        if sell_style != "strong_profit" or holding.pnl_pct <= 0:
+        if sell_style == "weak_exit" or holding.pnl_pct <= 0:
             return None
         candidates = self._positive_prices(
             target_input.high,

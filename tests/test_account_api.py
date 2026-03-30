@@ -3,7 +3,9 @@
 """
 import os
 import sys
+from types import SimpleNamespace
 
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -103,3 +105,68 @@ def test_refresh_holdings_price_keeps_existing_when_detail_missing(monkeypatch):
     assert holdings[0]["market_price"] == 63.44
     assert holdings[0]["holding_market_value"] == 6344.0
     assert holdings[0]["pnl_pct"] == -0.17
+
+
+@pytest.mark.asyncio
+async def test_build_account_overview_payload_enriches_pnl_amounts(monkeypatch):
+    async def fake_get_holdings(_account_id):
+        return [
+            {
+                "id": "h1",
+                "ts_code": "601012.SH",
+                "stock_name": "隆基绿能",
+                "holding_qty": 800,
+                "cost_price": 18.49,
+                "market_price": 18.52,
+                "pre_close": 18.40,
+                "pnl_pct": 0.16,
+                "holding_market_value": 14816.0,
+                "buy_date": "2026-02-24",
+                "can_sell_today": True,
+                "holding_reason": "测试",
+            }
+        ]
+
+    async def fake_build_account_input(_holdings, _account_id):
+        return account.AccountInput(
+            total_asset=100000.0,
+            available_cash=85184.0,
+            total_position_ratio=0.1482,
+            holding_count=1,
+            today_new_buy_count=0,
+            t1_locked_positions=[],
+        )
+
+    monkeypatch.setattr(account, "get_holdings_from_db", fake_get_holdings)
+    monkeypatch.setattr(account, "build_account_input", fake_build_account_input)
+    monkeypatch.setattr(
+        account.account_adapter_service,
+        "get_profile",
+        lambda _account, _holdings: account.AccountProfile(
+            total_asset=100000.0,
+            available_cash=85184.0,
+            total_position_ratio=0.1482,
+            holding_count=1,
+            today_new_buy_count=0,
+            t1_locked_count=0,
+            market_value=14816.0,
+        ),
+    )
+    monkeypatch.setattr(
+        account.account_adapter_service,
+        "adapt",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            new_position_allowed=True,
+            account_action_tag="可执行",
+            priority_action="保持现有仓位",
+        ),
+    )
+
+    payload = await account.build_account_overview_payload(
+        SimpleNamespace(id="account-1", account_name="默认账户")
+    )
+
+    assert payload["profile"]["total_pnl_amount"] == 24.0
+    assert payload["profile"]["today_pnl_amount"] == 96.0
+    assert payload["positions"][0]["pnl_amount"] == 24.0
+    assert payload["positions"][0]["today_pnl_amount"] == 96.0

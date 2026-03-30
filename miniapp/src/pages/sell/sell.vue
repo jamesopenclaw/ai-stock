@@ -67,6 +67,14 @@
             <text>{{ actionLine(item) }}</text>
           </view>
 
+          <view
+            v-if="item.add_signal_tag"
+            :class="['add-signal-box', item.add_signal_tag === '建议加仓' ? 'add-signal-strong' : 'add-signal-watch']"
+          >
+            <text class="add-signal-title">{{ item.add_signal_tag }}</text>
+            <text class="add-signal-desc">{{ item.add_signal_reason || '这只票可以继续按加仓语境跟踪。' }}</text>
+          </view>
+
           <view class="quote-grid">
             <view class="quote-card">
               <text class="quote-label">现价 / 成本</text>
@@ -98,6 +106,10 @@
             <view class="detail-block">
               <text class="detail-title">状态</text>
               <text class="detail-content">{{ item.sell_priority }}优先 / {{ item.can_sell_today ? '今日可卖' : 'T+1锁定' }}</text>
+            </view>
+            <view v-if="item.add_signal_tag" class="detail-block">
+              <text class="detail-title">加仓提示</text>
+              <text class="detail-content">{{ item.add_signal_tag }} / {{ item.add_signal_reason || '-' }}</text>
             </view>
           </view>
         </view>
@@ -156,6 +168,7 @@ const toggleDetail = (item) => {
 }
 
 const actionLine = (item) => {
+  if (item.add_signal_tag) return `${item.add_signal_tag}：${item.add_signal_reason || item.sell_comment || item.sell_reason}`
   if (item.sell_signal_tag === '卖出') return `优先处理：${item.sell_reason}`
   if (item.sell_signal_tag === '减仓') return `先降风险：${item.sell_reason}`
   return `继续跟踪：${item.sell_comment || item.sell_reason}`
@@ -258,6 +271,18 @@ onMounted(() => {
 .top-action-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 10px; background: rgba(255,255,255,0.65); }
 .top-action-rank { width: 22px; height: 22px; border-radius: 999px; background: #f56c6c; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
 .top-action-copy { display: flex; flex-direction: column; gap: 3px; }
+.add-signal-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.add-signal-strong { background: rgba(255, 140, 105, 0.12); }
+.add-signal-watch { background: rgba(230, 162, 60, 0.12); }
+.add-signal-title { font-size: 12px; font-weight: 700; }
+.add-signal-desc { font-size: 12px; color: #666; line-height: 1.5; }
 .top-action-name { font-size: 13px; font-weight: 600; }
 .top-action-desc { font-size: 12px; color: #666; line-height: 1.5; }
 

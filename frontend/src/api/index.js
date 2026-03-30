@@ -9,6 +9,72 @@ const api = axios.create({
   timeout: 30000
 })
 
+const memoryCache = new Map()
+const inflightRequests = new Map()
+const DEFAULT_CACHE_TTL_MS = 60 * 1000
+
+const scopedCacheKey = (prefix, parts = []) => {
+  const accountId = authState.account?.id || 'guest'
+  return [prefix, accountId, ...parts].join(':')
+}
+
+const readCachedValue = (cacheKey, ttlMs) => {
+  const now = Date.now()
+  const memo = memoryCache.get(cacheKey)
+  if (memo && now - memo.updatedAt < ttlMs) {
+    return memo.value
+  }
+  if (typeof window === 'undefined') return null
+  const raw = window.sessionStorage.getItem(cacheKey)
+  if (!raw) return null
+  try {
+    const payload = JSON.parse(raw)
+    if (!payload?.updatedAt || now - Number(payload.updatedAt) >= ttlMs) {
+      window.sessionStorage.removeItem(cacheKey)
+      return null
+    }
+    memoryCache.set(cacheKey, payload)
+    return payload.value
+  } catch (error) {
+    window.sessionStorage.removeItem(cacheKey)
+    return null
+  }
+}
+
+const writeCachedValue = (cacheKey, value) => {
+  const payload = { value, updatedAt: Date.now() }
+  memoryCache.set(cacheKey, payload)
+  if (typeof window !== 'undefined') {
+    window.sessionStorage.setItem(cacheKey, JSON.stringify(payload))
+  }
+}
+
+const cachedGet = async (cacheKey, fetcher, options = {}) => {
+  const ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL_MS
+  if (!options.refresh) {
+    const cachedValue = readCachedValue(cacheKey, ttlMs)
+    if (cachedValue) {
+      return { data: { data: cachedValue } }
+    }
+    const inflight = inflightRequests.get(cacheKey)
+    if (inflight) {
+      return inflight
+    }
+  }
+
+  const requestPromise = fetcher()
+    .then((response) => {
+      writeCachedValue(cacheKey, response.data?.data ?? null)
+      return response
+    })
+    .finally(() => {
+      inflightRequests.delete(cacheKey)
+    })
+
+  inflightRequests.set(cacheKey, requestPromise)
+  return requestPromise
+}
+
 const redirectToLogin = () => {
   if (typeof window === 'undefined') {
     return
@@ -99,6 +165,7 @@ api.interceptors.response.use(
 )
 
 export const authApi = {
+  ping: (options = {}) => api.get('/ping', { timeout: options.timeout }),
   login: (payload) => api.post('/auth/login', payload),
   refresh: (refreshToken) => api.post('/auth/refresh', { refresh_token: refreshToken }),
   logout: (refreshToken) => api.post('/auth/logout', { refresh_token: refreshToken }),
@@ -117,10 +184,14 @@ export const adminApi = {
 
 // Market API
 export const marketApi = {
-  getEnv: (tradeDate, options = {}) => api.get('/market/env', {
-    params: { trade_date: tradeDate },
-    timeout: options.timeout
-  }),
+  getEnv: (tradeDate, options = {}) => cachedGet(
+    scopedCacheKey('market-env', [tradeDate]),
+    () => api.get('/market/env', {
+      params: { trade_date: tradeDate },
+      timeout: options.timeout
+    }),
+    { ttlMs: options.ttlMs ?? DEFAULT_CACHE_TTL_MS, refresh: Boolean(options.refresh) }
+  ),
   getIndex: (tradeDate, options = {}) => api.get('/market/index', {
     params: { trade_date: tradeDate },
     timeout: options.timeout
@@ -133,16 +204,34 @@ export const marketApi = {
 
 // Sector API
 export const sectorApi = {
-  scan: (tradeDate, options = {}) => api.get('/sector/scan', {
-    params: { trade_date: tradeDate, refresh: Boolean(options.refresh) },
-    timeout: options.timeout
-  }),
-  leader: (tradeDate, options = {}) => api.get('/sector/leader', {
-    params: { trade_date: tradeDate, refresh: Boolean(options.refresh) },
-    timeout: options.timeout
-  }),
+  scan: (tradeDate, options = {}) => cachedGet(
+    scopedCacheKey('sector-scan', [tradeDate]),
+    () => api.get('/sector/scan', {
+      params: { trade_date: tradeDate, refresh: Boolean(options.refresh) },
+      timeout: options.timeout
+    }),
+    { ttlMs: options.ttlMs ?? 30 * 1000, refresh: Boolean(options.refresh) }
+  ),
+  leader: (tradeDate, options = {}) => cachedGet(
+    scopedCacheKey('sector-leader', [tradeDate]),
+    () => api.get('/sector/leader', {
+      params: { trade_date: tradeDate, refresh: Boolean(options.refresh) },
+      timeout: options.timeout
+    }),
+    { ttlMs: options.ttlMs ?? 30 * 1000, refresh: Boolean(options.refresh) }
+  ),
   list: (tradeDate, limit, options = {}) => api.get('/sector/list', {
     params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
+    timeout: options.timeout
+  }),
+  topStocks: (tradeDate, sectorName, sectorSourceType, limit = 10, options = {}) => api.get('/sector/top-stocks', {
+    params: {
+      trade_date: tradeDate,
+      sector_name: sectorName,
+      sector_source_type: sectorSourceType,
+      limit,
+      refresh: Boolean(options.refresh)
+    },
     timeout: options.timeout
   })
 }
@@ -150,10 +239,14 @@ export const sectorApi = {
 // Stock API
 export const stockApi = {
   filter: (tradeDate, limit) => api.get('/stock/filter', { params: { trade_date: tradeDate, limit } }),
-  pools: (tradeDate, limit, options = {}) => api.get('/stock/pools', {
-    params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
-    timeout: options.timeout
-  }),
+  pools: (tradeDate, limit, options = {}) => cachedGet(
+    scopedCacheKey('stock-pools', [tradeDate, String(limit)]),
+    () => api.get('/stock/pools', {
+      params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
+      timeout: options.timeout
+    }),
+    { ttlMs: options.ttlMs ?? 30 * 1000, refresh: Boolean(options.refresh) }
+  ),
   detail: (tsCode, tradeDate) => api.get(`/stock/detail/${tsCode}`, { params: { trade_date: tradeDate } }),
   buyAnalysis: (tsCode, tradeDate) => api.get(`/stock/buy-analysis/${encodeURIComponent(tsCode)}`, {
     params: { trade_date: tradeDate }
@@ -180,6 +273,7 @@ export const decisionApi = {
   sellPoint: (tradeDate, options = {}) => api.get('/decision/sell-point', {
     params: {
       trade_date: tradeDate,
+      refresh: Boolean(options.refresh),
       force_llm_refresh: Boolean(options.forceLlmRefresh),
       include_llm: options.includeLlm !== undefined ? Boolean(options.includeLlm) : true
     },
@@ -190,15 +284,23 @@ export const decisionApi = {
     timeout: options.timeout
   }),
   analyze: (tradeDate) => api.post('/decision/analyze', { trade_date: tradeDate }),
-  reviewStats: (limitDays = 10, options = {}) => api.get('/decision/review-stats', {
-    params: { limit_days: limitDays },
-    timeout: options.timeout
-  })
+  reviewStats: (limitDays = 10, options = {}) => cachedGet(
+    scopedCacheKey('review-stats', [String(limitDays)]),
+    () => api.get('/decision/review-stats', {
+      params: { limit_days: limitDays },
+      timeout: options.timeout
+    }),
+    { ttlMs: options.ttlMs ?? DEFAULT_CACHE_TTL_MS, refresh: Boolean(options.refresh) }
+  )
 }
 
 // Account API
 export const accountApi = {
-  overview: (options = {}) => api.get('/account/overview', { timeout: options.timeout }),
+  overview: (options = {}) => cachedGet(
+    scopedCacheKey('account-overview'),
+    () => api.get('/account/overview', { timeout: options.timeout }),
+    { ttlMs: options.ttlMs ?? 30 * 1000, refresh: Boolean(options.refresh) }
+  ),
   profile: (options = {}) => api.get('/account/profile', { timeout: options.timeout }),
   positions: (options = {}) => api.get('/account/positions', { timeout: options.timeout }),
   status: (options = {}) => api.get('/account/status', { timeout: options.timeout }),
@@ -213,7 +315,10 @@ export const accountApi = {
 }
 
 export const systemApi = {
-  llmLogs: (params = {}) => api.get('/system/llm/logs', { params })
+  getConfig: () => api.get('/system/config'),
+  updateConfig: (payload) => api.put('/system/config', payload),
+  llmLogs: (params = {}) => api.get('/system/llm/logs', { params }),
+  llmLogsDailyStats: (params = {}) => api.get('/system/llm/logs/daily-stats', { params })
 }
 
 export const taskApi = {

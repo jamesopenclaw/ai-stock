@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 from app.data.tushare_client import normalize_ts_code, tushare_client
@@ -19,8 +20,11 @@ from app.models.schemas import (
     BuyPointSopResponse,
     BuySignalTag,
     MarketEnvTag,
+    StockContinuityTag,
+    StockCoreTag,
     StockOutput,
     StockPoolTag,
+    StockStrengthTag,
     StockTradeabilityTag,
     StructureStateTag,
 )
@@ -78,12 +82,19 @@ class BuyPointSopService:
         )
         stable_market_env = context.market_env
         realtime_market_env = getattr(context, "realtime_market_env", None) or stable_market_env
-        stocks, found_in_candidates = decision_context_service.merge_single_stock_into_context(
-            trade_date,
-            context.stocks,
-            normalized_code,
-            candidate_source_tag="买点分析",
-        )
+        try:
+            stocks, found_in_candidates = decision_context_service.merge_single_stock_into_context(
+                trade_date,
+                context.stocks,
+                normalized_code,
+                candidate_source_tag="买点分析",
+            )
+        except Exception:
+            stocks = context.stocks
+            found_in_candidates = any(
+                normalize_ts_code(stock.ts_code) == normalized_code
+                for stock in context.stocks
+            )
         try:
             target_input = decision_context_service.build_single_stock_input(
                 normalized_code,
@@ -91,9 +102,12 @@ class BuyPointSopService:
                 candidate_source_tag="买点分析",
             )
         except Exception:
-            target_input = next(
-                stock for stock in stocks if normalize_ts_code(stock.ts_code) == normalized_code
-            )
+            try:
+                target_input = next(
+                    stock for stock in stocks if normalize_ts_code(stock.ts_code) == normalized_code
+                )
+            except StopIteration:
+                target_input = self._build_fallback_target_input(normalized_code)
         scored_stocks = stock_filter_service.filter_with_context(
             trade_date,
             stocks,
@@ -114,9 +128,12 @@ class BuyPointSopService:
         target_scored, pool_tag = self._resolve_target_pool_stock(stock_pools, normalized_code)
         if target_scored is None:
             target_scored = next(
-                stock for stock in scored_stocks if normalize_ts_code(stock.ts_code) == normalized_code
+                (stock for stock in scored_stocks if normalize_ts_code(stock.ts_code) == normalized_code),
+                None,
             )
             pool_tag = StockPoolTag.NOT_IN_POOL
+        if target_scored is None:
+            target_scored = self._build_fallback_scored_stock(target_input)
 
         target_scored.stock_pool_tag = pool_tag
         analysis_stock = target_scored.model_copy(deep=True)
@@ -230,6 +247,62 @@ class BuyPointSopService:
                 if normalize_ts_code(stock.ts_code) == ts_code:
                     return stock, pool_tag
         return None, StockPoolTag.NOT_IN_POOL
+
+    def _build_fallback_target_input(self, ts_code: str):
+        """当单股行情输入不可用时，退化为最小可分析输入。"""
+        return SimpleNamespace(
+            ts_code=ts_code,
+            stock_name=ts_code,
+            sector_name="未知",
+            close=0.0,
+            open=0.0,
+            high=0.0,
+            low=0.0,
+            pre_close=0.0,
+            change_pct=0.0,
+            turnover_rate=0.0,
+            amount=0.0,
+            vol_ratio=0.0,
+            avg_price=None,
+            intraday_volume_ratio=None,
+            candidate_source_tag="买点分析",
+            quote_time=None,
+            data_source="fallback",
+            concept_names=[],
+        )
+
+    def _build_fallback_scored_stock(self, target_input) -> StockOutput:
+        """当候选评分结果缺失时，构造最小可分析对象，避免 SOP 整体失败。"""
+        return StockOutput(
+            ts_code=target_input.ts_code,
+            stock_name=target_input.stock_name,
+            sector_name=getattr(target_input, "sector_name", "未知") or "未知",
+            change_pct=float(getattr(target_input, "change_pct", 0) or 0),
+            amount=float(getattr(target_input, "amount", 0) or 0),
+            close=float(getattr(target_input, "close", 0) or 0),
+            open=float(getattr(target_input, "open", 0) or 0),
+            high=float(getattr(target_input, "high", 0) or 0),
+            low=float(getattr(target_input, "low", 0) or 0),
+            pre_close=float(getattr(target_input, "pre_close", 0) or 0),
+            vol_ratio=getattr(target_input, "vol_ratio", None),
+            turnover_rate=float(getattr(target_input, "turnover_rate", 0) or 0),
+            stock_score=0.0,
+            candidate_source_tag=getattr(target_input, "candidate_source_tag", "") or "买点分析",
+            candidate_bucket_tag="",
+            volume=getattr(target_input, "volume", None),
+            avg_price=getattr(target_input, "avg_price", None),
+            intraday_volume_ratio=getattr(target_input, "intraday_volume_ratio", None),
+            quote_time=getattr(target_input, "quote_time", None),
+            data_source=getattr(target_input, "data_source", None),
+            concept_names=list(getattr(target_input, "concept_names", []) or []),
+            stock_strength_tag=StockStrengthTag.MEDIUM,
+            stock_continuity_tag=StockContinuityTag.OBSERVABLE,
+            stock_tradeability_tag=StockTradeabilityTag.CAUTION,
+            stock_core_tag=StockCoreTag.FOLLOW,
+            stock_pool_tag=StockPoolTag.NOT_IN_POOL,
+            structure_state_tag=None,
+            stock_comment="候选评分缺失，按最小上下文生成买点 SOP。",
+        )
 
     def _build_daily_levels(self, target_input, history_rows: List[Dict]) -> DailyLevelSnapshot:
         closes = [float(row.get("close") or 0) for row in history_rows if float(row.get("close") or 0) > 0]

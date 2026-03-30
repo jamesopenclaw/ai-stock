@@ -103,11 +103,11 @@
       </div>
       <el-empty v-if="!positions.length" description="暂无持仓" />
       <el-table v-else :data="positions" style="width: 100%">
-        <el-table-column prop="ts_code" label="代码" width="100" />
-        <el-table-column prop="stock_name" label="名称" width="120" />
-        <el-table-column prop="holding_qty" label="数量" width="100" />
-        <el-table-column prop="cost_price" label="成本" width="100" />
-        <el-table-column prop="market_price" label="现价" width="140">
+        <el-table-column prop="ts_code" label="代码" width="100" sortable />
+        <el-table-column prop="stock_name" label="名称" width="120" sortable />
+        <el-table-column prop="holding_qty" label="数量" width="100" sortable />
+        <el-table-column prop="cost_price" label="成本" width="100" sortable />
+        <el-table-column prop="market_price" label="现价" width="140" sortable>
           <template #default="{ row }">
             <div class="price-cell">
               <div>{{ formatPrice(row.market_price) }}</div>
@@ -115,26 +115,31 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="holding_days" label="持股天数" width="90" />
-        <el-table-column label="盈亏金额" width="120">
+        <el-table-column prop="holding_market_value" label="市值" width="130" sortable>
+          <template #default="{ row }">
+            <span>{{ formatYuan(row.holding_market_value) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="holding_days" label="持股天数" width="110" sortable />
+        <el-table-column prop="pnl_amount" label="盈亏金额" width="130" sortable>
           <template #default="{ row }">
             <span :class="pnlAmountClass(row.pnl_amount)">{{ formatPnl(row.pnl_amount) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="当日盈亏" width="120">
+        <el-table-column prop="today_pnl_amount" label="当日盈亏" width="130" sortable>
           <template #default="{ row }">
             <span :class="pnlAmountClass(row.today_pnl_amount)">{{ formatPnl(row.today_pnl_amount) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="pnl_pct" label="盈亏%" width="90">
+        <el-table-column prop="pnl_pct" label="盈亏%" width="90" sortable>
           <template #default="{ row }">
             <span :class="row.pnl_pct > 0 ? 'text-red' : 'text-green'">
               {{ row.pnl_pct?.toFixed(2) }}%
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="buy_date" label="买入日期" width="120" />
-        <el-table-column prop="can_sell_today" label="可卖" width="100">
+        <el-table-column prop="buy_date" label="买入日期" width="130" sortable />
+        <el-table-column prop="can_sell_today" label="可卖" width="100" sortable>
           <template #default="{ row }">
             <el-tag :type="row.can_sell_today ? 'success' : 'warning'" size="small">
               {{ row.can_sell_today ? '是' : '否(T+1)' }}
@@ -206,6 +211,24 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="showDeleteDialog" title="确认删除" width="420px" class="delete-position-dialog">
+      <div class="delete-dialog-body">
+        <div class="delete-dialog-icon">!</div>
+        <div class="delete-dialog-copy">
+          <div class="delete-dialog-title">确定要删除这条持仓记录吗？</div>
+          <div class="delete-dialog-meta">
+            <span>{{ deleteTarget.stock_name || '未命名持仓' }}</span>
+            <span>{{ deleteTarget.ts_code || '-' }}</span>
+          </div>
+          <div class="delete-dialog-note">删除后该持仓会从账户持仓列表中移除。</div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button :disabled="deleteLoading" @click="closeDeleteDialog">取消</el-button>
+        <el-button type="danger" :loading="deleteLoading" @click="confirmDelete">确定删除</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 账户配置 -->
     <el-dialog v-model="showConfigDialog" title="账户设置" width="480px">
       <el-form label-width="100px">
@@ -239,7 +262,7 @@
 <script setup>
 import { computed, ref, onMounted } from 'vue'
 import { accountApi, stockApi } from '../api'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 
 const profile = ref(null)
@@ -251,11 +274,14 @@ const loading = ref(false)
 const showAddDialog = ref(false)
 const showEditDialog = ref(false)
 const editSaving = ref(false)
+const showDeleteDialog = ref(false)
+const deleteLoading = ref(false)
 const showConfigDialog = ref(false)
 const configSaving = ref(false)
 const configForm = ref({ totalAsset: 1_000_000 })
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型' })
+const deleteTarget = ref({ id: null, ts_code: '', stock_name: '' })
 
 const getLocalDate = () => {
   const now = new Date()
@@ -390,7 +416,7 @@ const handleEditSave = async () => {
     if (data.code === 200) {
       ElMessage.success('保存成功')
       showEditDialog.value = false
-      await loadData()
+      await loadData({ refresh: true })
     } else {
       ElMessage.error(data.message || '保存失败')
     }
@@ -444,7 +470,7 @@ const handleAdd = async () => {
         buy_date: '',
         holding_reason: ''
       }
-      loadData()
+      loadData({ refresh: true })
     } else {
       ElMessage.error(data.message || '添加失败')
     }
@@ -455,27 +481,39 @@ const handleAdd = async () => {
   }
 }
 
-const handleDelete = async (row) => {
+const handleDelete = (row) => {
+  deleteTarget.value = {
+    id: row.id,
+    ts_code: row.ts_code || '',
+    stock_name: row.stock_name || ''
+  }
+  showDeleteDialog.value = true
+}
+
+const closeDeleteDialog = (force = false) => {
+  if (deleteLoading.value && !force) return
+  showDeleteDialog.value = false
+  deleteTarget.value = { id: null, ts_code: '', stock_name: '' }
+}
+
+const confirmDelete = async () => {
+  if (!deleteTarget.value.id) return
+  deleteLoading.value = true
   try {
-    await ElMessageBox.confirm('确定要删除这条持仓记录吗？', '确认删除', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    
-    const res = await accountApi.deletePosition(row.id)
+    const res = await accountApi.deletePosition(deleteTarget.value.id)
     const data = res.data
-    
+
     if (data.code === 200) {
       ElMessage.success('删除成功')
-      loadData()
+      closeDeleteDialog(true)
+      await loadData({ refresh: true })
     } else {
-      ElMessage.error('删除失败')
+      ElMessage.error(data.message || '删除失败')
     }
   } catch (e) {
-    if (e !== 'cancel') {
-      ElMessage.error('删除失败')
-    }
+    ElMessage.error('删除失败')
+  } finally {
+    deleteLoading.value = false
   }
 }
 
@@ -488,10 +526,10 @@ const openCheckup = (row) => {
   checkupVisible.value = true
 }
 
-const loadData = async () => {
+const loadData = async (options = {}) => {
   if (isFirstLoad.value) pageLoading.value = true
   try {
-    const res = await accountApi.overview()
+    const res = await accountApi.overview({ refresh: Boolean(options.refresh) })
     const data = res.data?.data || {}
     profile.value = data.profile || null
     status.value = data.status || null
@@ -534,7 +572,7 @@ const saveAccountConfig = async () => {
     if (payload.code === 200) {
       ElMessage.success('保存成功')
       showConfigDialog.value = false
-      await loadData()
+      await loadData({ refresh: true })
     } else {
       ElMessage.error(payload.message || '保存失败')
     }
@@ -553,6 +591,10 @@ onMounted(() => {
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .form-hint { font-size: 12px; color: var(--color-text-sec); margin-top: 6px; }
+
+.account-view :deep(.el-table th .cell) {
+  white-space: nowrap;
+}
 
 .equal-height {
   align-items: stretch;
@@ -605,6 +647,47 @@ onMounted(() => {
   padding: 14px 28px;
   border-radius: 10px;
   letter-spacing: 0.06em;
+}
+.delete-dialog-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 6px 2px 2px;
+}
+.delete-dialog-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #ffd6d6;
+  background: rgba(242, 54, 69, 0.18);
+  border: 1px solid rgba(242, 54, 69, 0.32);
+  flex: 0 0 auto;
+}
+.delete-dialog-copy {
+  display: grid;
+  gap: 8px;
+}
+.delete-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-pri);
+  line-height: 1.5;
+}
+.delete-dialog-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--color-text-sec);
+  font-size: 13px;
+}
+.delete-dialog-note {
+  color: var(--color-text-sec);
+  font-size: 13px;
+  line-height: 1.6;
 }
 .info-item, .status-item {
   padding: 12px 0;

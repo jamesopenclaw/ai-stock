@@ -31,7 +31,7 @@ def _default_config() -> Dict[str, Any]:
     }
 
 
-def _serialize_config(row: AccountSetting | AccountConfig) -> Dict[str, Any]:
+def _serialize_platform_config(row: AccountConfig) -> Dict[str, Any]:
     return {
         "total_asset": float(row.total_asset),
         "llm_enabled": bool(row.llm_enabled),
@@ -42,6 +42,13 @@ def _serialize_config(row: AccountSetting | AccountConfig) -> Dict[str, Any]:
         "llm_temperature": float(row.llm_temperature),
         "llm_max_input_items": int(row.llm_max_input_items),
         "llm_has_api_key": bool((row.llm_api_key or "").strip()),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _serialize_account_setting(row: AccountSetting) -> Dict[str, Any]:
+    return {
+        "total_asset": float(row.total_asset),
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
@@ -59,7 +66,7 @@ def _env_runtime_config() -> Dict[str, Any]:
     }
 
 
-def _runtime_config_from_row(row: AccountSetting | AccountConfig) -> Dict[str, Any]:
+def _runtime_config_from_row(row: AccountConfig) -> Dict[str, Any]:
     api_key = (row.llm_api_key or "").strip() or settings.llm_api_key
     base_url = (row.llm_base_url or "").strip() or settings.llm_base_url
     model = (row.llm_model or "").strip() or settings.llm_model
@@ -75,10 +82,9 @@ def _runtime_config_from_row(row: AccountSetting | AccountConfig) -> Dict[str, A
     }
 
 
-def _apply_config_update(
-    row: AccountSetting | AccountConfig,
+def _apply_platform_config_update(
+    row: AccountConfig,
     *,
-    total_asset: Optional[float] = None,
     llm_enabled: Optional[bool] = None,
     llm_provider: Optional[str] = None,
     llm_base_url: Optional[str] = None,
@@ -89,11 +95,6 @@ def _apply_config_update(
     llm_temperature: Optional[float] = None,
     llm_max_input_items: Optional[int] = None,
 ) -> None:
-    if total_asset is not None:
-        if total_asset <= 0:
-            raise ValueError("总资产必须大于 0")
-        row.total_asset = float(total_asset)
-
     if llm_enabled is not None:
         row.llm_enabled = bool(llm_enabled)
     if llm_provider is not None:
@@ -123,6 +124,18 @@ def _apply_config_update(
     row.updated_at = datetime.utcnow()
 
 
+def _apply_account_setting_update(
+    row: AccountSetting,
+    *,
+    total_asset: Optional[float] = None,
+) -> None:
+    if total_asset is not None:
+        if total_asset <= 0:
+            raise ValueError("总资产必须大于 0")
+        row.total_asset = float(total_asset)
+    row.updated_at = datetime.utcnow()
+
+
 async def _get_account_setting(session, account_id: str) -> Optional[AccountSetting]:
     result = await session.execute(
         select(AccountSetting).where(AccountSetting.account_id == account_id)
@@ -141,14 +154,6 @@ def _build_account_setting(account_id: str) -> AccountSetting:
     return AccountSetting(
         account_id=account_id,
         total_asset=float(settings.qingzhou_total_asset),
-        llm_enabled=bool(settings.llm_enabled),
-        llm_provider=settings.llm_provider,
-        llm_base_url=settings.llm_base_url,
-        llm_api_key=settings.llm_api_key,
-        llm_model=settings.llm_model,
-        llm_timeout_seconds=float(settings.llm_timeout_seconds),
-        llm_temperature=float(settings.llm_temperature),
-        llm_max_input_items=int(settings.llm_max_input_items),
         updated_at=datetime.utcnow(),
     )
 
@@ -168,30 +173,29 @@ async def get_total_asset(account_id: Optional[str] = None) -> float:
 
 
 async def get_config(account_id: Optional[str] = None) -> Dict[str, Any]:
-    """返回账户配置。"""
+    """返回账户配置。账户维度仅暴露总资产；系统级 LLM 配置走单例表。"""
     async with async_session_factory() as session:
         if account_id:
             row = await _get_account_setting(session, account_id)
             if row is not None:
-                return _serialize_config(row)
-            return _default_config()
+                return _serialize_account_setting(row)
+            return {
+                "total_asset": float(settings.qingzhou_total_asset),
+                "updated_at": None,
+            }
 
         row = await _get_singleton_config(session)
         if row is None:
             return _default_config()
-        return _serialize_config(row)
+        return _serialize_platform_config(row)
 
 
 async def get_llm_runtime_config(account_id: Optional[str] = None) -> Dict[str, Any]:
-    """返回运行时使用的 LLM 配置。"""
+    """返回运行时使用的 LLM 配置。LLM 配置是平台级单例，不区分账户。"""
     global _last_good_llm_runtime_config
     try:
         async with async_session_factory() as session:
-            row = None
-            if account_id:
-                row = await _get_account_setting(session, account_id)
-            if row is None:
-                row = await _get_singleton_config(session)
+            row = await _get_singleton_config(session)
             if row is None:
                 raise RuntimeError("account config not initialized")
 
@@ -206,7 +210,7 @@ async def get_llm_runtime_config(account_id: Optional[str] = None) -> Dict[str, 
 
 
 async def update_config(payload: Dict[str, Any], account_id: Optional[str] = None) -> Dict[str, Any]:
-    """更新账户配置。"""
+    """更新账户配置。账户维度仅支持总资产；系统级维度支持 LLM 配置。"""
     global _last_good_llm_runtime_config
     async with async_session_factory() as session:
         if account_id:
@@ -215,24 +219,14 @@ async def update_config(payload: Dict[str, Any], account_id: Optional[str] = Non
                 row = _build_account_setting(account_id)
                 session.add(row)
 
-            _apply_config_update(
+            _apply_account_setting_update(
                 row,
                 total_asset=payload.get("total_asset"),
-                llm_enabled=payload.get("llm_enabled"),
-                llm_provider=payload.get("llm_provider"),
-                llm_base_url=payload.get("llm_base_url"),
-                llm_api_key=payload.get("llm_api_key"),
-                clear_llm_api_key=bool(payload.get("clear_llm_api_key")),
-                llm_model=payload.get("llm_model"),
-                llm_timeout_seconds=payload.get("llm_timeout_seconds"),
-                llm_temperature=payload.get("llm_temperature"),
-                llm_max_input_items=payload.get("llm_max_input_items"),
             )
 
             await session.commit()
             await session.refresh(row)
-            _last_good_llm_runtime_config = _runtime_config_from_row(row)
-            return _serialize_config(row)
+            return _serialize_account_setting(row)
 
         row = await _get_singleton_config(session)
         if row is None:
@@ -251,9 +245,13 @@ async def update_config(payload: Dict[str, Any], account_id: Optional[str] = Non
             )
             session.add(row)
 
-        _apply_config_update(
+        if payload.get("total_asset") is not None:
+            total_asset = payload.get("total_asset")
+            if total_asset <= 0:
+                raise ValueError("总资产必须大于 0")
+            row.total_asset = float(total_asset)
+        _apply_platform_config_update(
             row,
-            total_asset=payload.get("total_asset"),
             llm_enabled=payload.get("llm_enabled"),
             llm_provider=payload.get("llm_provider"),
             llm_base_url=payload.get("llm_base_url"),
@@ -268,7 +266,7 @@ async def update_config(payload: Dict[str, Any], account_id: Optional[str] = Non
         await session.commit()
         await session.refresh(row)
         _last_good_llm_runtime_config = _runtime_config_from_row(row)
-        return _serialize_config(row)
+        return _serialize_platform_config(row)
 
 
 async def update_total_asset(total_asset: float, account_id: Optional[str] = None) -> Dict[str, Any]:

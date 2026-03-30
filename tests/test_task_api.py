@@ -2,8 +2,10 @@
 任务 API 测试
 """
 import pytest
+from fastapi import HTTPException
 
 from app.api.v1 import task
+from app.core.security import AuthenticatedUser
 
 
 class _FakeBackgroundTasks:
@@ -49,6 +51,14 @@ async def test_trigger_task_adds_background_job_for_new_run(monkeypatch):
     response = await task.trigger_task(
         task.TaskRequest(trade_date="2026-03-28", mode="daily"),
         background_tasks,
+        AuthenticatedUser(
+            id="admin-001",
+            username="admin",
+            display_name="管理员",
+            default_account_id="acct-001",
+            role="admin",
+            status="active",
+        ),
     )
 
     assert response.status == "started"
@@ -76,6 +86,14 @@ async def test_trigger_task_returns_duplicate_without_background_job(monkeypatch
     response = await task.trigger_task(
         task.TaskRequest(trade_date="2026-03-28", mode="daily"),
         background_tasks,
+        AuthenticatedUser(
+            id="admin-001",
+            username="admin",
+            display_name="管理员",
+            default_account_id="acct-001",
+            role="admin",
+            status="active",
+        ),
     )
 
     assert response.status == "duplicate"
@@ -92,6 +110,34 @@ async def test_get_task_status_delegates_to_scheduler(monkeypatch):
 
     monkeypatch.setattr(task.scheduler, "get_task_status", fake_get_status)
 
-    response = await task.get_task_status(task_id="task-1", limit=5)
+    response = await task.get_task_status(
+        task_id="task-1",
+        limit=5,
+        current_user=AuthenticatedUser(
+            id="admin-001",
+            username="admin",
+            display_name="管理员",
+            default_account_id="acct-001",
+            role="admin",
+            status="active",
+        ),
+    )
 
     assert response == {"status": "ok", "task": {"id": "task-1"}}
+
+
+@pytest.mark.asyncio
+async def test_trigger_task_rejects_non_admin_user():
+    with pytest.raises(HTTPException) as exc_info:
+        await task.require_admin(
+            AuthenticatedUser(
+                id="user-001",
+                username="user",
+                display_name="普通用户",
+                default_account_id="acct-001",
+                role="user",
+                status="active",
+            )
+        )
+
+    assert exc_info.value.status_code == 403

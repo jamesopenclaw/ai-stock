@@ -31,6 +31,16 @@ def normalize_ts_code(ts_code: str) -> str:
     return ts_code
 
 
+def is_sector_scan_board_eligible(ts_code: str) -> bool:
+    """
+    板块扫描仅纳入主板/创业板/科创板，即保留 SH/SZ，排除北交所 .BJ。
+    """
+    normalized = normalize_ts_code(str(ts_code or "").strip())
+    if not normalized:
+        return False
+    return not normalized.endswith(".BJ")
+
+
 class TushareClient:
     """Tushare API 客户端"""
 
@@ -42,6 +52,7 @@ class TushareClient:
     REALTIME_MARKET_MIN_TOTAL = 3000
     STOCK_BASIC_CACHE_TTL_SECONDS = 6 * 60 * 60
     EXPANDED_STOCK_LIST_CACHE_TTL_SECONDS = 5 * 60
+    TRADE_DATE_RESOLUTION_CACHE_TTL_SECONDS = 6 * 60 * 60
 
     def __init__(self, token: Optional[str] = None):
         self.token = token or settings.tushare_token
@@ -71,6 +82,7 @@ class TushareClient:
         }
         self._ths_member_by_stock_cache = {}
         self._expanded_stock_list_cache = {}
+        self._trade_date_resolution_cache = {}
 
     def _now_sh(self) -> datetime:
         """获取上海时区当前时间。"""
@@ -104,18 +116,27 @@ class TushareClient:
         获取最近一个“已完成”的交易日。
 
         用于需要稳定日线输出的场景：
-        - 若请求的是今天且当前仍在盘中，则回退到上一交易日
+        - 若请求的是今天且当前尚未收盘，则回退到上一交易日
         - 其他情况沿用最近开市日
         """
         compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
         effective_trade_date = self._resolve_trade_date(compact_trade_date) if self.token else compact_trade_date
 
-        if self._should_use_realtime_quote(compact_trade_date):
+        now = self._now_sh()
+        if (
+            compact_trade_date == now.strftime("%Y%m%d")
+            and now.weekday() < 5
+            and now.time() < time(15, 30)
+        ):
             recent_dates = self._recent_open_dates(effective_trade_date, count=2)
             if len(recent_dates) >= 2:
                 return recent_dates[1]
 
         return effective_trade_date
+
+    def _fetch_realtime_stock_quote_map(self, ts_codes: List[str]) -> Dict[str, Dict]:
+        """个股实时行情统一走 realtime_quote。"""
+        return self._fetch_realtime_quote_map(ts_codes)
 
     def _fetch_realtime_quote_map(self, ts_codes: List[str]) -> Dict[str, Dict]:
         """批量获取实时行情并转成按 ts_code 索引的映射。"""
@@ -188,7 +209,7 @@ class TushareClient:
         if not rows or not self._should_use_realtime_quote(trade_date):
             return False
 
-        quote_map = self._fetch_realtime_quote_map([row.get("ts_code", "") for row in rows])
+        quote_map = self._fetch_realtime_stock_quote_map([row.get("ts_code", "") for row in rows])
         if not quote_map:
             return False
 
@@ -412,6 +433,15 @@ class TushareClient:
         if not self.token:
             return trade_date
 
+        cache = getattr(self, "_trade_date_resolution_cache", None)
+        if cache is None:
+            cache = {}
+            self._trade_date_resolution_cache = cache
+        cached = cache.get(trade_date)
+        now_ts = time_module.monotonic()
+        if cached and now_ts - float(cached.get("fetched_at") or 0) < self.TRADE_DATE_RESOLUTION_CACHE_TTL_SECONDS:
+            return str(cached.get("resolved_trade_date") or trade_date)
+
         try:
             from datetime import datetime, timedelta
             end_dt = datetime.strptime(trade_date, "%Y%m%d")
@@ -431,12 +461,20 @@ class TushareClient:
                         logger.info(
                             f"非交易日 {trade_date}，回退到最近交易日 {resolved}"
                         )
+                    cache[trade_date] = {
+                        "fetched_at": now_ts,
+                        "resolved_trade_date": resolved,
+                    }
                     return resolved
         except Exception as e:
             logger.warning(
                 f"解析交易日失败，使用原始日期 {trade_date}: {e}"
             )
 
+        cache[trade_date] = {
+            "fetched_at": now_ts,
+            "resolved_trade_date": trade_date,
+        }
         return trade_date
 
     def get_next_trade_date(self, trade_date: str) -> str:
@@ -534,7 +572,7 @@ class TushareClient:
             }
 
         try:
-            effective_trade_date = self._resolve_trade_date(trade_date)
+            effective_trade_date = self.get_last_completed_trade_date(trade_date)
             # 上证指数、深成指、创业板
             index_codes = ["000001.SH", "399001.SZ", "399006.SZ"]
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
@@ -799,6 +837,9 @@ class TushareClient:
             return None
 
         work["ts_code"] = work["ts_code"].astype(str).map(normalize_ts_code)
+        work = work[work["ts_code"].map(is_sector_scan_board_eligible)]
+        if work.empty:
+            return None
         work["industry"] = work["ts_code"].map(industry_map)
         work["pct_change"] = work["pct_chg"].fillna(0)
         work["amount"] = work.get("amount", 0)
@@ -1121,6 +1162,11 @@ class TushareClient:
             return []
 
         work = df.copy()
+        if "ts_code" in work.columns:
+            work["ts_code"] = work["ts_code"].astype(str).map(normalize_ts_code)
+            work = work[work["ts_code"].map(is_sector_scan_board_eligible)]
+            if work.empty:
+                return []
         work["_label"] = work[label_col].fillna("").astype(str).str.strip()
         work.loc[work["_label"] == "", "_label"] = default_label
 
@@ -1299,6 +1345,14 @@ class TushareClient:
 
             work = limitup_df.copy()
             work["ts_code"] = work["ts_code"].astype(str).map(normalize_ts_code)
+            work = work[work["ts_code"].map(is_sector_scan_board_eligible)]
+            if work.empty:
+                return {
+                    "rows": [],
+                    "data_trade_date": trade_date,
+                    "status": "empty",
+                    "message": "涨停列表仅包含非板块扫描市场股票",
+                }
             work["pct_chg"] = work["pct_chg"].fillna(0)
             if "amount" not in work.columns:
                 work["amount"] = 0.0
@@ -1686,7 +1740,7 @@ class TushareClient:
         if not self.token:
             return {"df": None, "data_trade_date": trade_date, "used_mock": True}
 
-        effective_trade_date = self._resolve_trade_date(trade_date)
+        effective_trade_date = self.get_last_completed_trade_date(trade_date)
         for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
             df = self.pro.daily(trade_date=data_trade_date)
             if df is None or df.empty:
@@ -2234,7 +2288,7 @@ class TushareClient:
             detail.setdefault("data_source", "daily_fallback")
             return detail
 
-        quote_map = self._fetch_realtime_quote_map([detail.get("ts_code", "")])
+        quote_map = self._fetch_realtime_stock_quote_map([detail.get("ts_code", "")])
         realtime = quote_map.get(normalize_ts_code(detail.get("ts_code", "")))
         if not realtime:
             detail.setdefault("data_source", "daily_fallback")

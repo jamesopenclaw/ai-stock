@@ -67,14 +67,6 @@ async def ensure_account_setting(account_id: str) -> None:
             AccountSetting(
                 account_id=account_id,
                 total_asset=float(settings.qingzhou_total_asset),
-                llm_enabled=bool(settings.llm_enabled),
-                llm_provider=settings.llm_provider,
-                llm_base_url=settings.llm_base_url,
-                llm_api_key=settings.llm_api_key,
-                llm_model=settings.llm_model,
-                llm_timeout_seconds=float(settings.llm_timeout_seconds),
-                llm_temperature=float(settings.llm_temperature),
-                llm_max_input_items=int(settings.llm_max_input_items),
             )
         )
         await session.commit()
@@ -102,14 +94,6 @@ async def create_trading_account(
             AccountSetting(
                 account_id=account.id,
                 total_asset=float(settings.qingzhou_total_asset),
-                llm_enabled=bool(settings.llm_enabled),
-                llm_provider=settings.llm_provider,
-                llm_base_url=settings.llm_base_url,
-                llm_api_key=settings.llm_api_key,
-                llm_model=settings.llm_model,
-                llm_timeout_seconds=float(settings.llm_timeout_seconds),
-                llm_temperature=float(settings.llm_temperature),
-                llm_max_input_items=int(settings.llm_max_input_items),
             )
         )
 

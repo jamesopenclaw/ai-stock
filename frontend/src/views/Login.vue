@@ -46,7 +46,7 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
@@ -59,6 +59,10 @@ const loading = ref(false)
 const form = reactive({
   username: '',
   password: '',
+})
+
+onMounted(() => {
+  authApi.ping({ timeout: 20000 }).catch(() => {})
 })
 
 const handleLogin = async () => {

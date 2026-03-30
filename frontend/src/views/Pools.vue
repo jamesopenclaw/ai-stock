@@ -42,6 +42,14 @@
           class="page-alert"
         />
         <div class="decision-overview">
+          <div v-if="reviewBucketFilter" class="focus-context focus-context-review">
+            <div class="focus-context-copy">
+              当前按复盘来源 <strong>{{ reviewSourceLabel }}</strong> 的 <strong>{{ reviewBucketFilter }}</strong> 结构查看三池。
+            </div>
+            <div class="focus-context-actions">
+              <el-button link type="primary" size="small" @click="clearReviewFilter">清除筛选</el-button>
+            </div>
+          </div>
           <div v-if="focusSector" class="focus-context">
             <div class="focus-context-copy">
               当前按 <strong>{{ focusSector }}</strong> 方向查看三池，相关标的会优先排到前面。
@@ -75,7 +83,7 @@
               </div>
               <div class="overview-side-actions">
                 <el-button v-if="focusSector" text @click="router.push('/sectors')">回板块扫描</el-button>
-                <el-button text type="primary" @click="router.push({ path: '/buy-point', query: focusSector ? { focus_sector: focusSector } : {} })">
+                <el-button text type="primary" @click="router.push({ path: '/buy', query: focusSector ? { focus_sector: focusSector } : {} })">
                   去买点分析
                 </el-button>
               </div>
@@ -183,7 +191,7 @@
         <el-tabs v-model="activeTab">
           <el-tab-pane name="market">
             <template #label>
-              <span>市场最强观察池 <em class="tab-count">{{ marketCount }}</em></span>
+              <span>市场最强观察池 <em class="tab-count">{{ marketPool.length }}</em></span>
             </template>
             <el-empty v-if="!marketCount" :description="emptyPoolText('market')" />
             <div v-else class="signal-grid">
@@ -328,7 +336,7 @@
 
           <el-tab-pane name="trend">
             <template #label>
-              <span>趋势辨识度观察池 <em class="tab-count">{{ trendCount }}</em></span>
+              <span>趋势辨识度观察池 <em class="tab-count">{{ trendPool.length }}</em></span>
             </template>
             <el-empty v-if="!trendCount" :description="emptyPoolText('trend')" />
             <div v-else class="signal-grid">
@@ -473,7 +481,7 @@
 
           <el-tab-pane name="account">
             <template #label>
-              <span>账户可参与池 <em class="tab-count">{{ accountCount }}</em></span>
+              <span>账户可参与池 <em class="tab-count">{{ accountPool.length }}</em></span>
             </template>
             <el-empty
               v-if="!accountCount"
@@ -633,7 +641,7 @@
 
           <el-tab-pane name="holding">
             <template #label>
-              <span>持仓处理池 <em class="tab-count">{{ holdingCount }}</em></span>
+              <span>持仓处理池 <em class="tab-count">{{ holdingPool.length }}</em></span>
             </template>
             <el-empty v-if="!holdingCount" description="暂无持仓或持仓未进入当日行情" />
             <div v-else class="signal-grid">
@@ -768,7 +776,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { stockApi, decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
@@ -797,6 +805,8 @@ const router = useRouter()
 const focusOnly = ref(false)
 
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
+const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
+const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
 
 const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 0)
 const trendCount = computed(() => poolsData.value.trend_recognition_pool?.length || 0)
@@ -816,9 +826,16 @@ const sortByFocusSector = (rows = []) => {
   return sorted
 }
 
-const marketPool = computed(() => sortByFocusSector(poolsData.value.market_watch_pool || []))
-const trendPool = computed(() => sortByFocusSector(poolsData.value.trend_recognition_pool || []))
-const accountPool = computed(() => sortByFocusSector(poolsData.value.account_executable_pool || []))
+const matchesReviewBucket = (stock) => {
+  if (!reviewBucketFilter.value) return true
+  return String(stock.candidate_bucket_tag || '').trim() === reviewBucketFilter.value
+}
+
+const applyPoolFilters = (rows = []) => sortByFocusSector(rows).filter(matchesReviewBucket)
+
+const marketPool = computed(() => applyPoolFilters(poolsData.value.market_watch_pool || []))
+const trendPool = computed(() => applyPoolFilters(poolsData.value.trend_recognition_pool || []))
+const accountPool = computed(() => applyPoolFilters(poolsData.value.account_executable_pool || []))
 const focusMatches = computed(() => ({
   market: (poolsData.value.market_watch_pool || []).filter((stock) => matchesFocusSector(stock)).length,
   trend: (poolsData.value.trend_recognition_pool || []).filter((stock) => matchesFocusSector(stock)).length,
@@ -890,11 +907,26 @@ const holdingPool = computed(() =>
 )
 
 const reviewSnapshotTypeLabel = (value) => {
-  if (value === 'buy_available') return '可买'
-  if (value === 'buy_observe') return '观察'
-  if (value === 'pool_account') return '可参与池'
-  if (value === 'pool_market') return '观察池'
+  if (value === 'buy_available') return '买点-可买'
+  if (value === 'buy_observe') return '买点-观察'
+  if (value === 'pool_account') return '三池-可参与池'
+  if (value === 'pool_market') return '三池-观察池'
   return value || '-'
+}
+
+const reviewSourceLabel = computed(() => reviewSnapshotTypeLabel(reviewSourceFilter.value))
+
+const resolveDefaultTab = () => {
+  if (reviewSourceFilter.value === 'pool_account') {
+    return accountCount.value ? 'account' : holdingCount.value ? 'holding' : trendCount.value ? 'trend' : 'market'
+  }
+  if (reviewSourceFilter.value === 'pool_market') {
+    return marketCount.value ? 'market' : trendCount.value ? 'trend' : accountCount.value ? 'account' : 'holding'
+  }
+  if (holdingCount.value) return 'holding'
+  if (accountCount.value) return 'account'
+  if (trendCount.value) return 'trend'
+  return 'market'
 }
 
 const reviewRowLabel = (row) => `${reviewSnapshotTypeLabel(row.snapshot_type)} / ${row.candidate_bucket_tag || '未分层'}`
@@ -977,6 +1009,13 @@ const overviewRules = computed(() => {
   }
   return ['观察池只负责缩小盯盘范围', '先看最强结构，再看账户是否允许', '没有执行确认就不要急着动']
 })
+
+const clearReviewFilter = () => {
+  const query = { ...route.query }
+  delete query.review_bucket
+  delete query.review_source
+  router.replace({ query })
+}
 
 const compactRuleSummary = computed(() => overviewRules.value.slice(0, 2).join(' · '))
 
@@ -1308,10 +1347,7 @@ const loadData = async (options = {}) => {
       sector_scan_resolved_trade_date: '',
     }
     poolsData.value = payload
-    if (holdingCount.value) activeTab.value = 'holding'
-    else if (accountCount.value) activeTab.value = 'account'
-    else if (trendCount.value) activeTab.value = 'trend'
-    else activeTab.value = 'market'
+    activeTab.value = resolveDefaultTab()
     if (options.refresh) {
       if (payload.refresh_requested) {
         ElMessage.success('已触发后台刷新，当前先展示已有三池结果。')
@@ -1342,6 +1378,10 @@ onMounted(() => {
   displayDate.value = getLocalDate()
   loadData()
   loadReviewInsight()
+})
+
+watch(reviewSourceFilter, () => {
+  activeTab.value = resolveDefaultTab()
 })
 </script>
 

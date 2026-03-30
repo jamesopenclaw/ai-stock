@@ -198,7 +198,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { accountApi } from '../api'
+import { systemApi } from '../api'
 
 const providerOptions = [
   {
@@ -307,7 +307,7 @@ const handleProviderChange = (provider) => {
 const loadConfig = async () => {
   loading.value = true
   try {
-    const res = await accountApi.getConfig()
+    const res = await systemApi.getConfig()
     const payload = res.data
     const data = payload?.code === 200 ? (payload.data || {}) : {}
     const provider = normalizeProvider(data.llm_provider || 'custom')
@@ -341,7 +341,7 @@ const loadConfig = async () => {
 const saveConfig = async () => {
   saving.value = true
   try {
-    const res = await accountApi.updateConfig({
+    const res = await systemApi.updateConfig({
       llm_enabled: configForm.value.llmEnabled,
       llm_provider: configForm.value.llmProvider,
       llm_base_url: configForm.value.llmBaseUrl,

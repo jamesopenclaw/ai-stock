@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -12,6 +13,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+from loguru import logger
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -125,24 +127,50 @@ def serialize_user(user: User | AuthenticatedUser) -> dict:
 
 async def authenticate_user(username: str, password: str) -> Optional[User]:
     """校验用户名密码。"""
+    started = time.perf_counter()
     async with async_session_factory() as session:
+        query_started = time.perf_counter()
         result = await session.execute(
             select(User).where(User.username == username.strip())
         )
         user = result.scalar_one_or_none()
+        query_ms = (time.perf_counter() - query_started) * 1000
 
         if not user or user.status != "active":
+            logger.info("auth.authenticate_user username={} result=not_found query_ms={:.1f} total_ms={:.1f}", username, query_ms, (time.perf_counter() - started) * 1000)
             return None
+        verify_started = time.perf_counter()
         if not verify_password(password, user.password_hash):
+            logger.info(
+                "auth.authenticate_user username={} result=bad_password query_ms={:.1f} verify_ms={:.1f} total_ms={:.1f}",
+                username,
+                query_ms,
+                (time.perf_counter() - verify_started) * 1000,
+                (time.perf_counter() - started) * 1000,
+            )
             return None
 
+        commit_started = time.perf_counter()
         user.last_login_at = datetime.utcnow()
         await session.commit()
+        total_ms = (time.perf_counter() - started) * 1000
+        commit_ms = (time.perf_counter() - commit_started) * 1000
+        verify_ms = (commit_started - verify_started) * 1000
+        log_fn = logger.warning if total_ms >= 2000 else logger.info
+        log_fn(
+            "auth.authenticate_user username={} result=ok query_ms={:.1f} verify_ms={:.1f} commit_ms={:.1f} total_ms={:.1f}",
+            username,
+            query_ms,
+            verify_ms,
+            commit_ms,
+            total_ms,
+        )
         return user
 
 
 async def create_refresh_session(user_id: str) -> tuple[str, datetime]:
     """创建 refresh session，并返回原始 token 和过期时间。"""
+    started = time.perf_counter()
     raw_token = create_refresh_token()
     expires_at = _utcnow() + timedelta(days=settings.auth_refresh_token_expire_days)
 
@@ -158,11 +186,15 @@ async def create_refresh_session(user_id: str) -> tuple[str, datetime]:
         )
         await session.commit()
 
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    log_fn = logger.warning if elapsed_ms >= 1000 else logger.info
+    log_fn("auth.create_refresh_session user_id={} elapsed_ms={:.1f}", user_id, elapsed_ms)
     return raw_token, expires_at
 
 
 async def rotate_refresh_session(refresh_token: str) -> Optional[tuple[User, str, datetime]]:
     """校验并轮换 refresh token。"""
+    started = time.perf_counter()
     now = _utcnow()
     token_hash_value = hash_token(refresh_token)
 
@@ -174,6 +206,7 @@ async def rotate_refresh_session(refresh_token: str) -> Optional[tuple[User, str
         )
         row = result.first()
         if not row:
+            logger.info("auth.rotate_refresh_session result=not_found elapsed_ms={:.1f}", (time.perf_counter() - started) * 1000)
             return None
 
         session_row, user = row
@@ -183,6 +216,7 @@ async def rotate_refresh_session(refresh_token: str) -> Optional[tuple[User, str
             or session_row.expires_at <= now
             or user.status != "active"
         ):
+            logger.info("auth.rotate_refresh_session user_id={} result=invalid elapsed_ms={:.1f}", user.id, (time.perf_counter() - started) * 1000)
             return None
 
         session_row.revoked_at = now
@@ -199,6 +233,9 @@ async def rotate_refresh_session(refresh_token: str) -> Optional[tuple[User, str
             )
         )
         await session.commit()
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        log_fn = logger.warning if elapsed_ms >= 1000 else logger.info
+        log_fn("auth.rotate_refresh_session user_id={} result=ok elapsed_ms={:.1f}", user.id, elapsed_ms)
         return user, new_token, new_expires_at
 
 
@@ -218,6 +255,7 @@ async def revoke_refresh_session(refresh_token: str) -> None:
 
 async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> AuthenticatedUser:
     """从 access token 中解析当前用户。"""
+    started = time.perf_counter()
     if not settings.auth_enabled:
         return _auth_disabled_user()
 
@@ -246,6 +284,9 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> Aut
     if not user or user.status != "active":
         raise credentials_error
 
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    if elapsed_ms >= 500:
+        logger.warning("auth.get_current_user user_id={} elapsed_ms={:.1f}", user.id, elapsed_ms)
     return AuthenticatedUser(
         id=user.id,
         username=user.username,
@@ -282,6 +323,7 @@ async def get_current_account(
     requested_account_id: Optional[str] = Header(None, alias="X-Account-Id"),
 ) -> AuthenticatedAccount:
     """解析当前登录用户默认账户。"""
+    started = time.perf_counter()
     if not settings.auth_enabled:
         return _auth_disabled_account()
 
@@ -297,6 +339,14 @@ async def get_current_account(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="当前用户无权访问该交易账户",
+            )
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if elapsed_ms >= 500:
+            logger.warning(
+                "auth.get_current_account user_id={} source=requested account_id={} elapsed_ms={:.1f}",
+                current_user.id,
+                account.id,
+                elapsed_ms,
             )
         return AuthenticatedAccount(
             id=account.id,
@@ -334,6 +384,14 @@ async def get_current_account(
             detail="当前用户未绑定可用交易账户",
         )
 
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    if elapsed_ms >= 500:
+        logger.warning(
+            "auth.get_current_account user_id={} source=default account_id={} elapsed_ms={:.1f}",
+            current_user.id,
+            account.id,
+            elapsed_ms,
+        )
     return AuthenticatedAccount(
         id=account.id,
         account_code=account.account_code,

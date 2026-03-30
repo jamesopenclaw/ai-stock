@@ -5,9 +5,10 @@ import asyncio
 from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 from loguru import logger
 
+from app.core.security import AuthenticatedUser, require_admin
 from app.tasks.scheduler import scheduler
 
 router = APIRouter()
@@ -31,6 +32,7 @@ class TaskResponse(BaseModel):
 async def trigger_task(
     request: TaskRequest,
     background_tasks: BackgroundTasks = None,
+    current_user: AuthenticatedUser = Depends(require_admin),
 ):
     """
     手动触发定时任务
@@ -76,6 +78,10 @@ async def trigger_task(
 
 
 @router.get("/status")
-async def get_task_status(task_id: Optional[str] = None, limit: int = 20):
+async def get_task_status(
+    task_id: Optional[str] = None,
+    limit: int = 20,
+    current_user: AuthenticatedUser = Depends(require_admin),
+):
     """获取任务状态。"""
     return await scheduler.get_task_status(task_id=task_id, limit=limit)

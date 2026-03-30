@@ -144,7 +144,7 @@ class BuyPointService:
         """为买点展示层批量准备实时行情，不改变三池/评分口径。"""
         if not stocks or not tushare_client._should_use_realtime_quote(trade_date):
             return {}
-        return tushare_client._fetch_realtime_quote_map([stock.ts_code for stock in stocks])
+        return tushare_client._fetch_realtime_stock_quote_map([stock.ts_code for stock in stocks])
 
     def _apply_display_quote(
         self,

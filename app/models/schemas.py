@@ -134,6 +134,22 @@ class SectorLeaderStock(BaseModel):
     data_source: Optional[str] = None
 
 
+class SectorTopStock(BaseModel):
+    """板块 Top 股票"""
+    rank: int
+    ts_code: str
+    stock_name: str
+    change_pct: float
+    amount: float = Field(0.0, description="成交额(万元)")
+    turnover_rate: float = Field(0.0, description="换手率(%)")
+    vol_ratio: float = Field(1.0, description="量比")
+    role_tag: Optional[str] = Field(None, description="角色标签")
+    candidate_source_tag: Optional[str] = Field(None, description="候选来源")
+    top_reason: Optional[str] = Field(None, description="入选原因")
+    quote_time: Optional[str] = None
+    data_source: Optional[str] = None
+
+
 class SectorOutput(BaseModel):
     """板块扫描输出"""
     sector_name: str
@@ -196,6 +212,19 @@ class LeaderSectorResponse(BaseModel):
         default_factory=list,
         description="板块风向标",
     )
+
+
+class SectorTopStocksResponse(BaseModel):
+    """板块 Top 股票响应"""
+    trade_date: str
+    resolved_trade_date: Optional[str] = Field(None, description="实际使用的交易日")
+    sector_data_mode: Optional[str] = Field(None, description="板块数据口径")
+    threshold_profile: Optional[str] = Field(None, description="阈值档位")
+    concept_data_status: Optional[str] = Field(None, description="题材聚合状态")
+    concept_data_message: Optional[str] = Field(None, description="题材聚合说明")
+    sector: SectorOutput
+    top_stocks: List[SectorTopStock] = Field(default_factory=list, description="板块 Top 股票")
+    total: int = Field(0, description="返回数量")
 
 
 # ========== 个股相关 ==========
@@ -612,6 +641,9 @@ class SellPointOutput(BaseModel):
     sell_priority: SellPriority
     # 简评
     sell_comment: str = ""
+    # 持有观察下的加仓提示
+    add_signal_tag: Optional[str] = Field(None, description="建议加仓/可关注加仓")
+    add_signal_reason: Optional[str] = Field(None, description="加仓提示原因")
     # LLM 辅助解释
     llm_action_sentence: Optional[str] = None
     llm_trigger_sentence: Optional[str] = None

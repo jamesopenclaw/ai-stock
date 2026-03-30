@@ -1,10 +1,12 @@
 """
 账户管理 API - PostgreSQL 存储
 """
+import copy
 from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+import time
 import uuid
 
 from app.models.schemas import (
@@ -28,6 +30,34 @@ from sqlalchemy import select
 from loguru import logger
 
 router = APIRouter()
+ACCOUNT_OVERVIEW_CACHE_TTL_SECONDS = 20
+_account_overview_cache: dict[str, dict] = {}
+
+
+def _account_overview_cache_key(account_id: str) -> str:
+    return str(account_id or "").strip()
+
+
+def _get_cached_account_overview(account_id: str) -> Optional[dict]:
+    cache_key = _account_overview_cache_key(account_id)
+    cached = _account_overview_cache.get(cache_key)
+    if not cached:
+        return None
+    if time.monotonic() - float(cached.get("fetched_at") or 0) > ACCOUNT_OVERVIEW_CACHE_TTL_SECONDS:
+        _account_overview_cache.pop(cache_key, None)
+        return None
+    return copy.deepcopy(cached.get("payload"))
+
+
+def _cache_account_overview(account_id: str, payload: dict) -> None:
+    _account_overview_cache[_account_overview_cache_key(account_id)] = {
+        "fetched_at": time.monotonic(),
+        "payload": copy.deepcopy(payload),
+    }
+
+
+def _invalidate_account_overview_cache(account_id: str) -> None:
+    _account_overview_cache.pop(_account_overview_cache_key(account_id), None)
 
 
 async def build_account_input(holdings: List[dict], account_id: Optional[str] = None) -> AccountInput:
@@ -54,15 +84,6 @@ class UpdatePositionRequest(BaseModel):
 class AccountConfigUpdateRequest(BaseModel):
     """账户配置更新"""
     total_asset: Optional[float] = Field(None, gt=0, description="总资产(元)")
-    llm_enabled: Optional[bool] = Field(None, description="是否启用 LLM 辅助层")
-    llm_provider: Optional[str] = Field(None, description="LLM 供应商")
-    llm_base_url: Optional[str] = Field(None, description="LLM Base URL")
-    llm_api_key: Optional[str] = Field(None, description="LLM API Key，留空则保持不变")
-    clear_llm_api_key: Optional[bool] = Field(None, description="是否清空已保存的 API Key")
-    llm_model: Optional[str] = Field(None, description="LLM 模型名")
-    llm_timeout_seconds: Optional[float] = Field(None, gt=0, description="LLM 超时秒数")
-    llm_temperature: Optional[float] = Field(None, ge=0, le=2, description="LLM 温度")
-    llm_max_input_items: Optional[int] = Field(None, ge=1, le=20, description="单次最大输入条数")
 
 
 async def get_stock_name(ts_code: str) -> str:
@@ -82,6 +103,7 @@ async def get_holdings_from_db(account_id: str) -> List[dict]:
 async def build_account_overview_payload(current_account: AuthenticatedAccount) -> dict:
     """构建账户页首屏所需的概况、状态和持仓明细。"""
     holdings = await get_holdings_from_db(current_account.id)
+    enrich_holdings(holdings)
     account = await build_account_input(holdings, current_account.id)
     holdings_obj = [AccountPosition(**h) for h in holdings]
     profile = account_adapter_service.get_profile(account, holdings_obj)
@@ -193,6 +215,7 @@ async def put_account_config(
     """更新账户配置"""
     try:
         data = await update_account_config(request.model_dump(), account_id=current_account.id)
+        _invalidate_account_overview_cache(current_account.id)
         return ApiResponse(data=data)
     except ValueError as e:
         return ApiResponse(code=400, message=str(e))
@@ -218,7 +241,11 @@ async def get_overview(
 ) -> ApiResponse:
     """获取账户页首屏所需的概况、状态和持仓明细。"""
     try:
+        cached_payload = _get_cached_account_overview(current_account.id)
+        if cached_payload is not None:
+            return ApiResponse(data=cached_payload)
         payload = await build_account_overview_payload(current_account)
+        _cache_account_overview(current_account.id, payload)
         return ApiResponse(data=payload)
     except Exception as e:
         return ApiResponse(code=500, message=f"获取账户总览失败：{str(e)}")
@@ -288,6 +315,7 @@ async def add_position(
         
         # 保存到数据库
         saved_holding = await save_holding_to_db(holding_data)
+        _invalidate_account_overview_cache(current_account.id)
         
         return ApiResponse(data={"message": "持仓添加成功", "position": saved_holding})
     except Exception as e:
@@ -315,6 +343,7 @@ async def update_position(
             # 与 GET 持仓一致：按当日行情刷新现价、盈亏、市值
             refresh_holdings_price([updated])
             enrich_holdings([updated])
+            _invalidate_account_overview_cache(current_account.id)
             return ApiResponse(data={"message": "持仓更新成功", "position": updated})
         else:
             return ApiResponse(code=404, message="持仓不存在")
@@ -340,6 +369,7 @@ async def delete_position(
             if holding:
                 await session.delete(holding)
                 await session.commit()
+                _invalidate_account_overview_cache(current_account.id)
                 return ApiResponse(data={"message": "持仓删除成功"})
             else:
                 return ApiResponse(code=404, message="持仓不存在")

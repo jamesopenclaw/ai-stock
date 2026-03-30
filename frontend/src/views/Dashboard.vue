@@ -6,7 +6,7 @@
           <template #header>
             <div class="card-header">
               <span>今日执行摘要</span>
-              <el-button type="primary" @click="refreshData()" :loading="refreshing">
+              <el-button type="primary" @click="refreshData({ refresh: true })" :loading="refreshing">
                 <el-icon><Refresh /></el-icon> 刷新
               </el-button>
             </div>
@@ -138,7 +138,11 @@
           <el-skeleton v-if="loadingState.reviewStats && !reviewStats" :rows="4" animated />
           <el-empty v-else-if="!reviewStats?.bucket_stats?.length" description="暂无复盘快照" />
           <el-table v-else :data="reviewStats.bucket_stats.slice(0, 8)" style="width: 100%">
-            <el-table-column prop="snapshot_type" label="类型" width="100" />
+            <el-table-column label="类型" width="150">
+              <template #default="{ row }">
+                {{ reviewSnapshotTypeLabel(row.snapshot_type) }}
+              </template>
+            </el-table-column>
             <el-table-column prop="candidate_bucket_tag" label="分层" width="120" />
             <el-table-column prop="count" label="出现次数" width="100" />
             <el-table-column prop="avg_return_1d" label="1日均值" width="90" />
@@ -172,15 +176,15 @@
       <el-col :span="12">
         <el-card class="fill-card dashboard-bottom-card">
           <template #header>
-            <span>持仓处理 ({{ (sellPoints?.sell_positions?.length || 0) + (sellPoints?.reduce_positions?.length || 0) }})</span>
+            <span>持仓处理 ({{ holdingActions.length }})</span>
           </template>
           <div class="bottom-card-body">
             <el-skeleton v-if="loadingState.sellPoints && !sellPoints" :rows="5" animated class="fill-skeleton" />
             <el-empty
-              v-else-if="!sellPoints?.sell_positions?.length && !sellPoints?.reduce_positions?.length"
+              v-else-if="!holdingActions.length"
               description="暂无卖出/减仓信号"
             />
-            <el-table v-else :data="sellPoints?.sell_positions?.slice(0, 5)" style="width: 100%">
+            <el-table v-else :data="holdingActions.slice(0, 5)" style="width: 100%">
               <el-table-column prop="ts_code" label="代码" width="100" />
               <el-table-column prop="stock_name" label="名称" width="100" />
               <el-table-column prop="sell_signal_tag" label="信号" width="80" />
@@ -197,6 +201,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { decisionApi, marketApi, sectorApi, accountApi } from '../api'
+import { authState } from '../auth'
 import { ElMessage } from 'element-plus'
 
 const summary = ref(null)
@@ -234,11 +239,31 @@ const formatMoney = (value) => {
   return (value / 10000).toFixed(2) + '万'
 }
 
+const reviewSnapshotTypeLabel = (value) => {
+  if (value === 'buy_available') return '买点-可买'
+  if (value === 'buy_observe') return '买点-观察'
+  if (value === 'pool_account') return '三池-可参与池'
+  if (value === 'pool_market') return '三池-观察池'
+  return value || '-'
+}
+
 const DASHBOARD_REQUEST_TIMEOUT = 90000
 const DASHBOARD_BUY_POINT_LIMIT = 10
-const DASHBOARD_CACHE_KEY = 'dashboard_snapshot_v1'
+const DASHBOARD_CACHE_PREFIX = 'dashboard_snapshot_v2'
+
+const resolveDashboardCacheKey = () => {
+  const accountId = authState.account?.id || 'guest'
+  return `${DASHBOARD_CACHE_PREFIX}:${accountId}`
+}
 
 const refreshing = computed(() => Object.values(loadingState.value).some(Boolean))
+const holdingActions = computed(() => {
+  const data = sellPoints.value || {}
+  return [
+    ...(data.sell_positions || []),
+    ...(data.reduce_positions || []),
+  ]
+})
 
 const getTradeDate = () => {
   const now = new Date()
@@ -278,12 +303,12 @@ const persistDashboardCache = () => {
     reviewStats: reviewStats.value,
     updatedAt: Date.now()
   }
-  window.sessionStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(payload))
+  window.sessionStorage.setItem(resolveDashboardCacheKey(), JSON.stringify(payload))
 }
 
 const hydrateDashboardCache = () => {
   if (typeof window === 'undefined') return false
-  const raw = window.sessionStorage.getItem(DASHBOARD_CACHE_KEY)
+  const raw = window.sessionStorage.getItem(resolveDashboardCacheKey())
   if (!raw) return false
   try {
     const payload = JSON.parse(raw)
@@ -296,12 +321,12 @@ const hydrateDashboardCache = () => {
     reviewStats.value = payload.reviewStats || null
     return true
   } catch (error) {
-    window.sessionStorage.removeItem(DASHBOARD_CACHE_KEY)
+    window.sessionStorage.removeItem(resolveDashboardCacheKey())
     return false
   }
 }
 
-const refreshData = async ({ silent = false } = {}) => {
+const refreshData = async ({ silent = false, refresh = false } = {}) => {
   const version = refreshVersion.value + 1
   refreshVersion.value = version
   try {
@@ -333,7 +358,7 @@ const refreshData = async ({ silent = false } = {}) => {
       loadModule(
       'marketEnv',
       '市场环境',
-      () => marketApi.getEnv(tradeDate, { timeout: DASHBOARD_REQUEST_TIMEOUT }),
+      () => marketApi.getEnv(tradeDate, { timeout: DASHBOARD_REQUEST_TIMEOUT, refresh }),
       (data) => {
         marketEnv.value = data
       }
@@ -384,7 +409,7 @@ const refreshData = async ({ silent = false } = {}) => {
       loadModule(
       'reviewStats',
       '复盘统计',
-      () => decisionApi.reviewStats(10, { timeout: DASHBOARD_REQUEST_TIMEOUT }),
+      () => decisionApi.reviewStats(10, { timeout: DASHBOARD_REQUEST_TIMEOUT, refresh }),
       (data) => {
         reviewStats.value = data
       }

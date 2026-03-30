@@ -204,6 +204,7 @@
               </div>
 
               <div class="sector-card-actions">
+                <el-button type="primary" link size="small" @click="openTopStocks(row)">查看板块 Top10</el-button>
                 <el-button type="primary" link size="small" @click="goToPage('/pools', row.sector_name)">去三池看这个方向</el-button>
                 <el-button type="primary" link size="small" @click="goToPage('/buy', row.sector_name)">去买点找执行位</el-button>
               </div>
@@ -281,6 +282,12 @@
     :default-target="checkupStock.defaultTarget"
     :trade-date="scanData.resolved_trade_date || scanData.trade_date"
   />
+  <SectorTopStocksDrawer
+    v-model="topStocksVisible"
+    :trade-date="scanData.resolved_trade_date || scanData.trade_date"
+    :sector="activeTopSector"
+    @checkup="openCheckup"
+  />
 </template>
 
 <script setup>
@@ -289,6 +296,7 @@ import { useRouter } from 'vue-router'
 import { sectorApi, marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
+import SectorTopStocksDrawer from '../components/SectorTopStocksDrawer.vue'
 
 const SECTORS_REQUEST_TIMEOUT = 90000
 const loading = ref(false)
@@ -300,6 +308,8 @@ const leaderData = ref(null)
 const router = useRouter()
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
+const topStocksVisible = ref(false)
+const activeTopSector = ref(null)
 const loadVersion = ref(0)
 
 const createDefaultScanData = () => ({
@@ -561,6 +571,11 @@ const openCheckup = (stock) => {
     defaultTarget: '观察型'
   }
   checkupVisible.value = true
+}
+
+const openTopStocks = (sector) => {
+  activeTopSector.value = sector
+  topStocksVisible.value = true
 }
 
 const getLocalDate = () => {

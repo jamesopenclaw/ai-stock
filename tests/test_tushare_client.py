@@ -3,6 +3,7 @@ Tushare 客户端测试
 """
 import os
 import sys
+from datetime import datetime
 
 import pandas as pd
 
@@ -203,7 +204,7 @@ def test_get_stock_detail_overlays_realtime_quote_when_available():
     client._should_use_realtime_quote = lambda d: True
     client._intraday_volume_ratio_cache = {}
     client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
-    client._fetch_realtime_quote_map = lambda codes: {
+    client._fetch_realtime_stock_quote_map = lambda codes: {
         "002025.SZ": {
             "close": 63.44,
             "change_pct": -0.17,
@@ -237,7 +238,7 @@ def test_get_stock_quote_map_batches_daily_query_and_realtime_overlay():
     client._recent_open_dates = lambda trade_date, count=5: ["20260320"]
     client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
     client._should_use_realtime_quote = lambda d: True
-    client._fetch_realtime_quote_map = lambda codes: {
+    client._fetch_realtime_stock_quote_map = lambda codes: {
         "002025.SZ": {
             "close": 63.44,
             "change_pct": -0.17,
@@ -262,6 +263,64 @@ def test_get_stock_quote_map_batches_daily_query_and_realtime_overlay():
     assert result["002475.SZ"]["close"] == 35.0
 
 
+def test_get_last_completed_trade_date_uses_previous_trade_day_before_close():
+    """盘前和盘中都不应把今天当作已完成日线。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._resolve_trade_date = lambda d: "20260330"
+    client._recent_open_dates = lambda trade_date, count=2: ["20260330", "20260327"]
+    client._now_sh = lambda: datetime.strptime("2026-03-30 06:08:56", "%Y-%m-%d %H:%M:%S").replace(tzinfo=TushareClient.SH_TZ)
+
+    assert client.get_last_completed_trade_date("20260330") == "20260327"
+
+
+def test_fetch_realtime_stock_quote_map_uses_realtime_quote(monkeypatch):
+    """个股实时价统一使用 realtime_quote。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client.REALTIME_CHUNK_SIZE = 50
+    client.REALTIME_SOURCE = "dc"
+    client._infer_realtime_avg_price = lambda price, amount, volume: 63.52
+    monkeypatch.setattr(
+        "app.data.tushare_client.ts.realtime_quote",
+        lambda ts_code, src=None: pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "002025.SZ",
+                    "PRICE": 63.44,
+                    "OPEN": 63.70,
+                    "HIGH": 64.10,
+                    "LOW": 63.22,
+                    "PRE_CLOSE": 63.55,
+                    "VOLUME": 2456000,
+                    "AMOUNT": 156000000,
+                    "DATE": "20260330",
+                    "TIME": "09:35:51",
+                },
+                {
+                    "TS_CODE": "002475.SZ",
+                    "PRICE": 36.12,
+                    "OPEN": 34.10,
+                    "HIGH": 36.30,
+                    "LOW": 34.00,
+                    "PRE_CLOSE": 33.75,
+                    "VOLUME": 1860000,
+                    "AMOUNT": 67000000,
+                    "DATE": "20260330",
+                    "TIME": "09:36:11",
+                },
+            ]
+        ),
+    )
+
+    result = client._fetch_realtime_stock_quote_map(["002025.SZ", "002475.SZ"])
+
+    assert result["002025.SZ"]["data_source"] == "realtime_dc"
+    assert result["002025.SZ"]["quote_time"] == "2026-03-30 09:35:51"
+    assert result["002475.SZ"]["close"] == 36.12
+
+
 class _FallbackStockListPro(_FakePro):
     def __init__(self):
         super().__init__()
@@ -279,6 +338,21 @@ class _FallbackStockListPro(_FakePro):
 
     def limit_list_d(self, trade_date=None, limit_type=None):
         return pd.DataFrame()
+
+
+def test_resolve_trade_date_uses_short_cache():
+    """同一自然日反复解析交易日时，应命中本地缓存，避免重复查 trade_cal。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FallbackStockListPro()
+    client._trade_date_resolution_cache = {}
+
+    first = client._resolve_trade_date("20260323")
+    second = client._resolve_trade_date("20260323")
+
+    assert first == "20260323"
+    assert second == "20260323"
+    assert len(client.pro.trade_cal_calls) == 1
 
 
 def test_get_expanded_stock_list_falls_back_to_recent_available_daily():
@@ -548,6 +622,30 @@ def test_get_limitup_industry_sectors_with_meta_uses_industry_field():
     assert power["stock_count"] == 2
 
 
+def test_get_limitup_industry_sectors_with_meta_excludes_bj_codes():
+    """涨停行业聚合应排除北交所股票。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._resolve_trade_date = lambda d: "20260323"
+
+    class _LimitUpIndustryPro:
+        def limit_list_d(self, trade_date=None, limit_type=None):
+            return pd.DataFrame(
+                [
+                    {"trade_date": "20260323", "ts_code": "001258.SZ", "industry": "电力", "name": "立新能源", "pct_chg": 10.05, "amount": 903245120.0},
+                    {"trade_date": "20260323", "ts_code": "830001.BJ", "industry": "电力", "name": "北交样本", "pct_chg": 29.99, "amount": 100000000.0},
+                ]
+            )
+
+    client.pro = _LimitUpIndustryPro()
+
+    payload = client.get_limitup_industry_sectors_with_meta("20260323")
+
+    assert payload["status"] == "ok"
+    power = next(row for row in payload["rows"] if row["sector_name"] == "电力")
+    assert power["stock_count"] == 1
+
+
 def test_get_sector_data_with_meta_uses_daily_and_stock_basic():
     """行业板块扫描应改为 daily + stock_basic 聚合。"""
     client = TushareClient.__new__(TushareClient)
@@ -583,6 +681,78 @@ def test_get_sector_data_with_meta_falls_back_to_recent_daily_trade_date():
 
     assert payload["data_trade_date"] == "20260320"
     assert len(payload["rows"]) == 2
+
+
+def test_get_sector_data_with_meta_excludes_bj_codes():
+    """行业板块扫描应排除北交所股票。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._resolve_trade_date = lambda d: "20260320"
+    client._recent_open_dates = lambda trade_date, count=5: ["20260320"]
+    client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
+
+    class _BoardFilterPro(_FakePro):
+        def stock_basic(self, ts_code=None, fields=None):
+            self.stock_basic_calls.append((ts_code, fields))
+            return pd.DataFrame(
+                [
+                    {"ts_code": "002475.SZ", "name": "立讯精密", "industry": "电子"},
+                    {"ts_code": "830001.BJ", "name": "北交样本", "industry": "电子"},
+                ]
+            )
+
+        def daily(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
+            self.daily_calls.append((ts_code, start_date, end_date, trade_date))
+            if trade_date == "20260320":
+                return pd.DataFrame(
+                    [
+                        {"ts_code": "002475.SZ", "trade_date": "20260320", "close": 35.00, "pct_chg": 6.50, "vol": 320000, "amount": 580000, "high": 36.0, "low": 33.5, "open": 33.5, "pre_close": 32.8},
+                        {"ts_code": "830001.BJ", "trade_date": "20260320", "close": 12.00, "pct_chg": 18.00, "vol": 220000, "amount": 380000, "high": 12.5, "low": 11.6, "open": 11.8, "pre_close": 10.17},
+                    ]
+                )
+            return pd.DataFrame()
+
+    client.pro = _BoardFilterPro()
+
+    payload = client.get_sector_data_with_meta("20260320")
+
+    assert len(payload["rows"]) == 1
+    electronic = payload["rows"][0]
+    assert electronic["sector_name"] == "电子"
+    assert electronic["stock_count"] == 1
+
+
+def test_get_concept_sectors_from_limitup_with_meta_excludes_bj_codes():
+    """题材聚合应排除北交所涨停股。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._resolve_trade_date = lambda d: "20260323"
+    client._ths_concept_index_cache = {"fetched_at": 0.0, "mapping": {"885001.TI": {"name": "机器人", "type": "N"}}}
+    client._ths_member_by_stock_cache = {}
+    client._get_ths_concept_index_map = lambda: {"885001.TI": {"name": "机器人", "type": "N"}}
+    client._get_ths_concept_codes_for_stock = lambda ts_code: ["885001.TI"]
+
+    class _ConceptBoardFilterPro:
+        def limit_list_d(self, trade_date=None, limit_type=None):
+            return pd.DataFrame(
+                [
+                    {"trade_date": "20260323", "ts_code": "002031.SZ", "name": "巨轮智能", "pct_chg": 10.01, "amount": 800000000.0},
+                    {"trade_date": "20260323", "ts_code": "830001.BJ", "name": "北交样本", "pct_chg": 29.99, "amount": 900000000.0},
+                ]
+            )
+
+        def ths_daily(self, trade_date=None):
+            return pd.DataFrame(
+                [{"ts_code": "885001.TI", "pct_change": 6.8}]
+            )
+
+    client.pro = _ConceptBoardFilterPro()
+
+    payload = client.get_concept_sectors_from_limitup_with_meta("20260323")
+
+    assert payload["status"] == "ok"
+    assert len(payload["rows"]) == 1
+    assert payload["rows"][0]["stock_count"] == 1
 
 
 def test_get_index_quote_with_meta_overlays_realtime_indexes():

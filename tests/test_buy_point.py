@@ -460,7 +460,7 @@ class TestBuyPoint:
             lambda trade_date: True,
         )
         monkeypatch.setattr(
-            "app.services.buy_point.tushare_client._fetch_realtime_quote_map",
+            "app.services.buy_point.tushare_client._fetch_realtime_stock_quote_map",
             lambda ts_codes: {
                 "000001.SZ": {
                     "close": 12.88,

@@ -140,6 +140,12 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get(f"{settings.api_v1_prefix}/ping")
+async def api_ping():
+    """API 前缀下的轻量预热端点。"""
+    return {"status": "ok"}
+
+
 # 导入并注册路由
 from app.api.v1 import account, auth, decision, market, sector, stock, task
 from app.api.v1 import admin as admin_api

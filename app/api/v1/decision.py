@@ -1,6 +1,9 @@
 """
 决策分析 API - 卖点与完整决策
 """
+import asyncio
+import copy
+import time
 from fastapi import APIRouter, Query, Body, Depends
 from typing import Optional
 from datetime import datetime
@@ -11,6 +14,7 @@ from app.models.schemas import (
     AccountInput,
     AccountPosition,
     SellPointResponse,
+    SellPointOutput,
     FullDecisionResponse,
     DecisionSummary,
     LlmCallStatus,
@@ -22,6 +26,7 @@ from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
 from app.services.stock_filter import stock_filter_service, merge_holdings_into_candidate_stocks
 from app.services.buy_point import buy_point_service
+from app.services.buy_point_sop import buy_point_sop_service
 from app.data.tushare_client import tushare_client
 from app.models.schemas import StockInput
 from app.services.decision_context import decision_context_service
@@ -29,11 +34,13 @@ from app.services.decision_flow import decision_flow_service
 from app.services.review_snapshot import review_snapshot_service
 from app.services.llm_explainer import llm_explainer_service
 from app.core.security import AuthenticatedAccount, get_current_account
-from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date
+from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date, sector_scan_snapshot_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 STOCK_POOLS_SNAPSHOT_VERSION = 3
+SELL_POINT_CACHE_TTL_SECONDS = 20
+_sell_point_page_cache: dict[str, dict] = {}
 
 
 def _resolve_account_id(current_account: Optional[AuthenticatedAccount]) -> Optional[str]:
@@ -42,6 +49,93 @@ def _resolve_account_id(current_account: Optional[AuthenticatedAccount]) -> Opti
     if isinstance(account_id, str) and account_id:
         return account_id
     return None
+
+
+def _sell_point_cache_key(
+    trade_date: str,
+    account_id: Optional[str],
+    include_llm: bool,
+) -> str:
+    return f"{trade_date}:{account_id or ''}:{int(include_llm)}"
+
+
+def _get_cached_sell_point_payload(cache_key: str) -> Optional[dict]:
+    cached = _sell_point_page_cache.get(cache_key)
+    if not cached:
+        return None
+    if time.monotonic() - float(cached.get("fetched_at") or 0) > SELL_POINT_CACHE_TTL_SECONDS:
+        _sell_point_page_cache.pop(cache_key, None)
+        return None
+    return copy.deepcopy(cached.get("data"))
+
+
+def _cache_sell_point_payload(cache_key: str, payload: dict) -> None:
+    _sell_point_page_cache[cache_key] = {
+        "fetched_at": time.monotonic(),
+        "data": copy.deepcopy(payload),
+    }
+
+
+def _resolve_add_signal_from_buy_sop(point: SellPointOutput, buy_sop_result) -> tuple[Optional[str], Optional[str]]:
+    """基于买点 SOP 结果为持有观察票补充加仓提示。"""
+    pnl_pct = getattr(point, "pnl_pct", None)
+    if pnl_pct is None or pnl_pct < 0:
+        return None, None
+
+    account_context = getattr(buy_sop_result, "account_context", None)
+    if getattr(account_context, "current_use", "") != "加仓":
+        return None, None
+
+    basic_info = getattr(buy_sop_result, "basic_info", None)
+    position_advice = getattr(buy_sop_result, "position_advice", None)
+    execution = getattr(buy_sop_result, "execution", None)
+
+    buy_signal_tag = getattr(basic_info, "buy_signal_tag", "")
+    suggestion = getattr(position_advice, "suggestion", "")
+    execution_action = getattr(execution, "action", "")
+
+    if buy_signal_tag == "不买" or suggestion == "不出手" or execution_action == "放弃":
+        return None, None
+
+    if pnl_pct >= 1 and execution_action == "买":
+        return "建议加仓", getattr(execution, "reason", "") or getattr(position_advice, "reason", "")
+
+    if pnl_pct >= 0 and buy_signal_tag in {"可买", "观察"}:
+        if execution_action == "等":
+            return "可关注加仓", getattr(execution, "reason", "") or getattr(position_advice, "reason", "")
+        if execution_action == "买":
+            return "可关注加仓", "结构已有加仓信号，但当前利润垫还不够厚，先关注，不急着扩大仓位。"
+
+    return None, None
+
+
+async def _enrich_hold_positions_with_add_signals(
+    trade_date: str,
+    hold_positions: list[SellPointOutput],
+    account_id: Optional[str],
+) -> None:
+    """为持有观察票补充加仓提示。"""
+    if not hold_positions:
+        return
+
+    tasks = [
+        buy_point_sop_service.analyze(point.ts_code, trade_date, account_id=account_id)
+        for point in hold_positions
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for point, result in zip(hold_positions, results):
+        if isinstance(result, Exception):
+            logger.warning(
+                "sell-point add-signal enrich failed ts_code=%s error=%s",
+                point.ts_code,
+                result,
+            )
+            continue
+
+        add_signal_tag, add_signal_reason = _resolve_add_signal_from_buy_sop(point, result)
+        point.add_signal_tag = add_signal_tag
+        point.add_signal_reason = add_signal_reason
 
 
 async def get_holdings_from_db(
@@ -121,6 +215,7 @@ def _collect_buy_point_source_stocks(stock_pools) -> list:
 @router.get("/sell-point", response_model=ApiResponse)
 async def analyze_sell_point(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
+    refresh: bool = Query(False, description="是否跳过卖点页短缓存"),
     force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 解读缓存"),
     include_llm: bool = Query(True, description="是否包含 LLM 卖点解读"),
     current_account: AuthenticatedAccount = Depends(get_current_account),
@@ -138,19 +233,36 @@ async def analyze_sell_point(
 
     try:
         account_id = _resolve_account_id(current_account)
-        context = await decision_context_service.build_context(
-            trade_date,
-            top_gainers=100,
-            include_holdings=False,
-            account_id=account_id,
-        )
+        should_use_cache = not refresh and not force_llm_refresh and not include_llm
+        cache_key = _sell_point_cache_key(trade_date, account_id, include_llm)
+        if should_use_cache:
+            cached_payload = _get_cached_sell_point_payload(cache_key)
+            if cached_payload is not None:
+                return ApiResponse(data=cached_payload)
+
+        selection_trade_date = await resolve_snapshot_lookup_trade_date(trade_date)
+        holdings_list = await decision_context_service.get_holdings_from_db(account_id, trade_date)
+        holdings = [AccountPosition(**holding) for holding in holdings_list]
+        market_env = market_env_service.get_current_env(selection_trade_date)
+        sector_scan = await sector_scan_snapshot_service.get_snapshot(selection_trade_date)
+        if not sector_scan:
+            sector_scan = sector_scan_service.scan(
+                selection_trade_date,
+                limit_output=False,
+                market_env=market_env,
+            )
 
         # 卖点分析
         result = sell_point_service.analyze(
             trade_date,
-            context.holdings,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
+            holdings,
+            market_env=market_env,
+            sector_scan=sector_scan,
+        )
+        await _enrich_hold_positions_with_add_signals(
+            trade_date,
+            result.hold_positions,
+            account_id,
         )
         llm_summary = None
         llm_status = LlmCallStatus(
@@ -163,22 +275,23 @@ async def analyze_sell_point(
             llm_kwargs = {"account_id": account_id} if account_id else {}
             llm_summary, llm_status = await llm_explainer_service.rewrite_sell_points_with_status(
                 result,
-                context.market_env,
+                market_env,
                 force_refresh=force_llm_refresh,
                 **llm_kwargs,
             )
 
-        return ApiResponse(
-            data={
-                "trade_date": result.trade_date,
-                "hold_positions": [p.model_dump() for p in result.hold_positions],
-                "reduce_positions": [p.model_dump() for p in result.reduce_positions],
-                "sell_positions": [p.model_dump() for p in result.sell_positions],
-                "total_count": result.total_count,
-                "llm_summary": llm_summary.model_dump() if llm_summary else None,
-                "llm_status": llm_status.model_dump(),
-            }
-        )
+        payload = {
+            "trade_date": result.trade_date,
+            "hold_positions": [p.model_dump() for p in result.hold_positions],
+            "reduce_positions": [p.model_dump() for p in result.reduce_positions],
+            "sell_positions": [p.model_dump() for p in result.sell_positions],
+            "total_count": result.total_count,
+            "llm_summary": llm_summary.model_dump() if llm_summary else None,
+            "llm_status": llm_status.model_dump(),
+        }
+        if should_use_cache:
+            _cache_sell_point_payload(cache_key, payload)
+        return ApiResponse(data=payload)
     except Exception as e:
         return ApiResponse(code=500, message=f"卖点分析失败: {str(e)}")
 

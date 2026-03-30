@@ -5,6 +5,7 @@ from typing import List, Dict, Optional
 from loguru import logger
 from datetime import datetime, timedelta
 
+from app.data.tushare_client import is_sector_scan_board_eligible
 from app.models.schemas import (
     MarketEnvOutput,
     MarketEnvTag,
@@ -16,8 +17,10 @@ from app.models.schemas import (
     SectorActionHint,
     SectorDimensionScores,
     SectorLeaderStock,
+    SectorTopStock,
     SectorScanResponse,
     LeaderSectorResponse,
+    SectorTopStocksResponse,
 )
 from app.services.market_data_gateway import market_data_gateway
 
@@ -195,6 +198,235 @@ class SectorScanService:
             sector=leader,
             leader_stocks=self._pick_leader_stocks(trade_date, leader),
         )
+
+    def build_sector_top_stocks_from_scan(
+        self,
+        trade_date: str,
+        scan_result: SectorScanResponse,
+        sector_name: str,
+        sector_source_type: Optional[str] = None,
+        limit: int = 10,
+    ) -> Optional[SectorTopStocksResponse]:
+        """基于已完成的板块扫描结果生成板块 Top 股票响应。"""
+        sector = self._find_sector_from_scan(
+            scan_result,
+            sector_name=sector_name,
+            sector_source_type=sector_source_type,
+        )
+        if sector is None:
+            return None
+
+        top_stocks = self._pick_top_stocks(
+            trade_date,
+            sector,
+            count=limit,
+        )
+        return SectorTopStocksResponse(
+            trade_date=trade_date,
+            resolved_trade_date=scan_result.resolved_trade_date,
+            sector_data_mode=scan_result.sector_data_mode,
+            threshold_profile=scan_result.threshold_profile,
+            concept_data_status=scan_result.concept_data_status,
+            concept_data_message=scan_result.concept_data_message,
+            sector=sector,
+            top_stocks=top_stocks,
+            total=len(top_stocks),
+        )
+
+    def _find_sector_from_scan(
+        self,
+        scan_result: SectorScanResponse,
+        sector_name: str,
+        sector_source_type: Optional[str] = None,
+    ) -> Optional[SectorOutput]:
+        target_name = str(sector_name or "").strip()
+        target_source = str(sector_source_type or "").strip()
+        if not target_name:
+            return None
+
+        all_sectors = (
+            list(scan_result.mainline_sectors or [])
+            + list(scan_result.sub_mainline_sectors or [])
+            + list(scan_result.follow_sectors or [])
+            + list(scan_result.trash_sectors or [])
+        )
+        if target_source:
+            for row in all_sectors:
+                if row.sector_name == target_name and row.sector_source_type == target_source:
+                    return row
+        for row in all_sectors:
+            if row.sector_name == target_name:
+                return row
+        return None
+
+    def _build_top_stock_role_tag(self, index: int) -> str:
+        if index == 0:
+            return "龙头"
+        if index == 1:
+            return "中军"
+        if index == 2:
+            return "趋势核心"
+        return "前排活跃"
+
+    def _pick_top_stocks(
+        self,
+        trade_date: str,
+        sector: SectorOutput,
+        count: int = 10,
+    ) -> List[SectorTopStock]:
+        """为任意板块返回 Top 股票。"""
+        compact_trade_date = trade_date.replace("-", "")
+        try:
+            if sector.sector_source_type == "concept":
+                payload = self.client.get_expanded_stock_list_with_meta(
+                    compact_trade_date,
+                    top_gainers=max(150, count * 15),
+                )
+                rows = payload.get("rows") or []
+                matched = [
+                    row for row in rows
+                    if str(row.get("sector_name") or "") == sector.sector_name
+                    or sector.sector_name in (row.get("concept_names") or [])
+                ]
+                matched = [
+                    row for row in matched
+                    if is_sector_scan_board_eligible(row.get("ts_code") or "")
+                ]
+                matched.sort(
+                    key=lambda row: (
+                        "涨停入选" in str(row.get("candidate_source_tag") or ""),
+                        float(row.get("amount") or 0),
+                        float(row.get("change_pct") or 0),
+                        float(row.get("turnover_rate") or 0),
+                        float(row.get("vol_ratio") or 1),
+                    ),
+                    reverse=True,
+                )
+                return [
+                    SectorTopStock(
+                        rank=index + 1,
+                        ts_code=str(row.get("ts_code") or ""),
+                        stock_name=str(row.get("stock_name") or row.get("ts_code") or ""),
+                        change_pct=round(float(row.get("change_pct") or 0), 2),
+                        amount=round(float(row.get("amount") or 0), 2),
+                        turnover_rate=round(float(row.get("turnover_rate") or 0), 2),
+                        vol_ratio=round(float(row.get("vol_ratio") or 1), 2),
+                        role_tag=self._build_top_stock_role_tag(index),
+                        candidate_source_tag=row.get("candidate_source_tag"),
+                        top_reason="题材辨识度高，且涨幅、成交额或活跃度居前",
+                        quote_time=row.get("quote_time"),
+                        data_source=row.get("data_source"),
+                    )
+                    for index, row in enumerate(matched[:count])
+                    if row.get("ts_code")
+                ]
+
+            if sector.sector_source_type == "limitup_industry" and getattr(
+                self.client,
+                "pro",
+                None,
+            ):
+                effective_trade_date = self.client._resolve_trade_date(compact_trade_date)
+                df_up = self.client.pro.limit_list_d(
+                    trade_date=effective_trade_date,
+                    limit_type="U",
+                )
+                if df_up is not None and not df_up.empty:
+                    work = df_up.copy()
+                    work = work[
+                        work["industry"].fillna("").astype(str).str.strip()
+                        == sector.sector_name
+                    ]
+                    work = work[
+                        work["ts_code"].fillna("").astype(str).map(is_sector_scan_board_eligible)
+                    ]
+                    if not work.empty:
+                        work["pct_chg"] = work["pct_chg"].fillna(0)
+                        work["amount"] = work["amount"].fillna(0)
+                        work["turn_over"] = work["turn_over"].fillna(0)
+                        work["open_times"] = work["open_times"].fillna(99)
+                        work = work.sort_values(
+                            ["open_times", "amount", "pct_chg", "turn_over"],
+                            ascending=[True, False, False, False],
+                        )
+                        return [
+                            SectorTopStock(
+                                rank=index + 1,
+                                ts_code=str(row.get("ts_code") or ""),
+                                stock_name=str(row.get("name") or row.get("ts_code") or ""),
+                                change_pct=round(float(row.get("pct_chg") or 0), 2),
+                                amount=round(float(row.get("amount") or 0), 2),
+                                turnover_rate=round(float(row.get("turn_over") or 0), 2),
+                                vol_ratio=1.0,
+                                role_tag=self._build_top_stock_role_tag(index),
+                                candidate_source_tag="涨停前排",
+                                top_reason="涨停行业前排，炸板次数更少且成交额更强",
+                                data_source="limit_list_d",
+                            )
+                            for index, (_, row) in enumerate(work.head(count).iterrows())
+                            if row.get("ts_code")
+                        ]
+
+            payload = self.client._fetch_recent_stock_daily_df(compact_trade_date)
+            df = payload.get("df")
+            if df is None or df.empty:
+                return []
+
+            stock_meta_map = self.client._get_stock_basic_snapshot_map()
+            daily_basic_df = None
+            daily_basic = getattr(getattr(self.client, "pro", None), "daily_basic", None)
+            if callable(daily_basic):
+                data_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
+                try:
+                    daily_basic_df = daily_basic(
+                        trade_date=data_trade_date,
+                        fields="ts_code,turnover_rate,volume_ratio",
+                    )
+                except TypeError:
+                    daily_basic_df = daily_basic(trade_date=data_trade_date)
+
+            work = self.client._build_daily_stock_source_df(
+                df,
+                stock_meta_map,
+                daily_basic_df=daily_basic_df,
+            )
+            if work is None or work.empty:
+                return []
+
+            work = work[work["industry"].fillna("") == sector.sector_name]
+            work = work[work["ts_code"].fillna("").astype(str).map(is_sector_scan_board_eligible)]
+            if work.empty:
+                return []
+
+            work["pct_change"] = work["pct_change"].fillna(0)
+            work["amount"] = work["amount"].fillna(0)
+            work["turnover_rate"] = work["turnover_rate"].fillna(0)
+            work["volume_ratio"] = work["volume_ratio"].fillna(1.0)
+            work = work.sort_values(
+                ["pct_change", "amount", "turnover_rate", "volume_ratio"],
+                ascending=False,
+            )
+
+            return [
+                SectorTopStock(
+                    rank=index + 1,
+                    ts_code=str(row.get("ts_code") or ""),
+                    stock_name=str(row.get("stock_name") or row.get("ts_code") or ""),
+                    change_pct=round(float(row.get("pct_change") or 0), 2),
+                    amount=round(float(row.get("amount") or 0), 2),
+                    turnover_rate=round(float(row.get("turnover_rate") or 0), 2),
+                    vol_ratio=round(float(row.get("volume_ratio") or 1), 2),
+                    role_tag=self._build_top_stock_role_tag(index),
+                    candidate_source_tag="行业前排",
+                    top_reason="行业前排股，涨幅、成交额与换手表现居前",
+                    data_source="daily",
+                )
+                for index, (_, row) in enumerate(work.head(count).iterrows())
+                if row.get("ts_code")
+            ]
+        except Exception as e:
+            logger.warning(f"获取板块 Top 股票失败: {e}")
+            return []
 
     def _get_sector_data(self, trade_date: str) -> Dict[str, object]:
         """
@@ -395,6 +627,10 @@ class SectorScanService:
                     row for row in rows
                     if str(row.get("sector_name") or "") == sector.sector_name
                 ]
+                matched = [
+                    row for row in matched
+                    if is_sector_scan_board_eligible(row.get("ts_code") or "")
+                ]
                 matched.sort(
                     key=lambda row: (
                         "涨停入选" in str(row.get("candidate_source_tag") or ""),
@@ -435,6 +671,9 @@ class SectorScanService:
                     work = work[
                         work["industry"].fillna("").astype(str).str.strip()
                         == sector.sector_name
+                    ]
+                    work = work[
+                        work["ts_code"].fillna("").astype(str).map(is_sector_scan_board_eligible)
                     ]
                     if not work.empty:
                         work["pct_chg"] = work["pct_chg"].fillna(0)
@@ -490,6 +729,7 @@ class SectorScanService:
                 return []
 
             work = work[work["industry"].fillna("") == sector.sector_name]
+            work = work[work["ts_code"].fillna("").astype(str).map(is_sector_scan_board_eligible)]
             if work.empty:
                 return []
 

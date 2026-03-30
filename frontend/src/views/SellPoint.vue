@@ -8,7 +8,7 @@
             <span v-if="displayDate" class="header-date">{{ displayDate }}</span>
           </div>
           <div class="header-actions">
-            <el-button @click="loadData()" :loading="loading">刷新</el-button>
+            <el-button @click="loadData({ refresh: true })" :loading="loading">刷新</el-button>
             <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
           </div>
         </div>
@@ -51,6 +51,10 @@
           </div>
           <div class="overview-rules">
             <div v-for="rule in sellChecklist" :key="rule" class="rule-chip">{{ rule }}</div>
+          </div>
+          <div v-if="addSignalCount" class="overview-add-signals">
+            <span class="add-signal-pill add-signal-pill-strong">建议加仓 {{ addSuggestionCount }}</span>
+            <span v-if="addWatchCount" class="add-signal-pill add-signal-pill-watch">可关注加仓 {{ addWatchCount }}</span>
           </div>
           <div v-if="llmStatusVisible" class="llm-status" :class="llmStatusClass">
             <span class="llm-status-label">LLM 状态</span>
@@ -173,6 +177,15 @@
                   <span>{{ point.llm_risk_sentence || point.sell_comment || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                    <el-button
+                      type="primary"
+                      link
+                      size="small"
+                      :loading="Boolean(priceRefreshingMap[point.ts_code])"
+                      @click="refreshPointPrice(point)"
+                    >
+                      刷新价格
+                    </el-button>
                     <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
@@ -275,6 +288,15 @@
                   <span>{{ point.llm_risk_sentence || point.sell_comment || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                    <el-button
+                      type="primary"
+                      link
+                      size="small"
+                      :loading="Boolean(priceRefreshingMap[point.ts_code])"
+                      @click="refreshPointPrice(point)"
+                    >
+                      刷新价格
+                    </el-button>
                     <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
@@ -298,12 +320,24 @@
                   <div class="signal-badges">
                     <el-tag size="small" type="success">{{ point.sell_signal_tag }}</el-tag>
                     <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
+                    <el-tag
+                      v-if="point.add_signal_tag"
+                      size="small"
+                      :type="point.add_signal_tag === '建议加仓' ? 'danger' : 'warning'"
+                    >
+                      {{ point.add_signal_tag }}
+                    </el-tag>
                     <el-tag v-if="hasLlmCopy(point)" size="small" type="info">LLM解读</el-tag>
                   </div>
                 </div>
 
                 <div class="signal-intent signal-intent-hold">
                   {{ holdActionLine(point) }}
+                </div>
+
+                <div v-if="point.add_signal_tag" class="add-signal-banner" :class="point.add_signal_tag === '建议加仓' ? 'add-signal-banner-strong' : 'add-signal-banner-watch'">
+                  <strong>{{ point.add_signal_tag }}</strong>
+                  <span>{{ point.add_signal_reason || '这只票可以转到加仓语境继续看。' }}</span>
                 </div>
 
                 <div class="quote-strip">
@@ -377,6 +411,16 @@
                   <span>{{ point.llm_risk_sentence || point.sell_reason || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">{{ point.can_sell_today ? '今日可卖' : 'T+1锁定' }}</span>
+                    <el-button
+                      type="primary"
+                      link
+                      size="small"
+                      :loading="Boolean(priceRefreshingMap[point.ts_code])"
+                      @click="refreshPointPrice(point)"
+                    >
+                      刷新价格
+                    </el-button>
+                    <el-button v-if="point.add_signal_tag" type="primary" link size="small" @click="openBuyAnalysis(point)">查看加仓分析</el-button>
                     <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
@@ -391,7 +435,9 @@
       v-model="sellAnalysisVisible"
       :ts-code="sellAnalysisStock.tsCode"
       :stock-name="sellAnalysisStock.stockName"
-      :trade-date="displayDate"
+      :trade-date="sellAnalysisTradeDate"
+      :current-price="sellAnalysisStock.currentPrice"
+      :current-pnl-pct="sellAnalysisStock.currentPnlPct"
     />
     <StockCheckupDrawer
       v-model="checkupVisible"
@@ -400,14 +446,24 @@
       :default-target="checkupStock.defaultTarget"
       :trade-date="displayDate"
     />
+    <BuyAnalysisDrawer
+      v-model="buyAnalysisVisible"
+      :ts-code="buyAnalysisStock.tsCode"
+      :stock-name="buyAnalysisStock.stockName"
+      :trade-date="displayDate"
+      :current-price="buyAnalysisStock.currentPrice"
+      :current-change-pct="buyAnalysisStock.currentChangePct"
+    />
   </div>
 </template>
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
-import { decisionApi } from '../api'
+import { decisionApi, stockApi } from '../api'
+import { authState } from '../auth'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
+import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
 import SellAnalysisDrawer from '../components/SellAnalysisDrawer.vue'
 
 const loading = ref(false)
@@ -417,15 +473,21 @@ const displayDate = ref('')
 const loadError = ref('')
 const sellData = ref({ sell_positions: [], reduce_positions: [], hold_positions: [], llm_status: null })
 const sellAnalysisVisible = ref(false)
-const sellAnalysisStock = ref({ tsCode: '', stockName: '' })
+const sellAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentPnlPct: null })
+const buyAnalysisVisible = ref(false)
+const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentChangePct: null })
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型' })
+const priceRefreshingMap = ref({})
+const SELL_POINT_CACHE_PREFIX = 'sell_point_snapshot_v1'
+const DASHBOARD_CACHE_PREFIX = 'dashboard_snapshot_v2'
 
 const sellHeadline = computed(() => {
   if (sellData.value.sell_positions?.length) return '先处理明确该卖的持仓，再考虑减仓和继续持有的部分'
   if (sellData.value.reduce_positions?.length) return '当前以降风险为主，先把该减的仓位收回来'
   return '当前没有强制离场压力，以持有观察为主'
 })
+const sellAnalysisTradeDate = computed(() => sellData.value?.resolved_trade_date || displayDate.value)
 
 const sellGuidance = computed(() => {
   if (sellData.value.sell_positions?.length) return '卖出区是优先级最高的动作，先看原因，再按执行条件动手，不要和减仓票混在一起处理。'
@@ -454,6 +516,9 @@ const llmStatusText = computed(() => {
   if (!llmStatus.value) return ''
   return llmStatus.value.message || (llmStatus.value.success ? 'LLM 解释增强已生效' : 'LLM 当前未生效')
 })
+const addSuggestionCount = computed(() => (sellData.value.hold_positions || []).filter((point) => point.add_signal_tag === '建议加仓').length)
+const addWatchCount = computed(() => (sellData.value.hold_positions || []).filter((point) => point.add_signal_tag === '可关注加仓').length)
+const addSignalCount = computed(() => addSuggestionCount.value + addWatchCount.value)
 
 const topActions = computed(() => {
   const ordered = [
@@ -467,6 +532,16 @@ const topActions = computed(() => {
     orderLabel: orderLabel(index, item.sell_signal_tag),
   }))
 })
+
+const resolveCacheKey = (tradeDate) => {
+  const accountId = authState.account?.id || 'guest'
+  return `${SELL_POINT_CACHE_PREFIX}:${accountId}:${tradeDate}`
+}
+
+const resolveDashboardCacheKey = () => {
+  const accountId = authState.account?.id || 'guest'
+  return `${DASHBOARD_CACHE_PREFIX}:${accountId}`
+}
 
 const getLocalDate = () => {
   const now = new Date()
@@ -532,7 +607,12 @@ const hasLlmCopy = (point) => Boolean(
 
 const sellActionLine = (point) => point.llm_action_sentence || `优先处理：${point.sell_reason}。`
 const reduceActionLine = (point) => point.llm_action_sentence || `先降风险：${point.sell_reason}。`
-const holdActionLine = (point) => point.llm_action_sentence || `继续跟踪：${point.sell_comment || point.sell_reason}。`
+const holdActionLine = (point) => {
+  if (point.add_signal_tag) {
+    return `${point.add_signal_tag}：${point.add_signal_reason || point.sell_comment || point.sell_reason}。`
+  }
+  return point.llm_action_sentence || `继续跟踪：${point.sell_comment || point.sell_reason}。`
+}
 const topActionReason = (point) => point.llm_trigger_sentence || shortTriggerText(point.sell_trigger_cond || point.sell_reason || '-')
 
 const shortTriggerText = (text) => {
@@ -562,21 +642,138 @@ const openCheckup = (point, defaultTarget = '持仓型') => {
 const openSellAnalysis = (point) => {
   sellAnalysisStock.value = {
     tsCode: point.ts_code,
-    stockName: point.stock_name || point.ts_code
+    stockName: point.stock_name || point.ts_code,
+    currentPrice: point.market_price ?? null,
+    currentPnlPct: point.pnl_pct ?? null,
   }
   sellAnalysisVisible.value = true
 }
 
+const openBuyAnalysis = (point) => {
+  buyAnalysisStock.value = {
+    tsCode: point.ts_code,
+    stockName: point.stock_name || point.ts_code,
+    currentPrice: point.market_price ?? null,
+    currentChangePct: null,
+  }
+  buyAnalysisVisible.value = true
+}
+
+const setPointRefreshing = (tsCode, refreshing) => {
+  priceRefreshingMap.value = {
+    ...priceRefreshingMap.value,
+    [tsCode]: refreshing,
+  }
+}
+
+const refreshPointPrice = async (point) => {
+  if (!point?.ts_code) return
+  setPointRefreshing(point.ts_code, true)
+  try {
+    const res = await stockApi.detail(point.ts_code, displayDate.value || getLocalDate())
+    const stock = res?.data?.data?.stock
+    const latestPrice = Number(stock?.close)
+    if (!Number.isFinite(latestPrice) || latestPrice <= 0) {
+      ElMessage.warning('未获取到有效最新价')
+      return
+    }
+
+    point.market_price = latestPrice
+    point.quote_time = stock?.quote_time || null
+    point.data_source = stock?.data_source || point.data_source
+    if (Number(point.cost_price) > 0) {
+      point.pnl_pct = Number((((latestPrice - Number(point.cost_price)) / Number(point.cost_price)) * 100).toFixed(2))
+    }
+
+    if (sellAnalysisVisible.value && sellAnalysisStock.value.tsCode === point.ts_code) {
+      sellAnalysisStock.value = {
+        ...sellAnalysisStock.value,
+        currentPrice: point.market_price ?? null,
+        currentPnlPct: point.pnl_pct ?? null,
+      }
+    }
+    if (buyAnalysisVisible.value && buyAnalysisStock.value.tsCode === point.ts_code) {
+      buyAnalysisStock.value = {
+        ...buyAnalysisStock.value,
+        currentPrice: point.market_price ?? null,
+      }
+    }
+
+    persistSellPointCache()
+    ElMessage.success(`${point.stock_name || point.ts_code} 最新价已更新`)
+  } catch (error) {
+    const message = error?.response?.data?.message || error?.message || '刷新价格失败'
+    ElMessage.error(message)
+  } finally {
+    setPointRefreshing(point.ts_code, false)
+  }
+}
+
+const persistSellPointCache = () => {
+  if (typeof window === 'undefined' || !displayDate.value) return
+  const payload = {
+    displayDate: displayDate.value,
+    sellData: sellData.value,
+    activeTab: activeTab.value,
+    updatedAt: Date.now(),
+  }
+  window.sessionStorage.setItem(resolveCacheKey(displayDate.value), JSON.stringify(payload))
+}
+
+const hydrateSellPointCache = (tradeDate) => {
+  if (typeof window === 'undefined') return false
+  const raw = window.sessionStorage.getItem(resolveCacheKey(tradeDate))
+  if (!raw) return false
+  try {
+    const payload = JSON.parse(raw)
+    displayDate.value = payload.displayDate || tradeDate
+    sellData.value = payload.sellData || { sell_positions: [], reduce_positions: [], hold_positions: [], llm_status: null }
+    activeTab.value = payload.activeTab || 'sell'
+    return true
+  } catch (error) {
+    window.sessionStorage.removeItem(resolveCacheKey(tradeDate))
+    return false
+  }
+}
+
+const hydrateDashboardSellPointCache = (tradeDate) => {
+  if (typeof window === 'undefined') return false
+  const raw = window.sessionStorage.getItem(resolveDashboardCacheKey())
+  if (!raw) return false
+  try {
+    const payload = JSON.parse(raw)
+    const dashboardSellData = payload.sellPoints || null
+    if (!dashboardSellData) return false
+    displayDate.value = tradeDate
+    sellData.value = dashboardSellData
+    if (dashboardSellData.sell_positions?.length) activeTab.value = 'sell'
+    else if (dashboardSellData.reduce_positions?.length) activeTab.value = 'reduce'
+    else activeTab.value = 'hold'
+    persistSellPointCache()
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
 const loadData = async (options = {}) => {
+  const refresh = Boolean(options.refresh)
   const forceLlmRefresh = Boolean(options.forceLlmRefresh)
   const includeLlm = forceLlmRefresh
+  const silent = Boolean(options.silent)
+  const hasRenderableData = Boolean(
+    sellData.value?.sell_positions?.length
+    || sellData.value?.reduce_positions?.length
+    || sellData.value?.hold_positions?.length
+  )
   if (forceLlmRefresh) llmRefreshing.value = true
-  else loading.value = true
+  else loading.value = refresh || (!hasRenderableData && !silent)
   if (!forceLlmRefresh) loadError.value = ''
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
     const res = await decisionApi.sellPoint(tradeDate, {
+      refresh,
       forceLlmRefresh,
       includeLlm,
       timeout: 90000
@@ -585,6 +782,7 @@ const loadData = async (options = {}) => {
     if (sellData.value.sell_positions?.length) activeTab.value = 'sell'
     else if (sellData.value.reduce_positions?.length) activeTab.value = 'reduce'
     else activeTab.value = 'hold'
+    persistSellPointCache()
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '加载失败'
     if (forceLlmRefresh) {
@@ -604,8 +802,10 @@ const refreshLlm = async () => {
 }
 
 onMounted(() => {
-  displayDate.value = getLocalDate()
-  loadData()
+  const tradeDate = getLocalDate()
+  displayDate.value = tradeDate
+  const hydrated = hydrateSellPointCache(tradeDate) || hydrateDashboardSellPointCache(tradeDate)
+  loadData({ silent: hydrated })
 })
 </script>
 
@@ -700,6 +900,34 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.overview-add-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.add-signal-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.add-signal-pill-strong {
+  color: #ff8c69;
+  background: rgba(255, 140, 105, 0.1);
+  border-color: rgba(255, 140, 105, 0.2);
+}
+
+.add-signal-pill-watch {
+  color: #f3c24d;
+  background: rgba(243, 194, 77, 0.1);
+  border-color: rgba(243, 194, 77, 0.2);
 }
 
 .llm-status {
@@ -937,6 +1165,24 @@ onMounted(() => {
 .signal-intent-hold {
   background: rgba(68, 209, 159, 0.08);
   border: 1px solid rgba(68, 209, 159, 0.14);
+}
+
+.add-signal-banner {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  line-height: 1.6;
+}
+
+.add-signal-banner-strong {
+  background: rgba(255, 140, 105, 0.08);
+  border: 1px solid rgba(255, 140, 105, 0.18);
+}
+
+.add-signal-banner-watch {
+  background: rgba(243, 194, 77, 0.08);
+  border: 1px solid rgba(243, 194, 77, 0.18);
 }
 
 .llm-copy-panel {

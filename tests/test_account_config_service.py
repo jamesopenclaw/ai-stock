@@ -27,6 +27,31 @@ class _GoodSession:
         return _FakeResult(self._row)
 
 
+class _SequencedSession:
+    def __init__(self, rows):
+        self._rows = list(rows)
+        self.added = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def execute(self, _stmt):
+        row = self._rows.pop(0) if self._rows else None
+        return _FakeResult(row)
+
+    def add(self, row):
+        self.added.append(row)
+
+    async def commit(self):
+        return None
+
+    async def refresh(self, _row):
+        return None
+
+
 class _BrokenSession:
     async def __aenter__(self):
         raise ConnectionError("db down")
@@ -61,3 +86,40 @@ async def test_get_llm_runtime_config_uses_last_good_cache_on_db_error(monkeypat
     cached_runtime = await account_config_service.get_llm_runtime_config()
 
     assert cached_runtime == runtime
+
+
+@pytest.mark.asyncio
+async def test_get_account_config_returns_total_asset_only(monkeypatch):
+    account_row = SimpleNamespace(
+        total_asset=880000.0,
+        updated_at=None,
+    )
+
+    monkeypatch.setattr(
+        account_config_service,
+        "async_session_factory",
+        lambda: _SequencedSession([account_row]),
+    )
+
+    payload = await account_config_service.get_config(account_id="account-1")
+
+    assert payload == {
+        "total_asset": 880000.0,
+        "updated_at": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_account_config_only_updates_total_asset(monkeypatch):
+    session = _SequencedSession([None])
+    monkeypatch.setattr(account_config_service, "async_session_factory", lambda: session)
+
+    payload = await account_config_service.update_config(
+        {"total_asset": 660000.0},
+        account_id="account-1",
+    )
+
+    created = session.added[0]
+    assert created.account_id == "account-1"
+    assert created.total_asset == 660000.0
+    assert payload["total_asset"] == 660000.0

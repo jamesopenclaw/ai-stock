@@ -12,12 +12,14 @@ from app.api.v1 import account, decision, stock
 from app.core.config import Settings
 from app.models.schemas import (
     AccountInput,
+    ApiResponse,
     BuyPointOutput,
     BuyPointResponse,
     BuyPointType,
     MarketEnvOutput,
     MarketEnvTag,
     RiskLevel,
+    SellPointResponse,
     StockOutput,
     StockPoolsOutput,
     StockPoolTag,
@@ -85,14 +87,6 @@ async def test_account_config_route_via_testclient(client, monkeypatch):
     async def fake_get_config(account_id=None):
         return {
             "total_asset": 500000.0,
-            "llm_enabled": False,
-            "llm_provider": "custom",
-            "llm_base_url": "",
-            "llm_model": "",
-            "llm_timeout_seconds": 60.0,
-            "llm_temperature": 0.2,
-            "llm_max_input_items": 8,
-            "llm_has_api_key": False,
             "updated_at": None,
         }
 
@@ -152,6 +146,162 @@ async def test_account_overview_route_via_testclient(client, monkeypatch):
     assert payload["code"] == 200
     assert payload["data"]["profile"]["account_name"] == "默认账户"
     assert payload["data"]["positions"][0]["ts_code"] == "000001.SZ"
+
+
+@pytest.mark.asyncio
+async def test_account_overview_route_uses_short_ttl_cache(monkeypatch):
+    calls = {"overview": 0}
+
+    async def fake_build_overview(_current_account):
+        calls["overview"] += 1
+        return {
+            "profile": {
+                "account_id": "account-1",
+                "account_name": "默认账户",
+                "total_asset": 500000.0,
+                "available_cash": 320000.0,
+                "market_value": 180000.0,
+                "total_position_ratio": 0.36,
+                "holding_count": 2,
+                "t1_locked_count": 1,
+                "can_trade": True,
+                "action": "控制仓位",
+                "priority": "观察为主",
+            },
+            "status": {
+                "account_id": "account-1",
+                "account_name": "默认账户",
+                "can_trade": True,
+                "action": "控制仓位",
+                "priority": "观察为主",
+                "position_ratio": 0.36,
+                "available_cash": 320000.0,
+                "holding_count": 2,
+            },
+            "positions": [],
+            "total": 0,
+        }
+
+    monkeypatch.setattr(account, "_account_overview_cache", {})
+    monkeypatch.setattr(account, "build_account_overview_payload", fake_build_overview)
+
+    current_account = SimpleNamespace(
+        id="account-1",
+        account_name="默认账户",
+    )
+    first = await account.get_overview(current_account=current_account)
+    second = await account.get_overview(current_account=current_account)
+
+    assert first.code == 200
+    assert second.code == 200
+    assert calls["overview"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sell_point_route_uses_lightweight_context_path(monkeypatch):
+    async def fail_build_context(*args, **kwargs):
+        raise AssertionError("sell-point route should not build full decision context")
+
+    async def fake_get_holdings(_account_id=None, _trade_date=None):
+        return []
+
+    async def fake_get_snapshot(_trade_date):
+        return {"cached": True}
+
+    def fake_market_env(_trade_date):
+        return MarketEnvOutput(
+            trade_date="2026-03-28",
+            market_env_tag=MarketEnvTag.ATTACK,
+            breakout_allowed=True,
+            risk_level=RiskLevel.LOW,
+            market_comment="进攻环境",
+            index_score=80,
+            sentiment_score=75,
+            overall_score=77,
+        )
+
+    def fake_sell_analyze(*args, **kwargs):
+        return SellPointResponse(
+            trade_date="2026-03-28",
+            hold_positions=[],
+            reduce_positions=[],
+            sell_positions=[],
+            total_count=0,
+        )
+
+    monkeypatch.setattr(decision.decision_context_service, "build_context", fail_build_context)
+    monkeypatch.setattr(decision.decision_context_service, "get_holdings_from_db", fake_get_holdings)
+    monkeypatch.setattr(decision.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
+    monkeypatch.setattr(decision.market_env_service, "get_current_env", fake_market_env)
+    monkeypatch.setattr(decision.sell_point_service, "analyze", fake_sell_analyze)
+
+    response = await decision.analyze_sell_point(
+        trade_date="2026-03-28",
+        include_llm=False,
+        current_account=SimpleNamespace(id="account-1"),
+    )
+
+    assert isinstance(response, ApiResponse)
+    assert response.code == 200
+    assert response.data["total_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sell_point_route_uses_short_ttl_cache(monkeypatch):
+    calls = {"holdings": 0, "analyze": 0}
+
+    async def fake_get_holdings(_account_id=None, _trade_date=None):
+        calls["holdings"] += 1
+        return []
+
+    async def fake_get_snapshot(_trade_date):
+        return {"cached": True}
+
+    def fake_market_env(_trade_date):
+        return MarketEnvOutput(
+            trade_date="2026-03-28",
+            market_env_tag=MarketEnvTag.ATTACK,
+            breakout_allowed=True,
+            risk_level=RiskLevel.LOW,
+            market_comment="进攻环境",
+            index_score=80,
+            sentiment_score=75,
+            overall_score=77,
+        )
+
+    def fake_sell_analyze(*args, **kwargs):
+        calls["analyze"] += 1
+        return SellPointResponse(
+            trade_date="2026-03-28",
+            hold_positions=[],
+            reduce_positions=[],
+            sell_positions=[],
+            total_count=0,
+        )
+
+    monkeypatch.setattr(decision, "_sell_point_page_cache", {})
+    monkeypatch.setattr(decision.decision_context_service, "get_holdings_from_db", fake_get_holdings)
+    monkeypatch.setattr(decision.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
+    monkeypatch.setattr(decision.market_env_service, "get_current_env", fake_market_env)
+    monkeypatch.setattr(decision.sell_point_service, "analyze", fake_sell_analyze)
+
+    current_account = SimpleNamespace(id="account-1")
+    first = await decision.analyze_sell_point(
+        trade_date="2026-03-28",
+        force_llm_refresh=False,
+        include_llm=False,
+        current_account=current_account,
+    )
+    second = await decision.analyze_sell_point(
+        trade_date="2026-03-28",
+        force_llm_refresh=False,
+        include_llm=False,
+        current_account=current_account,
+    )
+
+    assert first.code == 200
+    assert second.code == 200
+    assert calls == {"holdings": 1, "analyze": 1}
 
 
 @pytest.mark.asyncio
