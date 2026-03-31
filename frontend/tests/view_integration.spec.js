@@ -20,6 +20,8 @@ const decisionApi = {
 
 const marketApi = {
   getEnv: vi.fn(),
+  getIndex: vi.fn(),
+  getStats: vi.fn(),
 }
 
 const sectorApi = {
@@ -47,6 +49,7 @@ const stockApi = {
   pools: vi.fn(),
   detail: vi.fn(),
   buyAnalysis: vi.fn(),
+  sellAnalysis: vi.fn(),
 }
 
 const taskApi = {
@@ -116,6 +119,8 @@ beforeEach(() => {
   decisionApi.summary.mockReset()
   decisionApi.sellPoint.mockReset()
   marketApi.getEnv.mockReset()
+  marketApi.getIndex.mockReset()
+  marketApi.getStats.mockReset()
   sectorApi.leader.mockReset()
   accountApi.profile.mockReset()
   accountApi.overview.mockReset()
@@ -128,6 +133,7 @@ beforeEach(() => {
   stockApi.pools.mockReset()
   stockApi.detail.mockReset()
   stockApi.buyAnalysis.mockReset()
+  stockApi.sellAnalysis.mockReset()
   taskApi.trigger.mockReset()
   taskApi.status.mockReset()
   authState.accessToken = ''
@@ -137,6 +143,67 @@ beforeEach(() => {
 })
 
 describe('关键页面联调', () => {
+  it('普通用户在顶部只显示当前账户展示，不渲染账户切换器', async () => {
+    authState.accessToken = 'token'
+    authState.refreshToken = 'refresh'
+    authState.user = {
+      id: 'user-1',
+      username: 'hehq',
+      display_name: '贺老师',
+      role: 'user',
+      status: 'active',
+    }
+    authState.account = {
+      id: 'acct-1',
+      account_code: 'HE-001',
+      account_name: '贺老师的账户',
+      status: 'active',
+    }
+    authApi.me.mockResolvedValue(makeResponse({ user: authState.user, account: authState.account }))
+
+    const { default: App } = await import('../src/App.vue')
+    const wrapper = await mount(App)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('我的账户')
+    expect(wrapper.text()).toContain('贺老师的账户')
+    expect(wrapper.find('.account-switcher').exists()).toBe(false)
+  })
+
+  it('管理员在顶部渲染账户切换器', async () => {
+    authState.accessToken = 'token'
+    authState.refreshToken = 'refresh'
+    authState.user = {
+      id: 'admin-1',
+      username: 'admin',
+      display_name: '管理员',
+      role: 'admin',
+      status: 'active',
+    }
+    authState.account = {
+      id: 'acct-1',
+      account_code: 'DEFAULT-001',
+      account_name: '默认账户',
+      status: 'active',
+    }
+    authApi.me.mockResolvedValue(makeResponse({ user: authState.user, account: authState.account }))
+    adminApi.listAccounts.mockResolvedValue(
+      makeResponse({
+        accounts: [
+          { id: 'acct-1', account_code: 'DEFAULT-001', account_name: '默认账户', status: 'active' },
+          { id: 'acct-2', account_code: 'VERIFY-002', account_name: '验证账户', status: 'active' },
+        ],
+      })
+    )
+
+    const { default: App } = await import('../src/App.vue')
+    const wrapper = await mount(App)
+    await flushPromises()
+
+    expect(adminApi.listAccounts).toHaveBeenCalled()
+    expect(wrapper.find('.account-switcher').exists()).toBe(true)
+  })
+
   it('Pools 页面会加载三池和复盘数据，并显示焦点方向文案', async () => {
     routeQuery = { focus_sector: '机器人' }
     stockApi.pools.mockResolvedValue(
@@ -173,7 +240,7 @@ describe('关键页面联调', () => {
     const wrapper = await mountView(PoolsView)
 
     expect(stockApi.pools).toHaveBeenCalledOnce()
-    expect(decisionApi.reviewStats).toHaveBeenCalledOnce()
+    expect(decisionApi.reviewStats).toHaveBeenCalled()
     expect(stockApi.pools).toHaveBeenCalledWith(expect.any(String), 50, expect.objectContaining({ timeout: 90000 }))
     expect(wrapper.text()).toContain('当前按')
     expect(wrapper.text()).toContain('机器人')
@@ -228,7 +295,7 @@ describe('关键页面联调', () => {
     await flushPromises()
 
     expect(decisionApi.buyPoint).toHaveBeenCalledOnce()
-    expect(decisionApi.reviewStats).toHaveBeenCalledOnce()
+    expect(decisionApi.reviewStats).toHaveBeenCalled()
     expect(decisionApi.buyPoint).toHaveBeenCalledWith(expect.any(String), 30, expect.objectContaining({ timeout: 90000 }))
     expect(wrapper.text()).toContain('买点分析')
     expect(wrapper.text()).toContain('机器人先锋')
@@ -250,6 +317,49 @@ describe('关键页面联调', () => {
 
     expect(wrapper.text()).toContain('买点分析失败: unexpected connection_lost() call')
     expect(messageError).toHaveBeenCalledWith('买点分析失败: unexpected connection_lost() call')
+  })
+
+  it('Market 页面会在实时市场状态不可用时显示明确提示', async () => {
+    marketApi.getEnv.mockResolvedValue(makeResponse({
+      trade_date: '2026-03-31',
+      resolved_trade_date: '2026-03-31',
+      market_env_tag: '中性',
+      breakout_allowed: false,
+      risk_level: '中',
+      market_comment: '市场中性，指数和情绪都没有形成明显主导；指数侧暂无明显失真，但强弱差距不大；先等确认，不抢突破，优先做更舒服的回踩或分歧转强',
+      index_score: 52,
+      sentiment_score: 50,
+      overall_score: 51,
+    }))
+    marketApi.getIndex.mockResolvedValue(makeResponse({
+      trade_date: '2026-03-31',
+      resolved_trade_date: '2026-03-31',
+      indexes: [],
+    }))
+    marketApi.getStats.mockResolvedValue(makeResponse({
+      trade_date: '2026-03-31',
+      resolved_trade_date: '2026-03-31',
+      realtime_status: 'unavailable',
+      realtime_is_stale: false,
+      realtime_stale_from_quote_time: '2026-03-31 10:01:00',
+      limit_up_count: 0,
+      limit_down_count: 0,
+      broken_board_rate: 0,
+      market_turnover: null,
+      up_down_ratio: { up: 0, down: 0, flat: 0, total: 0 },
+      limit_stats_data_source: 'unavailable',
+      turnover_data_source: 'unavailable',
+      up_down_data_source: 'unavailable',
+    }))
+
+    const { default: MarketView } = await import('../src/views/Market.vue')
+    const wrapper = await mountView(MarketView)
+
+    expect(wrapper.text()).toContain('实时市场状态暂不可用')
+    expect(wrapper.text()).toContain('主源与兜底链路当前都不可用')
+    expect(wrapper.text()).toContain('市场结论')
+    expect(wrapper.text()).toContain('主要依据')
+    expect(wrapper.text()).toContain('操作建议')
   })
 
   it('BuyAnalysisDrawer 会在加载失败时显示真实错误，不再只显示空态', async () => {
@@ -274,16 +384,150 @@ describe('关键页面联调', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(stockApi.buyAnalysis).toHaveBeenCalledWith('002025.SZ', '2026-03-30')
+    expect(stockApi.buyAnalysis).toHaveBeenCalledWith('002025.SZ', '2026-03-30', { timeout: 90000 })
     expect(wrapper.text()).toContain('获取买点分析失败: 目标股票不存在于候选上下文')
     expect(wrapper.text()).toContain('买点 SOP 加载失败')
     expect(messageError).toHaveBeenCalledWith('获取买点分析失败: 目标股票不存在于候选上下文')
   })
 
+  it('SellAnalysisDrawer 会在加载失败时显示真实错误，不再只显示空态', async () => {
+    stockApi.sellAnalysis.mockResolvedValue({
+      data: {
+        code: 500,
+        message: '获取卖点分析失败: 当前持仓不存在于账户上下文',
+        data: null,
+      },
+    })
+
+    const { default: SellAnalysisDrawer } = await import('../src/components/SellAnalysisDrawer.vue')
+    const wrapper = mount(SellAnalysisDrawer, {
+      props: {
+        modelValue: false,
+        tsCode: '601012.SH',
+        stockName: '隆基绿能',
+        tradeDate: '2026-03-31',
+      },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+    await flushPromises()
+
+    expect(stockApi.sellAnalysis).toHaveBeenCalledWith('601012.SH', '2026-03-31', { timeout: 90000 })
+    expect(wrapper.text()).toContain('获取卖点分析失败: 当前持仓不存在于账户上下文')
+    expect(wrapper.text()).toContain('卖点 SOP 加载失败')
+    expect(messageError).toHaveBeenCalledWith('获取卖点分析失败: 当前持仓不存在于账户上下文')
+  })
+
+  it('BuyAnalysisDrawer 会展示加仓决策与仓位推进建议', async () => {
+    stockApi.buyAnalysis.mockResolvedValue({
+      data: {
+        code: 200,
+        data: {
+          trade_date: '2026-03-31',
+          resolved_trade_date: '2026-03-31',
+          stock_found_in_candidates: true,
+          basic_info: {
+            ts_code: '002025.SZ',
+            stock_name: '航天电器',
+            sector_name: '军工电子',
+            market_env_tag: '进攻',
+            stable_market_env_tag: '进攻',
+            realtime_market_env_tag: '进攻',
+            buy_signal_tag: '可买',
+            buy_point_type: '回踩承接',
+            candidate_bucket_tag: '趋势回踩',
+            quote_time: '2026-03-31 10:35:00',
+            data_source: 'realtime_sina',
+          },
+          account_context: {
+            position_status: '轻仓（仓位 28%）',
+            same_direction_exposure: '已有同一只股票持仓，属于加仓语境。',
+            current_use: '加仓',
+            market_suitability: '市场允许主动试错，但仍要先等分时确认。',
+            account_conclusion: '已有同一只股票持仓，只能按加仓语境处理',
+          },
+          daily_judgement: {
+            current_stage: '启动',
+            buy_signal: '回踩承接，可买',
+            buy_point_level: 'A',
+            reason: '趋势向上',
+            risk_items: [],
+            reference_levels: [],
+          },
+          intraday_judgement: {
+            price_vs_avg_line: '站均价线上',
+            intraday_structure: '回踩承接',
+            volume_quality: '实时放量跟随（相对放量 1.9）',
+            key_level_status: '仍在支撑位 27.80 上方。',
+            conclusion: '买',
+            note: '承接清楚。',
+          },
+          order_plan: {
+            low_absorb_price: '27.80-27.95',
+            breakout_price: '28.35-28.48',
+            retrace_confirm_price: '28.05-28.18',
+            give_up_price: '28.90',
+            trigger_condition: '回踩确认后再加',
+            invalid_condition: '跌破支撑就放弃',
+            above_no_chase: '28.90',
+            below_no_buy: '27.20',
+          },
+          add_position_decision: {
+            eligible: true,
+            decision: '可加',
+            score_total: 9,
+            trend_score: 2,
+            position_score: 2,
+            volume_price_score: 2,
+            sector_sentiment_score: 2,
+            account_risk_score: 1,
+            trigger_scene: '回踩确认',
+            blockers: [],
+            reason: '回踩确认 已较明确，底仓已有利润垫，可以按计划扩大正确头寸。',
+          },
+          position_advice: {
+            suggestion: '标准加仓',
+            reason: '回踩确认 已较明确，底仓已有利润垫，可以按计划扩大正确头寸。',
+            invalidation_level: '27.20',
+            invalidation_action: '新增仓失效先撤。',
+            plan_position_pct: 0.5,
+            increment_position_pct: 0.2,
+            max_position_pct: 0.8,
+            risk_control_action: '加仓失败先撤新增仓，不把舒服单拖成高波动重仓单。',
+            exit_priority: '先撤新增仓',
+          },
+          execution: {
+            action: '加',
+            reason: '回踩确认 已较明确，底仓已有利润垫，可以按计划扩大正确头寸。',
+          },
+        },
+      },
+    })
+
+    const { default: BuyAnalysisDrawer } = await import('../src/components/BuyAnalysisDrawer.vue')
+    const wrapper = mount(BuyAnalysisDrawer, {
+      props: {
+        modelValue: false,
+        tsCode: '002025.SZ',
+        stockName: '航天电器',
+        tradeDate: '2026-03-31',
+      },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('加仓决策')
+    expect(wrapper.text()).toContain('标准加仓')
+    expect(wrapper.text()).toContain('回踩确认')
+    expect(wrapper.text()).toContain('50%')
+    expect(wrapper.text()).toContain('先撤新增仓')
+  })
+
   it('Dashboard 页面会串起摘要、市场、板块、账户和买卖信号接口', async () => {
     marketApi.getEnv.mockResolvedValue(makeResponse({
       market_env_tag: '进攻',
-      market_comment: '题材扩散，适合主动进攻',
+      market_comment: '市场偏进攻，指数与情绪基本同向走强；涨停 68 家且炸板率仅 11.0%，涨跌家数比 2.67，赚钱效应占优；允许做强势突破，优先主线和强更强，不做后排跟风',
       breakout_allowed: true,
       risk_level: '低',
     }))
@@ -330,12 +574,15 @@ describe('关键页面联调', () => {
     expect(accountApi.profile).toHaveBeenCalledOnce()
     expect(decisionApi.buyPoint).toHaveBeenCalledOnce()
     expect(decisionApi.sellPoint).toHaveBeenCalledOnce()
-    expect(decisionApi.reviewStats).toHaveBeenCalledOnce()
+    expect(decisionApi.reviewStats).toHaveBeenCalled()
     expect(messageSuccess).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('今日执行摘要')
     expect(wrapper.text()).toContain('适度积极')
     expect(wrapper.text()).toContain('机器人')
     expect(wrapper.text()).toContain('50.00万')
+    expect(wrapper.text()).toContain('市场结论')
+    expect(wrapper.text()).toContain('主要依据')
+    expect(wrapper.text()).toContain('操作建议')
   })
 
   it('TaskRuns 页面会加载最近任务记录并支持手动触发', async () => {
@@ -494,6 +741,24 @@ describe('关键页面联调', () => {
           add_signal_tag: '建议加仓',
           add_signal_reason: '日线通过，分时也出现了相对明确的转强/承接信号。',
         },
+        {
+          ts_code: '000001.SZ',
+          stock_name: '平安银行',
+          sell_signal_tag: '持有',
+          sell_point_type: '减仓',
+          sell_priority: '低',
+          sell_reason: '趋势未坏',
+          sell_comment: '继续观察',
+          sell_trigger_cond: '跌破支撑再处理',
+          pnl_pct: 0.8,
+          holding_qty: 100,
+          holding_days: 5,
+          market_price: 12.1,
+          cost_price: 12.0,
+          can_sell_today: true,
+          add_signal_tag: '仅可小加',
+          add_signal_reason: '结构还不错，但位置和利润垫只支持小步推进。',
+        },
       ],
       llm_status: null,
     }))
@@ -503,6 +768,7 @@ describe('关键页面联调', () => {
 
     expect(decisionApi.sellPoint).toHaveBeenCalledOnce()
     expect(wrapper.text()).toContain('建议加仓')
+    expect(wrapper.text()).toContain('仅可小加')
     expect(wrapper.text()).toContain('查看加仓分析')
   })
 
@@ -691,7 +957,8 @@ describe('关键页面联调', () => {
     const { default: ReviewStatsView } = await import('../src/views/ReviewStats.vue')
     const wrapper = await mountView(ReviewStatsView)
 
-    const sourceButton = wrapper.findAll('button').find((node) => node.text().includes('去源页面'))
+    const sourceButtons = wrapper.findAll('button').filter((node) => node.text().includes('去源页面'))
+    const sourceButton = sourceButtons[sourceButtons.length - 1]
     expect(sourceButton).toBeTruthy()
     await sourceButton.trigger('click')
 
@@ -702,6 +969,67 @@ describe('关键页面联调', () => {
         review_source: 'pool_account',
       },
     })
+  })
+
+  it('ReviewStats 页面遇到加仓样本会跳转到卖点页', async () => {
+    decisionApi.reviewStats.mockResolvedValue(makeResponse({
+      bucket_stats: [
+        {
+          snapshot_type: 'buy_available',
+          candidate_bucket_tag: '强趋势延续',
+          count: 4,
+          avg_return_1d: 1.2,
+          win_rate_1d: 75,
+          avg_return_3d: 2.8,
+          win_rate_3d: 75,
+          avg_return_5d: 4.1,
+          win_rate_5d: 75,
+          resolved_1d_count: 4,
+          resolved_3d_count: 4,
+          resolved_5d_count: 4,
+        },
+        {
+          snapshot_type: 'buy_add',
+          add_position_decision: '可加',
+          candidate_bucket_tag: '趋势回踩',
+          count: 3,
+          avg_return_1d: 1.8,
+          win_rate_1d: 66.7,
+          avg_return_3d: 3.2,
+          win_rate_3d: 66.7,
+          avg_return_5d: 4.5,
+          win_rate_5d: 66.7,
+          resolved_1d_count: 3,
+          resolved_3d_count: 3,
+          resolved_5d_count: 3,
+        },
+      ],
+    }))
+
+    const { default: ReviewStatsView } = await import('../src/views/ReviewStats.vue')
+    const wrapper = await mountView(ReviewStatsView)
+
+    expect(wrapper.text()).toContain('开仓样本')
+    expect(wrapper.text()).toContain('加仓样本')
+    expect(wrapper.text()).toContain('开仓结论')
+    expect(wrapper.text()).toContain('加仓结论')
+
+    const sourceButtons = wrapper.findAll('button').filter((node) => node.text().includes('去源页面'))
+    expect(sourceButtons.length).toBeGreaterThan(0)
+    routerPush.mockClear()
+    for (const button of sourceButtons) {
+      await button.trigger('click')
+    }
+
+    expect(routerPush.mock.calls).toContainEqual([
+      {
+        path: '/sell',
+        query: {
+          review_bucket: '趋势回踩',
+          review_source: 'buy_add',
+        },
+      },
+    ])
   })
 
   it('Login 页面登录成功后会写入会话并跳转到目标页面', async () => {

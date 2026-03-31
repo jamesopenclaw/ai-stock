@@ -135,3 +135,51 @@ async def test_save_analysis_snapshot_skips_unchanged_buy_rows(monkeypatch):
     assert fake_session.execute_calls == 1
     assert fake_session.commit_called is False
     assert fake_session.added_rows == []
+
+
+def test_aggregate_bucket_stats_splits_add_position_decisions():
+    service = ReviewSnapshotService()
+    rows = [
+        ReviewSnapshot(
+            trade_date="2026-03-30",
+            account_id="acct-001",
+            snapshot_type="buy_add",
+            ts_code="002463.SZ",
+            stock_name="沪电股份",
+            candidate_bucket_tag="趋势回踩",
+            trade_mode="加仓",
+            add_position_decision="可加",
+            add_position_scene="回踩确认",
+            base_price=30.6,
+            return_1d=3.2,
+            return_3d=5.8,
+            return_5d=7.1,
+            resolved_days=5,
+        ),
+        ReviewSnapshot(
+            trade_date="2026-03-31",
+            account_id="acct-001",
+            snapshot_type="buy_add",
+            ts_code="000001.SZ",
+            stock_name="平安银行",
+            candidate_bucket_tag="趋势回踩",
+            trade_mode="加仓",
+            add_position_decision="仅可小加",
+            add_position_scene="回踩确认",
+            base_price=12.06,
+            return_1d=0.4,
+            return_3d=1.0,
+            return_5d=1.6,
+            resolved_days=5,
+        ),
+    ]
+
+    stats = service._aggregate_bucket_stats(rows)
+
+    assert len(stats) == 2
+    stats_by_decision = {item["add_position_decision"]: item for item in stats}
+    assert stats_by_decision["可加"]["snapshot_type"] == "buy_add"
+    assert stats_by_decision["可加"]["trade_mode"] == "加仓"
+    assert stats_by_decision["可加"]["add_position_scene"] == "回踩确认"
+    assert stats_by_decision["仅可小加"]["snapshot_type"] == "buy_add"
+    assert stats_by_decision["仅可小加"]["trade_mode"] == "加仓"

@@ -146,6 +146,22 @@ async def get_market_stats(
                 "turnover_quote_time": turnover_payload.get("quote_time"),
                 "up_down_data_source": up_down_payload.get("data_source", "daily"),
                 "up_down_quote_time": up_down_payload.get("quote_time"),
+                "realtime_status": (
+                    stats_payload.get("status")
+                    or turnover_payload.get("status")
+                    or up_down_payload.get("status")
+                    or "stable"
+                ),
+                "realtime_is_stale": bool(
+                    stats_payload.get("is_stale")
+                    or turnover_payload.get("is_stale")
+                    or up_down_payload.get("is_stale")
+                ),
+                "realtime_stale_from_quote_time": (
+                    stats_payload.get("stale_from_quote_time")
+                    or turnover_payload.get("stale_from_quote_time")
+                    or up_down_payload.get("stale_from_quote_time")
+                ),
             }
         )
     except Exception as e:

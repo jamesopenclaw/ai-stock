@@ -86,6 +86,17 @@ def _resolve_add_signal_from_buy_sop(point: SellPointOutput, buy_sop_result) -> 
     if getattr(account_context, "current_use", "") != "加仓":
         return None, None
 
+    add_position_decision = getattr(buy_sop_result, "add_position_decision", None)
+    if add_position_decision:
+        decision = getattr(add_position_decision, "decision", "")
+        reason = getattr(add_position_decision, "reason", "") or None
+        if decision == "可加":
+            return "建议加仓", reason
+        if decision == "仅可小加":
+            return "仅可小加", reason
+        if decision == "不加":
+            return None, None
+
     basic_info = getattr(buy_sop_result, "basic_info", None)
     position_advice = getattr(buy_sop_result, "position_advice", None)
     execution = getattr(buy_sop_result, "execution", None)
@@ -113,16 +124,17 @@ async def _enrich_hold_positions_with_add_signals(
     trade_date: str,
     hold_positions: list[SellPointOutput],
     account_id: Optional[str],
-) -> None:
+) -> dict[str, object]:
     """为持有观察票补充加仓提示。"""
     if not hold_positions:
-        return
+        return {}
 
     tasks = [
         buy_point_sop_service.analyze(point.ts_code, trade_date, account_id=account_id)
         for point in hold_positions
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
+    result_map: dict[str, object] = {}
 
     for point, result in zip(hold_positions, results):
         if isinstance(result, Exception):
@@ -133,9 +145,51 @@ async def _enrich_hold_positions_with_add_signals(
             )
             continue
 
+        result_map[point.ts_code] = result
         add_signal_tag, add_signal_reason = _resolve_add_signal_from_buy_sop(point, result)
         point.add_signal_tag = add_signal_tag
         point.add_signal_reason = add_signal_reason
+    return result_map
+
+
+def _build_add_position_snapshot_inputs(
+    hold_positions: list[SellPointOutput],
+    buy_sop_results: dict[str, object],
+) -> list[dict]:
+    """从卖点持有观察和买点 SOP 结果中提取加仓快照样本。"""
+    rows: list[dict] = []
+    for point in hold_positions:
+        buy_sop_result = buy_sop_results.get(point.ts_code)
+        if not buy_sop_result:
+            continue
+
+        account_context = getattr(buy_sop_result, "account_context", None)
+        if getattr(account_context, "current_use", "") != "加仓":
+            continue
+
+        add_position_decision = getattr(buy_sop_result, "add_position_decision", None)
+        decision = getattr(add_position_decision, "decision", "")
+        if decision not in {"可加", "仅可小加"}:
+            continue
+
+        basic_info = getattr(buy_sop_result, "basic_info", None)
+        rows.append(
+            {
+                "ts_code": point.ts_code,
+                "stock_name": point.stock_name,
+                "candidate_source_tag": getattr(basic_info, "candidate_source_tag", "") or "",
+                "candidate_bucket_tag": getattr(basic_info, "candidate_bucket_tag", "") or "",
+                "buy_signal_tag": getattr(basic_info, "buy_signal_tag", "") or "",
+                "buy_point_type": getattr(basic_info, "buy_point_type", "") or "",
+                "stock_score": getattr(add_position_decision, "score_total", 0) or 0,
+                "base_price": point.market_price or 0.0,
+                "trade_mode": "加仓",
+                "add_position_decision": decision,
+                "add_position_score_total": getattr(add_position_decision, "score_total", 0) or 0,
+                "add_position_scene": getattr(add_position_decision, "trigger_scene", "") or "",
+            }
+        )
+    return rows
 
 
 async def get_holdings_from_db(
@@ -259,10 +313,16 @@ async def analyze_sell_point(
             market_env=market_env,
             sector_scan=sector_scan,
         )
-        await _enrich_hold_positions_with_add_signals(
+        buy_sop_results = await _enrich_hold_positions_with_add_signals(
             trade_date,
             result.hold_positions,
             account_id,
+        )
+        snapshot_kwargs = {"account_id": account_id} if account_id else {}
+        await review_snapshot_service.save_analysis_snapshot_safe(
+            trade_date,
+            add_position_analysis=_build_add_position_snapshot_inputs(result.hold_positions, buy_sop_results),
+            **snapshot_kwargs,
         )
         llm_summary = None
         llm_status = LlmCallStatus(

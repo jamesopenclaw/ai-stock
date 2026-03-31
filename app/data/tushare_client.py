@@ -2,10 +2,15 @@
 Tushare 数据客户端
 """
 import copy
+import json
 import os
+import re
+import threading
 import time as time_module
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
+import httpx
+import requests
 import tushare as ts
 from typing import Optional, List, Dict
 from loguru import logger
@@ -48,8 +53,11 @@ class TushareClient:
     REALTIME_CHUNK_SIZE = 50
     REALTIME_SOURCE = "sina"
     REALTIME_MARKET_CACHE_TTL_SECONDS = 20
+    REALTIME_MARKET_STALE_TTL_SECONDS = 180
+    REALTIME_MARKET_FAILURE_COOLDOWN_SECONDS = 60
     REALTIME_VOLUME_RATIO_CACHE_TTL_SECONDS = 60
     REALTIME_MARKET_MIN_TOTAL = 3000
+    REALTIME_AGGREGATE_TIMEOUT_SECONDS = 5.0
     STOCK_BASIC_CACHE_TTL_SECONDS = 6 * 60 * 60
     EXPANDED_STOCK_LIST_CACHE_TTL_SECONDS = 5 * 60
     TRADE_DATE_RESOLUTION_CACHE_TTL_SECONDS = 6 * 60 * 60
@@ -67,6 +75,13 @@ class TushareClient:
             "fetched_at": 0.0,
             "snapshot": None,
         }
+        self._realtime_market_state_cache = {
+            "trade_date": "",
+            "fetched_at": 0.0,
+            "snapshot": None,
+        }
+        self._realtime_market_source_cooldowns = {}
+        self._realtime_market_fetch_lock = threading.Lock()
         self._stock_basic_industry_cache = {
             "fetched_at": 0.0,
             "mapping": {},
@@ -138,6 +153,478 @@ class TushareClient:
         """个股实时行情统一走 realtime_quote。"""
         return self._fetch_realtime_quote_map(ts_codes)
 
+    def _empty_realtime_market_state(
+        self,
+        trade_date: str,
+        *,
+        status: str,
+        data_source: str,
+        quote_time: Optional[str] = None,
+        stale_from_quote_time: Optional[str] = None,
+        market_turnover: Optional[float] = None,
+        up_down_ratio: Optional[Dict[str, int]] = None,
+        limit_stats: Optional[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
+        compact_trade_date = str(trade_date).replace("-", "")[:8]
+        return {
+            "market_turnover": market_turnover,
+            "up_down_ratio": up_down_ratio or {"up": 0, "down": 0, "flat": 0, "total": 0},
+            "limit_stats": limit_stats or {
+                "limit_up_count": 0,
+                "limit_down_count": 0,
+                "broken_board_rate": 0.0,
+            },
+            "data_trade_date": compact_trade_date,
+            "quote_time": quote_time,
+            "data_source": data_source,
+            "status": status,
+            "is_stale": status == "stale",
+            "stale_from_quote_time": stale_from_quote_time,
+        }
+
+    def _build_realtime_market_state(
+        self,
+        trade_date: str,
+        *,
+        market_turnover: float,
+        up_down_ratio: Dict[str, int],
+        limit_stats: Dict[str, object],
+        quote_time: Optional[str],
+        data_source: str,
+        status: str = "live",
+        stale_from_quote_time: Optional[str] = None,
+    ) -> Dict[str, object]:
+        state = self._empty_realtime_market_state(
+            trade_date,
+            status=status,
+            data_source=data_source,
+            quote_time=quote_time,
+            stale_from_quote_time=stale_from_quote_time,
+            market_turnover=market_turnover,
+            up_down_ratio=up_down_ratio,
+            limit_stats=limit_stats,
+        )
+        state["is_stale"] = status == "stale"
+        return state
+
+    def _iter_realtime_sources(self, primary: Optional[str] = None) -> List[str]:
+        """返回实时源尝试顺序，优先主源，不重复。"""
+        base = str(primary or self.REALTIME_SOURCE or "sina").strip().lower() or "sina"
+        sources = [base]
+        for candidate in ("dc", "sina"):
+            if candidate not in sources:
+                sources.append(candidate)
+        return sources
+
+    def _is_realtime_source_in_cooldown(self, source_key: str) -> bool:
+        cooldowns = getattr(self, "_realtime_market_source_cooldowns", None) or {}
+        until_ts = float(cooldowns.get(source_key) or 0.0)
+        return until_ts > time_module.monotonic()
+
+    def _mark_realtime_source_failure(self, source_key: str) -> None:
+        cooldowns = getattr(self, "_realtime_market_source_cooldowns", None)
+        if cooldowns is None:
+            cooldowns = {}
+            self._realtime_market_source_cooldowns = cooldowns
+        cooldowns[source_key] = time_module.monotonic() + self.REALTIME_MARKET_FAILURE_COOLDOWN_SECONDS
+
+    def _clear_realtime_source_failure(self, source_key: str) -> None:
+        cooldowns = getattr(self, "_realtime_market_source_cooldowns", None) or {}
+        cooldowns.pop(source_key, None)
+
+    def _normalize_public_aggregate_row(self, row: Dict[str, object]) -> Optional[Dict[str, object]]:
+        code = str(row.get("f12") or "").strip()
+        ts_code = normalize_ts_code(code)
+        if not ts_code or ts_code.endswith(".BJ"):
+            return None
+
+        def as_float(value):
+            try:
+                if value in ("-", None, ""):
+                    return 0.0
+                return float(value)
+            except Exception:
+                return 0.0
+
+        return {
+            "TS_CODE": ts_code,
+            "NAME": str(row.get("f14") or "").strip(),
+            "PRICE": as_float(row.get("f2")),
+            "PCT_CHANGE": as_float(row.get("f3")),
+            "AMOUNT": as_float(row.get("f6")),
+            "HIGH": as_float(row.get("f15")),
+            "LOW": as_float(row.get("f16")),
+            "OPEN": as_float(row.get("f17")),
+            "CLOSE": as_float(row.get("f18")),
+        }
+
+    def _extract_cls_limit_stats_from_html(self, html: str) -> Optional[Dict[str, object]]:
+        match = re.search(
+            r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+            html or "",
+            re.S,
+        )
+        if not match:
+            return None
+
+        try:
+            payload = json.loads(match.group(1))
+        except Exception:
+            return None
+
+        page_props = (((payload or {}).get("props") or {}).get("initialProps") or {}).get("pageProps") or {}
+        quote_limit = page_props.get("quoteLimit") or {}
+        brief = str(quote_limit.get("brief") or "").strip()
+        if not brief:
+            return None
+
+        limit_up_match = re.search(r"涨停数量为\s*(\d+)\s*家", brief)
+        limit_down_match = re.search(r"跌停数量为\s*(\d+)\s*家", brief)
+        broken_board_match = re.search(r"炸板率\s*(\d+(?:\.\d+)?)\s*%", brief)
+
+        if not any((limit_up_match, limit_down_match, broken_board_match)):
+            return None
+
+        return {
+            "limit_up_count": int(limit_up_match.group(1)) if limit_up_match else None,
+            "limit_down_count": int(limit_down_match.group(1)) if limit_down_match else None,
+            "broken_board_rate": float(broken_board_match.group(1)) if broken_board_match else None,
+            "estimated": False,
+        }
+
+    def _parse_jsonp_payload(self, text: str) -> Optional[Dict[str, object]]:
+        body = str(text or "").strip()
+        if not body:
+            return None
+        body = re.sub(r"^/\*.*?\*/", "", body, flags=re.S).strip()
+        match = re.search(r"^[^(]+\((.*)\)\s*;?\s*$", body, re.S)
+        if not match:
+            return None
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            return None
+
+    def _parse_sina_up_down_distribution(self, text: str) -> Optional[Dict[str, int]]:
+        match = re.search(r'var\s+hq_str_zdp_updown="([^"]+)"', text or "")
+        if not match:
+            return None
+
+        parts = [item.strip() for item in match.group(1).split(",")]
+        if len(parts) < 13:
+            return None
+
+        try:
+            buckets = [int(float(item or 0)) for item in parts[2:-1]]
+        except Exception:
+            return None
+
+        if len(buckets) != 11:
+            return None
+
+        up = sum(buckets[:5])
+        flat = buckets[5]
+        down = sum(buckets[6:])
+        return {
+            "up": up,
+            "down": down,
+            "flat": flat,
+            "total": up + flat + down,
+        }
+
+    def _fetch_sina_market_overview_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
+        """通过新浪行情中心页面背后的开放接口获取市场概览。"""
+        if self._is_realtime_source_in_cooldown("sina_overview"):
+            return None
+
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://gu.sina.cn/#/index/index",
+        }
+        session = requests.Session()
+        session.headers.update(headers)
+
+        try:
+            rise_fall_resp = session.get(
+                "https://gu.sina.cn/cn/api/openapi.php/CN_ZhendapanService.getRiseFall?type=1&callback=cb",
+                timeout=self.REALTIME_AGGREGATE_TIMEOUT_SECONDS,
+            )
+            rise_fall_resp.raise_for_status()
+            rise_fall_payload = self._parse_jsonp_payload(rise_fall_resp.text) or {}
+            rise_fall_rows = (((rise_fall_payload.get("result") or {}).get("data") or {}).get("rise_fall")) or []
+            rise_fall_latest = rise_fall_rows[0] if rise_fall_rows else {}
+
+            amount_resp = session.get(
+                "https://gu.sina.cn/hq/api/openapi.php/ZhenMinAmtService.getTodayDataForGraph?&callback=cb",
+                timeout=self.REALTIME_AGGREGATE_TIMEOUT_SECONDS,
+            )
+            amount_resp.raise_for_status()
+            amount_payload = self._parse_jsonp_payload(amount_resp.text) or {}
+            latest_amount = ((((amount_payload.get("result") or {}).get("data") or {}).get("latest_data")) or {})
+
+            updown_resp = session.get(
+                "https://hq.sinajs.cn/list=zdp_updown",
+                timeout=self.REALTIME_AGGREGATE_TIMEOUT_SECONDS,
+            )
+            updown_resp.raise_for_status()
+            up_down_ratio = self._parse_sina_up_down_distribution(updown_resp.text)
+        except Exception as e:
+            self._mark_realtime_source_failure("sina_overview")
+            logger.warning(f"新浪市场概览接口拉取失败: {e}")
+            return None
+
+        if not rise_fall_latest or not latest_amount or not up_down_ratio:
+            self._mark_realtime_source_failure("sina_overview")
+            logger.warning("新浪市场概览接口返回不完整，转入其他实时源")
+            return None
+
+        def as_float(value):
+            try:
+                return float(value or 0)
+            except Exception:
+                return 0.0
+
+        limit_up_count = int(float(rise_fall_latest.get("rise") or 0))
+        limit_down_count = int(float(rise_fall_latest.get("fall") or 0))
+        broken_board_count = int(float(rise_fall_latest.get("zhaban") or 0))
+        denominator = limit_up_count + broken_board_count
+        broken_board_rate = round(broken_board_count / denominator * 100, 2) if denominator > 0 else 0.0
+        market_turnover = round((as_float(latest_amount.get("sh_amount")) + as_float(latest_amount.get("sz_amount"))) / 100000000, 2)
+        ticktime = str(latest_amount.get("ticktime") or rise_fall_latest.get("tradetime") or "").strip()
+        quote_date = str(latest_amount.get("opendate") or rise_fall_latest.get("day") or "").strip()
+        quote_time = None
+        if quote_date and ticktime:
+            quote_time = f"{quote_date} {ticktime}"
+
+        self._clear_realtime_source_failure("sina_overview")
+        return self._build_realtime_market_state(
+            trade_date,
+            market_turnover=market_turnover,
+            up_down_ratio=up_down_ratio,
+            limit_stats={
+                "limit_up_count": limit_up_count,
+                "limit_down_count": limit_down_count,
+                "broken_board_rate": broken_board_rate,
+                "estimated": False,
+            },
+            quote_time=quote_time,
+            data_source="realtime_sina_overview",
+            status="live",
+        )
+
+    def _fetch_public_page_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
+        """通过公开网页首屏埋点补充盘中涨跌停统计。"""
+        if self._is_realtime_source_in_cooldown("page_cls"):
+            return None
+
+        try:
+            response = httpx.get(
+                "https://www.cls.cn/",
+                timeout=self.REALTIME_AGGREGATE_TIMEOUT_SECONDS,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            response.raise_for_status()
+        except Exception as e:
+            self._mark_realtime_source_failure("page_cls")
+            logger.warning(f"公开网页抓取失败（cls.cn）: {e}")
+            return None
+
+        limit_stats = self._extract_cls_limit_stats_from_html(response.text)
+        if not limit_stats:
+            self._mark_realtime_source_failure("page_cls")
+            logger.info("公开网页抓取未解析到有效涨跌停统计（cls.cn）")
+            return None
+
+        self._clear_realtime_source_failure("page_cls")
+        return {
+            "data_trade_date": str(trade_date).replace("-", "")[:8],
+            "quote_time": self._now_sh().strftime("%Y-%m-%d %H:%M:%S"),
+            "data_source": "realtime_page_cls",
+            "status": "live",
+            "is_stale": False,
+            "stale_from_quote_time": None,
+            "limit_stats": limit_stats,
+        }
+
+    def _parse_ths_industry_rows(self, html: str) -> List[List[str]]:
+        from html import unescape
+
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html or "", re.S)
+        parsed_rows: List[List[str]] = []
+        for row in rows[1:]:
+            cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+            values = []
+            for cell in cells:
+                text = re.sub(r"<[^>]+>", " ", cell)
+                text = unescape(re.sub(r"\s+", " ", text)).strip()
+                values.append(text)
+            if len(values) >= 8:
+                parsed_rows.append(values)
+        return parsed_rows
+
+    def _fetch_public_industry_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
+        """通过同花顺行业分页页汇总涨跌家数和成交额。"""
+        if self._is_realtime_source_in_cooldown("page_ths_industry"):
+            return None
+
+        session = requests.Session()
+        session.headers.update({"User-Agent": "Mozilla/5.0"})
+
+        page_count = 1
+        first_page_html = ""
+        total_turnover = 0.0
+        total_up = 0
+        total_down = 0
+
+        for page in range(1, 11):
+            url = (
+                "https://q.10jqka.com.cn/thshy/index/"
+                f"field/199112/order/desc/page/{page}/ajax/1/"
+            )
+            try:
+                response = session.get(url, timeout=self.REALTIME_AGGREGATE_TIMEOUT_SECONDS)
+                response.raise_for_status()
+            except Exception as e:
+                self._mark_realtime_source_failure("page_ths_industry")
+                logger.warning(f"公开网页抓取失败（10jqka thshy page={page}）: {e}")
+                return None
+
+            html = response.text or ""
+            if "<table class=\"m-table m-pager-table\">" not in html:
+                self._mark_realtime_source_failure("page_ths_industry")
+                logger.warning(f"公开网页抓取未返回有效行业表（10jqka thshy page={page}）")
+                return None
+
+            if page == 1:
+                first_page_html = html
+                page_info_match = re.search(r"<span class=\"page_info\">(\d+)/(\d+)</span>", html)
+                if page_info_match:
+                    try:
+                        page_count = max(1, min(10, int(page_info_match.group(2))))
+                    except Exception:
+                        page_count = 1
+
+            for values in self._parse_ths_industry_rows(html):
+                try:
+                    total_turnover += float(values[4] or 0)
+                    total_up += int(values[6] or 0)
+                    total_down += int(values[7] or 0)
+                except Exception:
+                    continue
+
+            if page >= page_count:
+                break
+
+        if not first_page_html or total_turnover <= 0 or (total_up + total_down) <= 0:
+            self._mark_realtime_source_failure("page_ths_industry")
+            logger.warning("公开网页抓取样本不足（10jqka thshy），无法汇总市场状态")
+            return None
+
+        self._clear_realtime_source_failure("page_ths_industry")
+        return self._build_realtime_market_state(
+            trade_date,
+            market_turnover=round(total_turnover, 2),
+            up_down_ratio={
+                "up": total_up,
+                "down": total_down,
+                "flat": 0,
+                "total": total_up + total_down,
+            },
+            limit_stats={
+                "limit_up_count": 0,
+                "limit_down_count": 0,
+                "broken_board_rate": 0.0,
+                "estimated": True,
+            },
+            quote_time=self._now_sh().strftime("%Y-%m-%d %H:%M:%S"),
+            data_source="realtime_page_ths_industry",
+            status="live",
+        )
+
+    def _apply_page_limit_stats_overlay(
+        self,
+        snapshot: Optional[Dict[str, object]],
+        page_snapshot: Optional[Dict[str, object]],
+    ) -> Optional[Dict[str, object]]:
+        if not snapshot or not page_snapshot:
+            return snapshot
+
+        page_limit_stats = page_snapshot.get("limit_stats") or {}
+        if not page_limit_stats:
+            return snapshot
+
+        merged = copy.deepcopy(snapshot)
+        base_limit_stats = copy.deepcopy((merged.get("limit_stats") or {}))
+        for field in ("limit_up_count", "limit_down_count", "broken_board_rate", "estimated"):
+            if page_limit_stats.get(field) is not None:
+                base_limit_stats[field] = page_limit_stats[field]
+        merged["limit_stats"] = base_limit_stats
+        return merged
+
+    def _fetch_public_aggregate_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
+        """通过公开聚合接口获取全市场实时状态。"""
+        if self._is_realtime_source_in_cooldown("aggregate_em"):
+            return None
+
+        params = {
+            "pn": "1",
+            "pz": "12000",
+            "po": "1",
+            "np": "1",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f3",
+            "fs": "m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23",
+            "fields": "f2,f3,f6,f12,f14,f15,f16,f17,f18",
+        }
+
+        try:
+            response = httpx.get(
+                "https://push2.eastmoney.com/api/qt/clist/get",
+                params=params,
+                timeout=self.REALTIME_AGGREGATE_TIMEOUT_SECONDS,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            diff = (((payload or {}).get("data") or {}).get("diff")) or []
+        except Exception as e:
+            self._mark_realtime_source_failure("aggregate_em")
+            logger.warning(f"公开聚合接口拉取失败: {e}")
+            return None
+
+        rows = []
+        for raw in diff:
+            normalized = self._normalize_public_aggregate_row(raw)
+            if normalized:
+                rows.append(normalized)
+
+        if len(rows) < self.REALTIME_MARKET_MIN_TOTAL:
+            self._mark_realtime_source_failure("aggregate_em")
+            logger.warning(f"公开聚合接口样本不足（仅 {len(rows)} 条），转入兜底实时源")
+            return None
+
+        self._clear_realtime_source_failure("aggregate_em")
+        now = self._now_sh()
+        import pandas as pd
+        df = pd.DataFrame(rows)
+        pct_series = df["PCT_CHANGE"].fillna(0)
+        amount_series = df["AMOUNT"].fillna(0)
+        return self._build_realtime_market_state(
+            trade_date,
+            market_turnover=round(float(amount_series.sum()) / 100000000, 2),
+            up_down_ratio={
+                "up": int((pct_series > 0).sum()),
+                "down": int((pct_series < 0).sum()),
+                "flat": int((pct_series == 0).sum()),
+                "total": int(len(df)),
+            },
+            limit_stats=self._estimate_realtime_limit_stats(df),
+            quote_time=now.strftime("%Y-%m-%d %H:%M:%S"),
+            data_source="realtime_em",
+            status="live",
+        )
+
     def _fetch_realtime_quote_map(self, ts_codes: List[str]) -> Dict[str, Dict]:
         """批量获取实时行情并转成按 ts_code 索引的映射。"""
         normalized_codes = []
@@ -152,13 +639,25 @@ class TushareClient:
         quote_map: Dict[str, Dict] = {}
         for idx in range(0, len(normalized_codes), self.REALTIME_CHUNK_SIZE):
             chunk = normalized_codes[idx: idx + self.REALTIME_CHUNK_SIZE]
-            try:
-                df = ts.realtime_quote(
-                    ",".join(chunk),
-                    src=self.REALTIME_SOURCE,
-                )
-            except Exception as e:
-                logger.warning(f"实时行情拉取失败（{len(chunk)}只）: {e}")
+            df = None
+            used_source = None
+            last_error = None
+            for source in self._iter_realtime_sources():
+                try:
+                    df = ts.realtime_quote(
+                        ",".join(chunk),
+                        src=source,
+                    )
+                    if df is not None and not df.empty:
+                        used_source = source
+                        break
+                except Exception as e:
+                    last_error = e
+                    continue
+
+            if df is None or df.empty:
+                if last_error:
+                    logger.warning(f"实时行情拉取失败（{len(chunk)}只）: {last_error}")
                 continue
 
             if df is None or df.empty:
@@ -195,7 +694,7 @@ class TushareClient:
                     "avg_price": self._infer_realtime_avg_price(price, amount, volume),
                     "trade_date": date_raw,
                     "quote_time": quote_time,
-                    "data_source": f"realtime_{self.REALTIME_SOURCE}",
+                    "data_source": f"realtime_{used_source or self.REALTIME_SOURCE}",
                 }
 
         return quote_map
@@ -262,9 +761,11 @@ class TushareClient:
             used_realtime = True
         return used_realtime
 
-    def _fetch_realtime_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
-        """获取盘中市场快照，短 TTL 缓存避免重复抓全市场。"""
+    def _fetch_tushare_realtime_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
+        """现有 Tushare 实时全市场扫描链路，作为最后兜底。"""
         if not self._should_use_realtime_quote(trade_date):
+            return None
+        if self._is_realtime_source_in_cooldown("tushare_scan"):
             return None
 
         cache = getattr(self, "_realtime_market_cache", None) or {
@@ -273,29 +774,38 @@ class TushareClient:
             "snapshot": None,
         }
         now_ts = time_module.monotonic()
-        if (
-            cache.get("trade_date") == str(trade_date).replace("-", "")[:8]
-            and now_ts - float(cache.get("fetched_at") or 0) < self.REALTIME_MARKET_CACHE_TTL_SECONDS
-        ):
-            return cache.get("snapshot") or None
-
         df = None
         used_source = None
         last_error = None
-        for source in ("dc", "sina"):
+        insufficient_sources = []
+        for source in self._iter_realtime_sources():
+            source_sample_total = None
             for _ in range(2):
                 try:
                     df = ts.realtime_list(src=source, page_count=1 if source == "sina" else None)
                     if df is not None and not df.empty:
-                        used_source = source
-                        break
+                        total = len(df)
+                        if total >= self.REALTIME_MARKET_MIN_TOTAL:
+                            used_source = source
+                            break
+                        source_sample_total = total
+                        df = None
                 except Exception as e:
                     last_error = e
+            if source_sample_total is not None:
+                insufficient_sources.append((source, source_sample_total))
+                logger.warning(
+                    f"盘中市场快照样本不足（{source} 仅 {source_sample_total} 条），切换备用源重试"
+                )
             if df is not None and not df.empty:
                 break
         if df is None or df.empty:
+            self._mark_realtime_source_failure("tushare_scan")
             if last_error:
                 logger.warning(f"盘中市场快照拉取失败: {last_error}")
+            elif insufficient_sources:
+                source_text = " / ".join(f"{source}:{total}" for source, total in insufficient_sources)
+                logger.warning(f"盘中市场快照样本仍不足（{source_text}），回退日线口径")
             self._realtime_market_cache = {
                 "trade_date": str(trade_date).replace("-", "")[:8],
                 "fetched_at": now_ts,
@@ -303,47 +813,127 @@ class TushareClient:
             }
             return None
 
+        self._clear_realtime_source_failure("tushare_scan")
         pct_series = df["PCT_CHANGE"].fillna(0)
         amount_series = df["AMOUNT"].fillna(0)
         up = int((pct_series > 0).sum())
         down = int((pct_series < 0).sum())
         flat = int((pct_series == 0).sum())
         total = len(df)
-        if total < self.REALTIME_MARKET_MIN_TOTAL:
-            logger.warning(
-                f"盘中市场快照样本不足（{used_source or 'unknown'} 仅 {total} 条），回退日线口径"
-            )
-            self._realtime_market_cache = {
-                "trade_date": str(trade_date).replace("-", "")[:8],
-                "fetched_at": now_ts,
-                "snapshot": False,
-            }
-            return None
         limit_stats = self._estimate_realtime_limit_stats(df)
         now = self._now_sh()
         quote_time = now.strftime("%Y-%m-%d %H:%M:%S")
         time_col = str(df.iloc[0].get("TIME") or "").strip() if "TIME" in df.columns and not df.empty else ""
         if time_col:
             quote_time = f"{now.strftime('%Y-%m-%d')} {time_col}"
-        snapshot = {
-            "market_turnover": round(float(amount_series.sum()) / 100000000, 2),
-            "up_down_ratio": {
+        snapshot = self._build_realtime_market_state(
+            trade_date,
+            market_turnover=round(float(amount_series.sum()) / 100000000, 2),
+            up_down_ratio={
                 "up": up,
                 "down": down,
                 "flat": flat,
                 "total": total,
             },
-            "limit_stats": limit_stats,
-            "data_trade_date": now.strftime("%Y%m%d"),
-            "quote_time": quote_time,
-            "data_source": f"realtime_{used_source or 'unknown'}",
-        }
+            limit_stats=limit_stats,
+            quote_time=quote_time,
+            data_source=f"realtime_{used_source or 'unknown'}",
+            status="live",
+        )
         self._realtime_market_cache = {
             "trade_date": snapshot["data_trade_date"],
             "fetched_at": now_ts,
             "snapshot": snapshot,
         }
         return snapshot
+
+    def _fetch_realtime_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
+        """获取实时市场状态：新浪接口优先，网页/缓存次之，Tushare 扫描兜底。"""
+        if not self._should_use_realtime_quote(trade_date):
+            return None
+
+        lock = getattr(self, "_realtime_market_fetch_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._realtime_market_fetch_lock = lock
+
+        with lock:
+            compact_trade_date = str(trade_date).replace("-", "")[:8]
+            now_ts = time_module.monotonic()
+            state_cache = getattr(self, "_realtime_market_state_cache", None) or {
+                "trade_date": "",
+                "fetched_at": 0.0,
+                "snapshot": None,
+            }
+
+            cached_snapshot = None
+            cached_age = None
+            if state_cache.get("trade_date") == compact_trade_date:
+                cached_snapshot = state_cache.get("snapshot") or None
+                cached_age = now_ts - float(state_cache.get("fetched_at") or 0)
+                if cached_snapshot and cached_age is not None:
+                    if (
+                        cached_snapshot.get("status") == "unavailable"
+                        and cached_age < self.REALTIME_MARKET_FAILURE_COOLDOWN_SECONDS
+                    ):
+                        return copy.deepcopy(cached_snapshot)
+                    if cached_age < self.REALTIME_MARKET_CACHE_TTL_SECONDS:
+                        return cached_snapshot
+
+            sina_overview_snapshot = self._fetch_sina_market_overview_snapshot(trade_date)
+            if sina_overview_snapshot:
+                self._realtime_market_state_cache = {
+                    "trade_date": sina_overview_snapshot["data_trade_date"],
+                    "fetched_at": now_ts,
+                    "snapshot": sina_overview_snapshot,
+                }
+                return sina_overview_snapshot
+
+            industry_snapshot = self._fetch_public_industry_market_snapshot(trade_date)
+            if industry_snapshot:
+                logger.warning("实时市场状态主源失败，已切换到同花顺行业页汇总兜底")
+                self._realtime_market_state_cache = {
+                    "trade_date": industry_snapshot["data_trade_date"],
+                    "fetched_at": now_ts,
+                    "snapshot": industry_snapshot,
+                }
+                return industry_snapshot
+
+            if cached_snapshot and cached_age is not None and cached_age < self.REALTIME_MARKET_STALE_TTL_SECONDS:
+                stale_quote_time = cached_snapshot.get("quote_time")
+                stale_snapshot = copy.deepcopy(cached_snapshot)
+                stale_snapshot["status"] = "stale"
+                stale_snapshot["is_stale"] = True
+                stale_snapshot["stale_from_quote_time"] = stale_quote_time
+                stale_snapshot["data_source"] = "realtime_cache"
+                logger.warning(
+                    "实时市场状态主源失败，已切换到最近成功缓存: stale_from={}",
+                    stale_quote_time or "-",
+                )
+                return stale_snapshot
+
+            legacy_snapshot = self._fetch_tushare_realtime_market_snapshot(trade_date)
+            if legacy_snapshot:
+                logger.warning("实时市场状态主源失败，已切换到 Tushare 全市场扫描兜底")
+                self._realtime_market_state_cache = {
+                    "trade_date": legacy_snapshot["data_trade_date"],
+                    "fetched_at": now_ts,
+                    "snapshot": legacy_snapshot,
+                }
+                return legacy_snapshot
+
+            unavailable_snapshot = self._empty_realtime_market_state(
+                trade_date,
+                status="unavailable",
+                data_source="unavailable",
+                stale_from_quote_time=cached_snapshot.get("quote_time") if cached_snapshot else None,
+            )
+            self._realtime_market_state_cache = {
+                "trade_date": unavailable_snapshot["data_trade_date"],
+                "fetched_at": now_ts,
+                "snapshot": unavailable_snapshot,
+            }
+            return unavailable_snapshot
 
     def _estimate_limit_pct(self, ts_code: str, stock_name: str = "") -> float:
         code = normalize_ts_code(ts_code)
@@ -550,6 +1140,17 @@ class TushareClient:
             for i in range(1, count + 1)
         ]
 
+    def _resolve_eod_fallback_start_trade_date(self, trade_date: str) -> str:
+        """
+        获取日线类回退的起始交易日。
+
+        盘中实时窗口下，不再先打当天 daily/index_daily/limit_list_d，
+        而是直接从最近已完成交易日开始。
+        """
+        if self._should_use_realtime_quote(trade_date):
+            return self.get_last_completed_trade_date(trade_date)
+        return self._resolve_trade_date(trade_date)
+
     def get_index_quote(self, trade_date: str) -> List[Dict]:
         """
         获取主要指数行情
@@ -653,15 +1254,34 @@ class TushareClient:
 
         try:
             snapshot = self._fetch_realtime_market_snapshot(trade_date)
-            if snapshot and snapshot.get("limit_stats"):
+            snapshot_status = snapshot.get("status", "live") if snapshot else None
+            if snapshot and snapshot_status in {"live", "stale"} and snapshot.get("limit_stats"):
                 return {
                     "stats": snapshot["limit_stats"],
                     "data_trade_date": snapshot["data_trade_date"],
                     "used_mock": False,
                     "quote_time": snapshot.get("quote_time"),
                     "data_source": snapshot.get("data_source"),
+                    "status": snapshot_status,
+                    "is_stale": snapshot.get("is_stale", False),
+                    "stale_from_quote_time": snapshot.get("stale_from_quote_time"),
                 }
-            effective_trade_date = self._resolve_trade_date(trade_date)
+            if snapshot and snapshot_status == "unavailable":
+                return {
+                    "stats": {
+                        "limit_up_count": 0,
+                        "limit_down_count": 0,
+                        "broken_board_rate": 0.0,
+                    },
+                    "data_trade_date": snapshot["data_trade_date"],
+                    "used_mock": False,
+                    "quote_time": None,
+                    "data_source": snapshot.get("data_source"),
+                    "status": "unavailable",
+                    "is_stale": False,
+                    "stale_from_quote_time": snapshot.get("stale_from_quote_time"),
+                }
+            effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
                 df_up = self.pro.limit_list_d(
                     trade_date=data_trade_date,
@@ -957,7 +1577,7 @@ class TushareClient:
             }
 
         try:
-            effective_trade_date = self._resolve_trade_date(trade_date)
+            effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
             industry_map = self._get_stock_basic_industry_map()
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
                 df = self.pro.daily(trade_date=data_trade_date)
@@ -1023,15 +1643,30 @@ class TushareClient:
 
         try:
             snapshot = self._fetch_realtime_market_snapshot(trade_date)
-            if snapshot:
+            snapshot_status = snapshot.get("status", "live") if snapshot else None
+            if snapshot and snapshot_status in {"live", "stale"}:
                 return {
                     "market_turnover": snapshot["market_turnover"],
                     "data_trade_date": snapshot["data_trade_date"],
                     "used_mock": False,
                     "quote_time": snapshot["quote_time"],
                     "data_source": snapshot["data_source"],
+                    "status": snapshot_status,
+                    "is_stale": snapshot.get("is_stale", False),
+                    "stale_from_quote_time": snapshot.get("stale_from_quote_time"),
                 }
-            effective_trade_date = self._resolve_trade_date(trade_date)
+            if snapshot and snapshot_status == "unavailable":
+                return {
+                    "market_turnover": None,
+                    "data_trade_date": snapshot["data_trade_date"],
+                    "used_mock": False,
+                    "quote_time": None,
+                    "data_source": snapshot["data_source"],
+                    "status": "unavailable",
+                    "is_stale": False,
+                    "stale_from_quote_time": snapshot.get("stale_from_quote_time"),
+                }
+            effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
                 sh_df = self.pro.index_daily(
                     ts_code="000001.SH",
@@ -1102,15 +1737,30 @@ class TushareClient:
 
         try:
             snapshot = self._fetch_realtime_market_snapshot(trade_date)
-            if snapshot:
+            snapshot_status = snapshot.get("status", "live") if snapshot else None
+            if snapshot and snapshot_status in {"live", "stale"}:
                 return {
                     "up_down_ratio": snapshot["up_down_ratio"],
                     "data_trade_date": snapshot["data_trade_date"],
                     "used_mock": False,
                     "quote_time": snapshot["quote_time"],
                     "data_source": snapshot["data_source"],
+                    "status": snapshot_status,
+                    "is_stale": snapshot.get("is_stale", False),
+                    "stale_from_quote_time": snapshot.get("stale_from_quote_time"),
                 }
-            effective_trade_date = self._resolve_trade_date(trade_date)
+            if snapshot and snapshot_status == "unavailable":
+                return {
+                    "up_down_ratio": {"up": 0, "down": 0, "flat": 0, "total": 0},
+                    "data_trade_date": snapshot["data_trade_date"],
+                    "used_mock": False,
+                    "quote_time": None,
+                    "data_source": snapshot["data_source"],
+                    "status": "unavailable",
+                    "is_stale": False,
+                    "stale_from_quote_time": snapshot.get("stale_from_quote_time"),
+                }
+            effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
                 df = self.pro.daily(trade_date=data_trade_date)
                 if df is None or df.empty:

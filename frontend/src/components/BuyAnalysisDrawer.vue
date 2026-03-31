@@ -100,9 +100,32 @@
             <div class="section-note">稳定环境：{{ basic?.stable_market_env_tag || '-' }}；实时环境：{{ basic?.realtime_market_env_tag || basic?.market_env_tag || '-' }}</div>
           </section>
 
+          <section v-if="showAddDecisionSection" class="analysis-section section-add-position">
+            <div class="section-header-row">
+              <div class="section-header">2）加仓决策</div>
+              <div class="decision-summary">{{ addDecision?.decision || '-' }}</div>
+            </div>
+            <div class="decision-lead" :class="`decision-lead-${addDecisionTone}`">
+              <strong>{{ addDecisionLeadTitle }}</strong>
+              <span>{{ addDecision?.reason || '当前不是加仓语境。' }}</span>
+            </div>
+            <div class="decision-grid">
+              <article v-for="item in addDecisionScoreRows" :key="item.label" class="decision-cell">
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </article>
+            </div>
+            <div class="section-note">触发场景：{{ addDecision?.trigger_scene || '-' }}</div>
+            <div class="section-note">建议推进：当前约 {{ formatPlanPct(positionAdvice?.plan_position_pct) }}，单次加 {{ formatPlanPct(positionAdvice?.increment_position_pct) }}，上限 {{ formatPlanPct(positionAdvice?.max_position_pct) }}</div>
+            <div class="section-note">失败处理：{{ positionAdvice?.risk_control_action || positionAdvice?.invalidation_action || '-' }}</div>
+            <div v-if="addDecisionBlockers.length" class="chip-list">
+              <span v-for="item in addDecisionBlockers" :key="item" class="risk-chip">{{ item }}</span>
+            </div>
+          </section>
+
           <section class="analysis-section section-daily">
             <div class="section-header-row">
-              <div class="section-header">2）日线买点级别</div>
+              <div class="section-header">{{ showAddDecisionSection ? '3）日线买点级别' : '2）日线买点级别' }}</div>
               <div class="decision-summary">{{ dailyDecisionSummary }}</div>
             </div>
             <div class="decision-lead" :class="`decision-lead-${dailyLeadTone}`">
@@ -131,7 +154,7 @@
 
           <section class="analysis-section section-intraday">
             <div class="section-header-row">
-              <div class="section-header">3）分时执行判断</div>
+              <div class="section-header">{{ showAddDecisionSection ? '4）分时执行判断' : '3）分时执行判断' }}</div>
               <div class="decision-summary">{{ intradayDecisionSummary }}</div>
             </div>
             <div class="decision-lead" :class="`decision-lead-${intradayLeadTone}`">
@@ -149,7 +172,7 @@
 
           <section class="analysis-section section-order">
             <div class="section-header-row">
-              <div class="section-header">4）挂单价格</div>
+              <div class="section-header">{{ showAddDecisionSection ? '5）挂单价格' : '4）挂单价格' }}</div>
               <div class="order-plan-summary">{{ orderPlanSummary }}</div>
             </div>
             <div class="order-plan-lead" :class="`order-plan-lead-${orderPlanLeadTone}`">
@@ -215,7 +238,7 @@
           </section>
 
           <section class="analysis-section section-position">
-            <div class="section-header">5）仓位建议</div>
+            <div class="section-header">{{ showAddDecisionSection ? '6）仓位建议' : '5）仓位建议' }}</div>
             <div class="strategy-pill" :class="actionBadgeClass">{{ positionAdvice?.suggestion || '-' }}</div>
             <div class="section-emphasis">{{ positionAdvice?.reason || '-' }}</div>
             <div class="section-note">错了看哪里失效：{{ positionAdvice?.invalidation_level || '-' }}</div>
@@ -223,7 +246,7 @@
           </section>
 
           <section class="analysis-section analysis-section-full section-final">
-            <div class="section-header">6）一句话执行</div>
+            <div class="section-header">{{ showAddDecisionSection ? '7）一句话执行' : '6）一句话执行' }}</div>
             <div class="final-line">{{ execution?.action || '-' }}</div>
             <div class="section-note">{{ execution?.reason || '-' }}</div>
           </section>
@@ -259,6 +282,7 @@ const accountContext = computed(() => data.value?.account_context || null)
 const daily = computed(() => data.value?.daily_judgement || null)
 const intraday = computed(() => data.value?.intraday_judgement || null)
 const orderPlan = computed(() => data.value?.order_plan || null)
+const addDecision = computed(() => data.value?.add_position_decision || null)
 const positionAdvice = computed(() => data.value?.position_advice || null)
 const execution = computed(() => data.value?.execution || null)
 const displayTradeDate = computed(() => props.tradeDate || getLocalDate())
@@ -292,10 +316,32 @@ const quoteMeta = computed(() => {
   return `${sourceLabel} ${displayTradeDate.value}`
 })
 const actionBadgeClass = computed(() => {
-  if (execution.value?.action === '买') return 'badge-buy'
+  if (execution.value?.action === '买' || execution.value?.action === '加') return 'badge-buy'
   if (execution.value?.action === '放弃') return 'badge-pass'
   return 'badge-wait'
 })
+const showAddDecisionSection = computed(() => (
+  accountContext.value?.current_use === '加仓' || Boolean(addDecision.value?.eligible)
+))
+const addDecisionTone = computed(() => {
+  if (addDecision.value?.decision === '可加') return 'success'
+  if (addDecision.value?.decision === '仅可小加') return 'info'
+  return 'danger'
+})
+const addDecisionLeadTitle = computed(() => {
+  if (addDecision.value?.decision === '可加') return '这笔底仓已经具备标准加仓条件'
+  if (addDecision.value?.decision === '仅可小加') return '结构有延续，但只适合小步推进'
+  return '当前不满足加仓条件，先守住已有利润垫'
+})
+const addDecisionScoreRows = computed(() => ([
+  { label: '总分', value: addDecision.value?.score_total ?? '-' },
+  { label: '趋势结构', value: addDecision.value?.trend_score ?? '-' },
+  { label: '位置性价比', value: addDecision.value?.position_score ?? '-' },
+  { label: '量价配合', value: addDecision.value?.volume_price_score ?? '-' },
+  { label: '板块情绪', value: addDecision.value?.sector_sentiment_score ?? '-' },
+  { label: '账户风险', value: addDecision.value?.account_risk_score ?? '-' },
+]))
+const addDecisionBlockers = computed(() => addDecision.value?.blockers || [])
 const dailyDecisionSummary = computed(() => {
   const level = daily.value?.buy_point_level || '-'
   if (level === 'A') return '日线通过，盘中可等确认后执行'
@@ -363,7 +409,14 @@ const intradayChecks = computed(() => ([
   { label: '量能性质', value: intraday.value?.volume_quality || '-' },
   { label: '关键位状态', value: intraday.value?.key_level_status || '-' },
 ]))
-const currentAction = computed(() => execution.value?.action || '等')
+const currentAction = computed(() => {
+  const action = execution.value?.action || '等'
+  return action === '加' ? '买' : action
+})
+const formatPlanPct = (value) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
+  return `${(Number(value) * 100).toFixed(0)}%`
+}
 const isActionableLevel = (value) => {
   const text = String(value || '').trim()
   if (!text || text === '-') return false
@@ -564,7 +617,7 @@ const loadData = async () => {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await stockApi.buyAnalysis(props.tsCode, displayTradeDate.value)
+    const res = await stockApi.buyAnalysis(props.tsCode, displayTradeDate.value, { timeout: 90000 })
     const payload = res.data || {}
     const responseCode = payload.code ?? 200
     if (responseCode !== 200) {

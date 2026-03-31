@@ -118,15 +118,15 @@ class TestSellPoint:
         """
         测试：大额盈利触发止盈
         
-        验证点：盈利 > 15%（默认止盈线）应触发止盈
+        验证点：盈利很多但结构不弱时，不应再机械止盈
         """
         class MockMarketEnv:
             market_env_tag = MarketEnvTag.NEUTRAL
         
         sell_point = service._analyze_position(profitable_position, MockMarketEnv(), {})
         
-        assert sell_point.sell_point_type == SellPointType.STOP_PROFIT, \
-            f"盈利20%应触发止盈，实际: {sell_point.sell_point_type}"
+        assert sell_point.sell_signal_tag == SellSignalTag.HOLD, \
+            f"盈利20%但未见结构转弱时应继续持有，实际: {sell_point.sell_signal_tag}"
 
     def test_stop_profit_signal_for_profitable(self, service, profitable_position):
         """
@@ -216,7 +216,7 @@ class TestSellPoint:
         """
         测试：中等盈利触发减仓
         
-        验证点：盈利在 5-10% 之间可考虑减仓
+        验证点：盈利达到阈值但结构未弱化时，不应只按盈利减仓
         """
         position = AccountPosition(
             ts_code="TEST001.SZ",
@@ -236,8 +236,79 @@ class TestSellPoint:
         
         sell_point = service._analyze_position(position, MockMarketEnv(), {})
         
-        # 盈利 8%，在减仓阈值附近
-        assert sell_point.sell_point_type in [SellPointType.STOP_PROFIT, SellPointType.REDUCE_POSITION]
+        assert sell_point.sell_signal_tag == SellSignalTag.HOLD
+
+    def test_reduce_for_profit_when_sector_turns_weak(self, service):
+        """
+        测试：盈利票在板块转弱时才减仓
+        """
+        position = AccountPosition(
+            ts_code="TEST002.SZ",
+            stock_name="测试股2",
+            holding_qty=100,
+            cost_price=10.0,
+            market_price=10.8,
+            pnl_pct=8.0,
+            holding_market_value=1080,
+            buy_date="2026-03-15",
+            can_sell_today=True,
+            holding_reason="板块轮动"
+        )
+
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+
+        class WeakSector:
+            sector_mainline_tag = SectorMainlineTag.TRASH
+            sector_tradeability_tag = SectorTradeabilityTag.NOT_RECOMMENDED
+
+        sell_point = service._analyze_position(
+            position,
+            MockMarketEnv(),
+            {"测试板块": WeakSector()},
+            "测试板块",
+        )
+
+        assert sell_point.sell_signal_tag == SellSignalTag.REDUCE
+        assert sell_point.sell_point_type == SellPointType.REDUCE_POSITION
+
+    def test_single_lot_position_should_not_be_marked_reduce(self, service):
+        """
+        测试：仅持有100股时，不应给出不可执行的减仓建议
+        """
+        position = AccountPosition(
+            ts_code="TEST003.SZ",
+            stock_name="测试股3",
+            holding_qty=100,
+            cost_price=10.0,
+            market_price=10.9,
+            pnl_pct=9.0,
+            holding_market_value=1090,
+            buy_date="2026-03-15",
+            can_sell_today=True,
+            holding_reason="板块轮动",
+        )
+
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+
+        class WeakSector:
+            sector_mainline_tag = SectorMainlineTag.TRASH
+            sector_tradeability_tag = SectorTradeabilityTag.NOT_RECOMMENDED
+
+        sector_map = {"测试板块": WeakSector()}
+        sell_point = service._analyze_position(position, MockMarketEnv(), sector_map, "测试板块")
+        service._apply_sector_resonance_adjustment(
+            sell_point,
+            position,
+            "测试板块",
+            sector_map,
+            MockMarketEnv(),
+        )
+        service._normalize_execution_constraints(sell_point, position)
+
+        assert sell_point.sell_signal_tag == SellSignalTag.SELL
+        assert "100股" in sell_point.sell_reason
 
     # ========== 持有测试 ==========
 
@@ -250,13 +321,15 @@ class TestSellPoint:
         class MockMarketEnv:
             market_env_tag = MarketEnvTag.ATTACK
         
-        # 假设是主线板块
-        sector_map = {"白酒": "MAINLINE"}
+        class MainlineSector:
+            sector_mainline_tag = SectorMainlineTag.MAINLINE
+            sector_tradeability_tag = SectorTradeabilityTag.TRADABLE
+
+        sector_map = {"白酒": MainlineSector()}
         
-        sell_point = service._analyze_position(profitable_position, MockMarketEnv(), sector_map)
+        sell_point = service._analyze_position(profitable_position, MockMarketEnv(), sector_map, "白酒")
         
-        # 进攻环境 + 主线板块 = 可能继续持有
-        assert sell_point.sell_signal_tag in [SellSignalTag.HOLD, SellSignalTag.REDUCE]
+        assert sell_point.sell_signal_tag == SellSignalTag.HOLD
 
     # ========== T+1 约束测试 ==========
 
@@ -391,6 +464,31 @@ class TestSellPoint:
         assert len(response.sell_positions) == 0
         assert response.hold_positions[0].sell_signal_tag == SellSignalTag.OBSERVE
 
+    def test_invalid_reason_exits_even_without_large_loss(self, service):
+        """
+        测试：原买入逻辑失效时优先退出，不再依赖盈亏阈值
+        """
+        position = AccountPosition(
+            ts_code="000002.SZ",
+            stock_name="万科A",
+            holding_qty=100,
+            cost_price=10.0,
+            market_price=10.6,
+            pnl_pct=6.0,
+            holding_market_value=1060,
+            buy_date="2026-03-18",
+            can_sell_today=True,
+            holding_reason="地产反弹逻辑失效",
+        )
+
+        class NeutralEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+
+        sell_point = service._analyze_position(position, NeutralEnv(), {})
+
+        assert sell_point.sell_signal_tag == SellSignalTag.SELL
+        assert sell_point.sell_point_type == SellPointType.INVALID_EXIT
+
 
 class TestSellPointPRDRequirements:
     """PRD 验收要求测试"""
@@ -446,6 +544,7 @@ class TestSellPointPRDRequirements:
                 SellPointType.REDUCE_POSITION,
                 SellPointType.INVALID_EXIT,
             ]
+            assert sell_point.sell_signal_tag is not None
 
     def test_must_consider_t1_constraint(self, service):
         """

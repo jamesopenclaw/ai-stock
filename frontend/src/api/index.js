@@ -248,11 +248,13 @@ export const stockApi = {
     { ttlMs: options.ttlMs ?? 30 * 1000, refresh: Boolean(options.refresh) }
   ),
   detail: (tsCode, tradeDate) => api.get(`/stock/detail/${tsCode}`, { params: { trade_date: tradeDate } }),
-  buyAnalysis: (tsCode, tradeDate) => api.get(`/stock/buy-analysis/${encodeURIComponent(tsCode)}`, {
-    params: { trade_date: tradeDate }
+  buyAnalysis: (tsCode, tradeDate, options = {}) => api.get(`/stock/buy-analysis/${encodeURIComponent(tsCode)}`, {
+    params: { trade_date: tradeDate },
+    timeout: options.timeout ?? 90000,
   }),
-  sellAnalysis: (tsCode, tradeDate) => api.get(`/stock/sell-analysis/${encodeURIComponent(tsCode)}`, {
-    params: { trade_date: tradeDate }
+  sellAnalysis: (tsCode, tradeDate, options = {}) => api.get(`/stock/sell-analysis/${encodeURIComponent(tsCode)}`, {
+    params: { trade_date: tradeDate },
+    timeout: options.timeout ?? 90000,
   }),
   checkup: (tsCode, tradeDate, checkupTarget, options = {}) => api.get(`/stock/checkup/${encodeURIComponent(tsCode)}`, {
     params: {

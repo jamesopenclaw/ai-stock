@@ -3,7 +3,9 @@ Tushare 客户端测试
 """
 import os
 import sys
+import threading
 from datetime import datetime
+import time as time_module
 
 import pandas as pd
 
@@ -886,13 +888,50 @@ def test_get_up_down_ratio_with_meta_uses_daily_fallback():
     assert payload["up_down_ratio"] == {"up": 2, "down": 0, "flat": 0, "total": 2}
 
 
+def test_get_up_down_ratio_with_meta_skips_same_day_daily_during_intraday():
+    """盘中实时快照不可用时，不应再先请求当天 daily。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._fetch_realtime_market_snapshot = lambda trade_date: None
+    client._should_use_realtime_quote = lambda d: True
+    client.get_last_completed_trade_date = lambda d: "20260320"
+    client._recent_open_dates = lambda trade_date, count=5: [trade_date]
+
+    payload = client.get_up_down_ratio_with_meta("20260323")
+
+    assert payload["data_trade_date"] == "20260320"
+    assert client.pro.daily_calls == [(None, None, None, "20260320")]
+
+
+def test_get_sector_data_with_meta_skips_same_day_daily_during_intraday():
+    """盘中行业板块回退应直接从上一已完成交易日开始。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._should_use_realtime_quote = lambda d: True
+    client.get_last_completed_trade_date = lambda d: "20260320"
+    client._recent_open_dates = lambda trade_date, count=5: [trade_date]
+    client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
+
+    payload = client.get_sector_data_with_meta("20260323")
+
+    assert payload["data_trade_date"] == "20260320"
+    assert client.pro.daily_calls == [(None, None, None, "20260320")]
+
+
 def test_fetch_realtime_market_snapshot_formats_sina_time():
     """新浪实时列表若样本不足，不应被当成全市场快照使用。"""
     client = TushareClient.__new__(TushareClient)
     client.token = "test-token"
     client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_state_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
     client._should_use_realtime_quote = lambda d: True
     client._now_sh = lambda: __import__("datetime").datetime(2026, 3, 23, 10, 7, 5)
+    client._fetch_public_page_market_snapshot = lambda trade_date: None
+    client._fetch_public_aggregate_market_snapshot = lambda trade_date: None
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: None
+    client._fetch_public_industry_market_snapshot = lambda trade_date: None
 
     import tushare as ts
 
@@ -919,8 +958,294 @@ def test_fetch_realtime_market_snapshot_formats_sina_time():
     finally:
         ts.realtime_list = original
 
-    assert snapshot is None
+    assert snapshot["status"] == "unavailable"
+    assert snapshot["data_source"] == "unavailable"
 
+
+def test_fetch_realtime_market_snapshot_falls_back_to_dc_when_sina_sample_too_small():
+    """新浪样本不足时，应切到 dc 重试，而不是立刻回退日线。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.REALTIME_SOURCE = "sina"
+    client.REALTIME_MARKET_MIN_TOTAL = 3
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_state_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._should_use_realtime_quote = lambda d: True
+    client._now_sh = lambda: __import__("datetime").datetime(2026, 3, 23, 10, 7, 5)
+    client._estimate_realtime_limit_stats = lambda df: {
+        "limit_up_count": 12,
+        "limit_down_count": 3,
+        "broken_board_rate": 18.0,
+        "estimated": True,
+    }
+    client._fetch_public_page_market_snapshot = lambda trade_date: None
+    client._fetch_public_aggregate_market_snapshot = lambda trade_date: None
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: None
+    client._fetch_public_industry_market_snapshot = lambda trade_date: None
+
+    import tushare as ts
+
+    original = ts.realtime_list
+    try:
+        def fake_realtime_list(src=None, page_count=None):
+            if src == "sina":
+                return pd.DataFrame(
+                    [
+                        {"TS_CODE": "000001.SZ", "PCT_CHANGE": 1.23, "AMOUNT": 100000000.0, "TIME": "10:07:00"},
+                        {"TS_CODE": "000002.SZ", "PCT_CHANGE": -0.56, "AMOUNT": 200000000.0, "TIME": "10:07:00"},
+                    ]
+                )
+            return pd.DataFrame(
+                [
+                    {"TS_CODE": "000001.SZ", "PCT_CHANGE": 1.23, "AMOUNT": 100000000.0, "TIME": "10:07:00"},
+                    {"TS_CODE": "000002.SZ", "PCT_CHANGE": -0.56, "AMOUNT": 200000000.0, "TIME": "10:07:00"},
+                    {"TS_CODE": "000003.SZ", "PCT_CHANGE": 0.88, "AMOUNT": 300000000.0, "TIME": "10:07:00"},
+                ]
+            )
+
+        ts.realtime_list = fake_realtime_list
+        snapshot = client._fetch_realtime_market_snapshot("20260323")
+    finally:
+        ts.realtime_list = original
+
+    assert snapshot is not None
+    assert snapshot["data_source"] == "realtime_dc"
+    assert snapshot["up_down_ratio"]["total"] == 3
+
+
+def test_fetch_realtime_market_snapshot_prefers_sina_overview_provider():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._realtime_market_state_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._should_use_realtime_quote = lambda d: True
+    client._now_sh = lambda: datetime.strptime("2026-03-23 10:07:05", "%Y-%m-%d %H:%M:%S").replace(tzinfo=TushareClient.SH_TZ)
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: {
+        "market_turnover": 17307.61,
+        "up_down_ratio": {"up": 1189, "down": 4261, "flat": 110, "total": 5560},
+        "limit_stats": {"limit_up_count": 57, "limit_down_count": 12, "broken_board_rate": 36.67, "estimated": False},
+        "data_trade_date": "20260323",
+        "quote_time": "2026-03-23 10:05:00",
+        "data_source": "realtime_sina_overview",
+        "status": "live",
+        "is_stale": False,
+        "stale_from_quote_time": None,
+    }
+    client._fetch_public_industry_market_snapshot = lambda trade_date: None
+    client._fetch_tushare_realtime_market_snapshot = lambda trade_date: None
+
+    snapshot = client._fetch_realtime_market_snapshot("20260323")
+
+    assert snapshot is not None
+    assert snapshot["data_source"] == "realtime_sina_overview"
+    assert snapshot["status"] == "live"
+    assert snapshot["up_down_ratio"] == {"up": 1189, "down": 4261, "flat": 110, "total": 5560}
+
+
+def test_parse_ths_industry_rows():
+    client = TushareClient.__new__(TushareClient)
+    html = """
+    <table class="m-table m-pager-table">
+      <thead><tr><th>序号</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>1</td><td>轨交设备</td><td>4.92</td><td>999.48</td><td>79.67</td><td>1.58</td><td>29</td><td>1</td><td>7.97</td><td>金鹰重工</td><td>13.09</td><td>19.98</td>
+        </tr>
+        <tr>
+          <td>2</td><td>工程机械</td><td>1.87</td><td>748.50</td><td>92.47</td><td>2.31</td><td>24</td><td>12</td><td>12.36</td><td>邵阳液压</td><td>44.76</td><td>20.00</td>
+        </tr>
+      </tbody>
+    </table>
+    """
+
+    rows = client._parse_ths_industry_rows(html)
+
+    assert rows == [
+        ["1", "轨交设备", "4.92", "999.48", "79.67", "1.58", "29", "1", "7.97", "金鹰重工", "13.09", "19.98"],
+        ["2", "工程机械", "1.87", "748.50", "92.47", "2.31", "24", "12", "12.36", "邵阳液压", "44.76", "20.00"],
+    ]
+
+
+def test_parse_sina_up_down_distribution():
+    client = TushareClient.__new__(TushareClient)
+    result = client._parse_sina_up_down_distribution(
+        'var hq_str_zdp_updown="4165971,2026-03-31,39,38,32,245,780,115,2526,1477,229,71,8,14:21:52";'
+    )
+
+    assert result == {"up": 1134, "down": 4311, "flat": 115, "total": 5560}
+
+
+def test_fetch_realtime_market_snapshot_falls_back_to_sina_overview_snapshot():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._should_use_realtime_quote = lambda d: True
+    client._realtime_market_state_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._fetch_public_page_market_snapshot = lambda trade_date: None
+    client._fetch_public_aggregate_market_snapshot = lambda trade_date: None
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: {
+        "market_turnover": 17307.61,
+        "up_down_ratio": {"up": 1189, "down": 4261, "flat": 110, "total": 5560},
+        "limit_stats": {"limit_up_count": 57, "limit_down_count": 12, "broken_board_rate": 36.67, "estimated": False},
+        "data_trade_date": "20260323",
+        "quote_time": "2026-03-23 10:05:00",
+        "data_source": "realtime_sina_overview",
+        "status": "live",
+        "is_stale": False,
+        "stale_from_quote_time": None,
+    }
+    client._fetch_public_industry_market_snapshot = lambda trade_date: None
+    client._fetch_tushare_realtime_market_snapshot = lambda trade_date: None
+
+    snapshot = client._fetch_realtime_market_snapshot("20260323")
+
+    assert snapshot["data_source"] == "realtime_sina_overview"
+    assert snapshot["market_turnover"] == 17307.61
+    assert snapshot["up_down_ratio"] == {"up": 1189, "down": 4261, "flat": 110, "total": 5560}
+
+
+def test_fetch_realtime_market_snapshot_falls_back_to_public_industry_snapshot():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._should_use_realtime_quote = lambda d: True
+    client._realtime_market_state_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: None
+    client._fetch_public_industry_market_snapshot = lambda trade_date: {
+        "market_turnover": 16343.78,
+        "up_down_ratio": {"up": 1767, "down": 3569, "flat": 0, "total": 5336},
+        "limit_stats": {"limit_up_count": 0, "limit_down_count": 0, "broken_board_rate": 0.0, "estimated": True},
+        "data_trade_date": "20260323",
+        "quote_time": "2026-03-23 10:05:00",
+        "data_source": "realtime_page_ths_industry",
+        "status": "live",
+        "is_stale": False,
+        "stale_from_quote_time": None,
+    }
+    client._fetch_tushare_realtime_market_snapshot = lambda trade_date: None
+
+    snapshot = client._fetch_realtime_market_snapshot("20260323")
+
+    assert snapshot["data_source"] == "realtime_page_ths_industry"
+    assert snapshot["market_turnover"] == 16343.78
+    assert snapshot["up_down_ratio"] == {"up": 1767, "down": 3569, "flat": 0, "total": 5336}
+    assert snapshot["limit_stats"] == {"limit_up_count": 0, "limit_down_count": 0, "broken_board_rate": 0.0, "estimated": True}
+
+
+def test_fetch_realtime_market_snapshot_uses_stale_cache_before_legacy_fallback():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.REALTIME_MARKET_CACHE_TTL_SECONDS = 20
+    client.REALTIME_MARKET_STALE_TTL_SECONDS = 180
+    client._should_use_realtime_quote = lambda d: True
+    client._fetch_public_page_market_snapshot = lambda trade_date: None
+    client._fetch_public_aggregate_market_snapshot = lambda trade_date: None
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: None
+    client._fetch_public_industry_market_snapshot = lambda trade_date: None
+    client._fetch_tushare_realtime_market_snapshot = lambda trade_date: None
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_state_cache = {
+        "trade_date": "20260323",
+        "fetched_at": time_module.monotonic() - 60,
+        "snapshot": {
+            "market_turnover": 1234.5,
+            "up_down_ratio": {"up": 100, "down": 200, "flat": 10, "total": 310},
+            "limit_stats": {"limit_up_count": 12, "limit_down_count": 3, "broken_board_rate": 8.5},
+            "data_trade_date": "20260323",
+            "quote_time": "2026-03-23 10:01:00",
+            "data_source": "realtime_em",
+            "status": "live",
+            "is_stale": False,
+            "stale_from_quote_time": None,
+        },
+    }
+
+    snapshot = client._fetch_realtime_market_snapshot("20260323")
+
+    assert snapshot["status"] == "stale"
+    assert snapshot["data_source"] == "realtime_cache"
+    assert snapshot["stale_from_quote_time"] == "2026-03-23 10:01:00"
+
+
+def test_fetch_realtime_market_snapshot_falls_back_to_legacy_when_no_cache():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._should_use_realtime_quote = lambda d: True
+    client._fetch_public_page_market_snapshot = lambda trade_date: None
+    client._fetch_public_aggregate_market_snapshot = lambda trade_date: None
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: None
+    client._fetch_public_industry_market_snapshot = lambda trade_date: None
+    client._realtime_market_state_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._fetch_tushare_realtime_market_snapshot = lambda trade_date: {
+        "market_turnover": 4567.8,
+        "up_down_ratio": {"up": 2000, "down": 2100, "flat": 50, "total": 4150},
+        "limit_stats": {"limit_up_count": 25, "limit_down_count": 4, "broken_board_rate": 12.1},
+        "data_trade_date": "20260323",
+        "quote_time": "2026-03-23 10:05:00",
+        "data_source": "realtime_dc",
+        "status": "live",
+        "is_stale": False,
+        "stale_from_quote_time": None,
+    }
+
+    snapshot = client._fetch_realtime_market_snapshot("20260323")
+
+    assert snapshot["data_source"] == "realtime_dc"
+    assert snapshot["status"] == "live"
+
+
+def test_fetch_realtime_market_snapshot_returns_unavailable_when_all_sources_fail():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._should_use_realtime_quote = lambda d: True
+    client._fetch_public_page_market_snapshot = lambda trade_date: None
+    client._fetch_public_aggregate_market_snapshot = lambda trade_date: None
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: None
+    client._fetch_public_industry_market_snapshot = lambda trade_date: None
+    client._fetch_tushare_realtime_market_snapshot = lambda trade_date: None
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_state_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+
+    snapshot = client._fetch_realtime_market_snapshot("20260323")
+
+    assert snapshot["status"] == "unavailable"
+    assert snapshot["data_source"] == "unavailable"
+
+
+def test_fetch_realtime_market_snapshot_reuses_unavailable_cache_within_failure_cooldown():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.REALTIME_MARKET_FAILURE_COOLDOWN_SECONDS = 60
+    client._should_use_realtime_quote = lambda d: True
+    client._realtime_market_fetch_lock = threading.Lock()
+    client._realtime_market_source_cooldowns = {}
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_state_cache = {
+        "trade_date": "20260323",
+        "fetched_at": time_module.monotonic() - 10,
+        "snapshot": {
+            "market_turnover": None,
+            "up_down_ratio": {"up": 0, "down": 0, "flat": 0, "total": 0},
+            "limit_stats": {"limit_up_count": 0, "limit_down_count": 0, "broken_board_rate": 0.0},
+            "data_trade_date": "20260323",
+            "quote_time": None,
+            "data_source": "unavailable",
+            "status": "unavailable",
+            "is_stale": False,
+            "stale_from_quote_time": None,
+        },
+    }
+    client._fetch_public_page_market_snapshot = lambda trade_date: (_ for _ in ()).throw(AssertionError("should not fetch cls"))
+    client._fetch_public_aggregate_market_snapshot = lambda trade_date: (_ for _ in ()).throw(AssertionError("should not fetch em"))
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: (_ for _ in ()).throw(AssertionError("should not fetch sina"))
+    client._fetch_public_industry_market_snapshot = lambda trade_date: (_ for _ in ()).throw(AssertionError("should not fetch ths"))
+    client._fetch_tushare_realtime_market_snapshot = lambda trade_date: (_ for _ in ()).throw(AssertionError("should not fetch tushare"))
+
+    snapshot = client._fetch_realtime_market_snapshot("20260323")
+
+    assert snapshot["status"] == "unavailable"
+    assert snapshot["data_source"] == "unavailable"
 
 def test_estimate_realtime_limit_stats_handles_multi_board_rules():
     """实时涨跌停近似统计应兼容主板/创业板/北交所和炸板识别。"""

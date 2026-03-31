@@ -473,6 +473,7 @@ async def test_sell_point_marks_add_signal_from_buy_sop(monkeypatch):
                 (),
                 {
                     "account_context": type("Ctx", (), {"current_use": "加仓"})(),
+                    "add_position_decision": type("Add", (), {"decision": "可加", "reason": "回踩确认已较明确，底仓也有利润垫。"})(),
                     "basic_info": type("Basic", (), {"buy_signal_tag": "可买"})(),
                     "position_advice": type("Pos", (), {"suggestion": "轻仓试错", "reason": "当前是加仓语境，只能等更强确认后用试错仓处理。"})(),
                     "execution": type("Exec", (), {"action": "买", "reason": "日线通过，分时也出现了相对明确的转强/承接信号。"})(),
@@ -483,6 +484,7 @@ async def test_sell_point_marks_add_signal_from_buy_sop(monkeypatch):
             (),
             {
                 "account_context": type("Ctx", (), {"current_use": "加仓"})(),
+                "add_position_decision": type("Add", (), {"decision": "仅可小加", "reason": "结构还不错，但只适合小步推进。"})(),
                 "basic_info": type("Basic", (), {"buy_signal_tag": "观察"})(),
                 "position_advice": type("Pos", (), {"suggestion": "轻仓试错", "reason": "分时确认还没到位。"})(),
                 "execution": type("Exec", (), {"action": "等", "reason": "日线可以继续看，但分时确认还没到位，先按计划等触发。"})(),
@@ -492,11 +494,24 @@ async def test_sell_point_marks_add_signal_from_buy_sop(monkeypatch):
     async def fake_resolve_snapshot_lookup_trade_date(trade_date):
         return trade_date
 
+    saved_snapshots = []
+
+    async def fake_save_snapshot(trade_date, add_position_analysis=None, **kwargs):
+        saved_snapshots.append(
+            {
+                "trade_date": trade_date,
+                "add_position_analysis": add_position_analysis,
+                "kwargs": kwargs,
+            }
+        )
+        return len(add_position_analysis or [])
+
     monkeypatch.setattr(decision.decision_context_service, "get_holdings_from_db", fake_get_holdings_from_db)
     monkeypatch.setattr(decision.market_env_service, "get_current_env", lambda trade_date: object())
     monkeypatch.setattr(decision.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(decision.sell_point_service, "analyze", lambda *args, **kwargs: sell_result)
     monkeypatch.setattr(decision.buy_point_sop_service, "analyze", fake_buy_sop_analyze)
+    monkeypatch.setattr(decision.review_snapshot_service, "save_analysis_snapshot_safe", fake_save_snapshot)
     monkeypatch.setattr(decision, "resolve_snapshot_lookup_trade_date", fake_resolve_snapshot_lookup_trade_date)
 
     response = await decision.analyze_sell_point(
@@ -514,7 +529,45 @@ async def test_sell_point_marks_add_signal_from_buy_sop(monkeypatch):
     assert response.code == 200
     hold_positions = response.data["hold_positions"]
     assert hold_positions[0]["add_signal_tag"] == "建议加仓"
-    assert hold_positions[1]["add_signal_tag"] == "可关注加仓"
+    assert hold_positions[1]["add_signal_tag"] == "仅可小加"
+    assert saved_snapshots == [
+        {
+            "trade_date": "2026-03-24",
+            "add_position_analysis": [
+                {
+                    "ts_code": "002463.SZ",
+                    "stock_name": "沪电股份",
+                    "candidate_source_tag": "",
+                    "candidate_bucket_tag": "",
+                    "buy_signal_tag": "可买",
+                    "buy_point_type": "",
+                    "stock_score": 0,
+                    "base_price": 30.6,
+                    "trade_mode": "加仓",
+                    "add_position_decision": "可加",
+                    "add_position_score_total": 0,
+                    "add_position_scene": "",
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "stock_name": "平安银行",
+                    "candidate_source_tag": "",
+                    "candidate_bucket_tag": "",
+                    "buy_signal_tag": "观察",
+                    "buy_point_type": "",
+                    "stock_score": 0,
+                    "base_price": 12.06,
+                    "trade_mode": "加仓",
+                    "add_position_decision": "仅可小加",
+                    "add_position_score_total": 0,
+                    "add_position_scene": "",
+                },
+            ],
+            "kwargs": {
+                "account_id": "acct-001",
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from app.data.tushare_client import normalize_ts_code, tushare_client
 from app.models.schemas import (
     BuyPointType,
+    BuyPointSopAddPositionDecision,
     BuyPointSopAccountContext,
     BuyPointSopBasicInfo,
     BuyPointSopDailyJudgement,
@@ -159,6 +160,7 @@ class BuyPointSopService:
             context.holdings_list,
             trade_date,
         )
+        same_code_holding = self._find_same_code_holding(normalized_code, context.holdings_list)
         account_context = self._build_account_context(
             context.account,
             realtime_market_env,
@@ -180,6 +182,18 @@ class BuyPointSopService:
             daily_judgement.buy_point_level,
             levels,
         )
+        add_position_decision = self._build_add_position_decision(
+            target_input,
+            target_scored,
+            realtime_market_env,
+            context.account,
+            account_context,
+            direction_exposure,
+            daily_judgement,
+            intraday_judgement,
+            levels,
+            same_code_holding,
+        )
         order_plan = self._build_order_plan(
             target_input,
             target_scored,
@@ -198,12 +212,14 @@ class BuyPointSopService:
             daily_judgement,
             intraday_judgement,
             order_plan,
+            add_position_decision,
         )
         execution = self._build_execution(
             account_context,
             daily_judgement,
             intraday_judgement,
             position_advice,
+            add_position_decision,
         )
 
         return BuyPointSopResponse(
@@ -227,6 +243,7 @@ class BuyPointSopService:
             daily_judgement=daily_judgement,
             intraday_judgement=intraday_judgement,
             order_plan=order_plan,
+            add_position_decision=add_position_decision,
             position_advice=position_advice,
             execution=execution,
         )
@@ -369,6 +386,16 @@ class BuyPointSopService:
             summary=summary,
         )
 
+    def _find_same_code_holding(
+        self,
+        target_code: str,
+        holdings_list: List[dict],
+    ) -> Optional[dict]:
+        for holding in holdings_list:
+            if normalize_ts_code(str(holding.get("ts_code") or "")) == target_code:
+                return holding
+        return None
+
     def _build_account_context(
         self,
         account,
@@ -383,6 +410,7 @@ class BuyPointSopService:
         market_suitability = self._market_suitability(market_env.market_env_tag)
         holding_ok = True
         holding_reason = None
+        same_code_holding = self._find_same_code_holding(target_code, holdings_list)
 
         if not direction_exposure.has_same_code:
             holding_ok, holding_reason, _, _ = self._resolve_holding_constraint(
@@ -414,6 +442,10 @@ class BuyPointSopService:
             current_use=current_use,
             market_suitability=market_suitability,
             account_conclusion=conclusion,
+            same_code_holding_qty=self._safe_int(same_code_holding, "holding_qty"),
+            same_code_cost_price=self._safe_float(same_code_holding, "cost_price"),
+            same_code_market_price=self._safe_float(same_code_holding, "market_price"),
+            same_code_pnl_pct=self._safe_float(same_code_holding, "pnl_pct"),
         )
 
     def _resolve_holding_constraint(
@@ -655,6 +687,112 @@ class BuyPointSopService:
             below_no_buy=self._display_price(invalid_price),
         )
 
+    def _build_add_position_decision(
+        self,
+        target_input,
+        target_stock: StockOutput,
+        market_env,
+        account,
+        account_context: BuyPointSopAccountContext,
+        direction_exposure: DirectionExposureSnapshot,
+        daily_judgement: BuyPointSopDailyJudgement,
+        intraday_judgement: BuyPointSopIntradayJudgement,
+        levels: DailyLevelSnapshot,
+        same_code_holding: Optional[dict],
+    ) -> BuyPointSopAddPositionDecision:
+        if not direction_exposure.has_same_code:
+            return BuyPointSopAddPositionDecision(
+                eligible=False,
+                decision="不加",
+                reason="当前不是加仓语境，这里仍按新开仓逻辑处理。",
+            )
+
+        pnl_pct = self._safe_float(same_code_holding, "pnl_pct")
+        holding_market_value = self._safe_float(same_code_holding, "holding_market_value") or 0.0
+        total_asset = float(getattr(account, "total_asset", 0) or 0)
+        single_stock_ratio = holding_market_value / total_asset if total_asset > 0 else 0.0
+        stage = str(getattr(daily_judgement, "current_stage", "") or "")
+        structure = str(getattr(intraday_judgement, "intraday_structure", "") or "")
+        volume_quality = str(getattr(intraday_judgement, "volume_quality", "") or "")
+        price = float(getattr(target_input, "close", 0) or 0)
+        pressure_ref = max(
+            value for value in [levels.prev_high, levels.range_high_20d] if value is not None
+        ) if any(value is not None for value in [levels.prev_high, levels.range_high_20d]) else None
+        support_ref = min(
+            value for value in [levels.ma5, levels.ma10, levels.prev_low] if value is not None
+        ) if any(value is not None for value in [levels.ma5, levels.ma10, levels.prev_low]) else None
+        distorted = float(getattr(target_input, "change_pct", 0) or 0) >= 8
+        near_pressure = pressure_ref is not None and price >= pressure_ref * 0.985
+        trigger_scene = self._resolve_add_position_scene(target_stock, structure)
+
+        blockers: List[str] = []
+        if pnl_pct is None:
+            blockers.append("缺少底仓盈亏数据，不能给加仓建议。")
+        elif pnl_pct < 0:
+            blockers.append("底仓当前为亏损状态，禁止补仓。")
+        if structure == "冲高回落":
+            blockers.append("当前是冲高回落结构，不适合加仓。")
+        if stage == "高潮" or distorted:
+            blockers.append("当前接近短线过热区，禁止在末端加速时重加。")
+        if market_env.market_env_tag == MarketEnvTag.DEFENSE and trigger_scene != "回踩确认":
+            blockers.append("弱市只允许更保守的回踩确认，不适合主动扩大仓位。")
+        if market_env.market_env_tag == MarketEnvTag.DEFENSE and intraday_judgement.conclusion == "放弃":
+            blockers.append("弱市下分时没有确认，不能逆势加仓。")
+        if account.total_position_ratio >= AccountAdapterService.POSITION_HIGH:
+            blockers.append("账户总仓已偏重，再加会明显压缩撤退空间。")
+        if single_stock_ratio >= 0.8:
+            blockers.append("单票仓位已接近上限，不宜继续加。")
+        if support_ref is None:
+            blockers.append("当前无法明确失效位，不能做加仓决策。")
+
+        trend_score = self._score_add_position_trend(daily_judgement, target_stock)
+        position_score = self._score_add_position_location(
+            trigger_scene,
+            stage,
+            near_pressure,
+            distorted,
+            intraday_judgement,
+        )
+        volume_price_score = self._score_add_position_volume_price(
+            structure,
+            volume_quality,
+            intraday_judgement,
+        )
+        sector_sentiment_score = self._score_add_position_sector_sentiment(target_stock, market_env)
+        account_risk_score = self._score_add_position_account_risk(
+            account,
+            single_stock_ratio,
+            pnl_pct,
+        )
+        score_total = trend_score + position_score + volume_price_score + sector_sentiment_score + account_risk_score
+
+        if blockers:
+            decision = "不加"
+            reason = "；".join(blockers[:2])
+        elif score_total >= 8 and pnl_pct is not None and pnl_pct >= 1 and intraday_judgement.conclusion == "买":
+            decision = "可加"
+            reason = f"{trigger_scene} 已较明确，底仓已有利润垫，可以按计划扩大正确头寸。"
+        elif score_total >= 6 and pnl_pct is not None and pnl_pct >= 0:
+            decision = "仅可小加"
+            reason = "结构还不错，但位置、节奏或账户容错没有好到可以标准加仓，只适合小幅推进。"
+        else:
+            decision = "不加"
+            reason = "确认条件还不够完整，继续持有观察比现在扩大仓位更稳。"
+
+        return BuyPointSopAddPositionDecision(
+            eligible=True,
+            decision=decision,
+            score_total=score_total,
+            trend_score=trend_score,
+            position_score=position_score,
+            volume_price_score=volume_price_score,
+            sector_sentiment_score=sector_sentiment_score,
+            account_risk_score=account_risk_score,
+            trigger_scene=trigger_scene,
+            blockers=blockers,
+            reason=reason,
+        )
+
     def _build_position_advice(
         self,
         account,
@@ -664,7 +802,21 @@ class BuyPointSopService:
         daily_judgement: BuyPointSopDailyJudgement,
         intraday_judgement: BuyPointSopIntradayJudgement,
         order_plan: BuyPointSopOrderPlan,
+        add_position_decision: Optional[BuyPointSopAddPositionDecision] = None,
     ) -> BuyPointSopPositionAdvice:
+        add_position_decision = add_position_decision or BuyPointSopAddPositionDecision(
+            eligible=False,
+            decision="不加",
+            reason="当前不满足加仓条件。",
+        )
+        if direction_exposure.has_same_code:
+            return self._build_add_position_advice(
+                account,
+                account_context,
+                order_plan,
+                add_position_decision,
+            )
+
         if (
             self._account_conclusion_blocks_entry(account_context.account_conclusion)
             or daily_judgement.buy_point_level == "D"
@@ -701,6 +853,45 @@ class BuyPointSopService:
             reason=reason,
             invalidation_level=invalidation_level,
             invalidation_action="跌破失效位后不再找理由硬扛，直接放弃这笔计划。",
+            risk_control_action="新开仓失败直接撤退，不把试错单拖成重仓问题单。",
+        )
+
+    def _build_add_position_advice(
+        self,
+        account,
+        account_context: BuyPointSopAccountContext,
+        order_plan: BuyPointSopOrderPlan,
+        add_position_decision: BuyPointSopAddPositionDecision,
+    ) -> BuyPointSopPositionAdvice:
+        base_position_pct = self._resolve_same_code_position_pct(account, account_context)
+        max_position_pct = 0.8
+
+        if add_position_decision.decision == "可加":
+            increment_position_pct = 0.2 if base_position_pct < 0.4 else 0.1
+            plan_position_pct = min(max_position_pct, base_position_pct + increment_position_pct)
+            suggestion = "标准加仓"
+            reason = add_position_decision.reason
+        elif add_position_decision.decision == "仅可小加":
+            increment_position_pct = min(0.1, max(0.0, max_position_pct - base_position_pct))
+            plan_position_pct = min(max_position_pct, base_position_pct + increment_position_pct)
+            suggestion = "小幅加仓"
+            reason = add_position_decision.reason
+        else:
+            increment_position_pct = 0.0
+            plan_position_pct = base_position_pct
+            suggestion = "继续持有"
+            reason = add_position_decision.reason or "当前不满足加仓条件，先保持底仓观察。"
+
+        return BuyPointSopPositionAdvice(
+            suggestion=suggestion,
+            reason=reason,
+            invalidation_level=order_plan.below_no_buy,
+            invalidation_action="新增仓买的是确认延续，一旦失效先撤新增仓；主逻辑破坏再处理底仓。",
+            plan_position_pct=round(plan_position_pct, 4),
+            increment_position_pct=round(increment_position_pct, 4),
+            max_position_pct=max_position_pct,
+            risk_control_action="加仓失败先撤新增仓，不把舒服单拖成高波动重仓单。",
+            exit_priority="先撤新增仓",
         )
 
     def _build_execution(
@@ -709,7 +900,28 @@ class BuyPointSopService:
         daily_judgement: BuyPointSopDailyJudgement,
         intraday_judgement: BuyPointSopIntradayJudgement,
         position_advice: BuyPointSopPositionAdvice,
+        add_position_decision: Optional[BuyPointSopAddPositionDecision] = None,
     ) -> BuyPointSopExecution:
+        add_position_decision = add_position_decision or BuyPointSopAddPositionDecision(
+            eligible=False,
+            decision="不加",
+            reason="当前不满足加仓条件。",
+        )
+        if str(getattr(account_context, "current_use", "") or "") == "加仓":
+            if add_position_decision.decision == "可加":
+                return BuyPointSopExecution(
+                    action="加",
+                    reason=add_position_decision.reason,
+                )
+            if add_position_decision.decision == "仅可小加":
+                return BuyPointSopExecution(
+                    action="等",
+                    reason=add_position_decision.reason,
+                )
+            return BuyPointSopExecution(
+                action="不加",
+                reason=add_position_decision.reason or "当前不满足加仓条件，继续持有观察。",
+            )
         if position_advice.suggestion == "不出手" or daily_judgement.buy_point_level == "D":
             return BuyPointSopExecution(
                 action="放弃",
@@ -724,6 +936,113 @@ class BuyPointSopService:
             action="等",
             reason="日线可以继续看，但分时确认还没到位，先按计划等触发。",
         )
+
+    def _resolve_add_position_scene(self, target_stock: StockOutput, intraday_structure: str) -> str:
+        if intraday_structure == "回踩承接":
+            return "回踩确认"
+        if intraday_structure == "突破后站稳":
+            return "突破确认"
+        if intraday_structure == "拉升后横住":
+            return "趋势延续"
+        return "无"
+
+    def _score_add_position_trend(
+        self,
+        daily_judgement: BuyPointSopDailyJudgement,
+        target_stock: StockOutput,
+    ) -> int:
+        if daily_judgement.buy_point_level == "A" and target_stock.stock_strength_tag == StockStrengthTag.STRONG:
+            return 2
+        if daily_judgement.buy_point_level in {"A", "B"}:
+            return 1
+        return 0
+
+    def _score_add_position_location(
+        self,
+        trigger_scene: str,
+        stage: str,
+        near_pressure: bool,
+        distorted: bool,
+        intraday_judgement: BuyPointSopIntradayJudgement,
+    ) -> int:
+        if stage == "高潮" or distorted or near_pressure:
+            return 0
+        if trigger_scene in {"回踩确认", "突破确认"} and intraday_judgement.conclusion == "买":
+            return 2
+        if trigger_scene in {"回踩确认", "突破确认", "趋势延续"}:
+            return 1
+        return 0
+
+    def _score_add_position_volume_price(
+        self,
+        structure: str,
+        volume_quality: str,
+        intraday_judgement: BuyPointSopIntradayJudgement,
+    ) -> int:
+        if structure == "冲高回落" or intraday_judgement.conclusion == "放弃":
+            return 0
+        if ("放量" in volume_quality and structure in {"回踩承接", "突破后站稳", "拉升后横住"}):
+            return 2
+        if structure in {"回踩承接", "突破后站稳", "拉升后横住"}:
+            return 1
+        return 0
+
+    def _score_add_position_sector_sentiment(self, target_stock: StockOutput, market_env) -> int:
+        if market_env.market_env_tag == MarketEnvTag.DEFENSE:
+            return 0
+        if (
+            market_env.market_env_tag == MarketEnvTag.ATTACK
+            and target_stock.stock_strength_tag == StockStrengthTag.STRONG
+            and target_stock.stock_core_tag in {StockCoreTag.CORE, StockCoreTag.FOLLOW}
+        ):
+            return 2
+        return 1 if market_env.market_env_tag == MarketEnvTag.NEUTRAL else 0
+
+    def _score_add_position_account_risk(
+        self,
+        account,
+        single_stock_ratio: float,
+        pnl_pct: Optional[float],
+    ) -> int:
+        if account.total_position_ratio >= AccountAdapterService.POSITION_HIGH or single_stock_ratio >= 0.8:
+            return 0
+        if account.total_position_ratio < AccountAdapterService.POSITION_LOW and (pnl_pct or 0) >= 1:
+            return 2
+        return 1
+
+    def _resolve_same_code_position_pct(
+        self,
+        account,
+        account_context: BuyPointSopAccountContext,
+    ) -> float:
+        total_asset = float(getattr(account, "total_asset", 0) or 0)
+        market_price = float(account_context.same_code_market_price or 0)
+        holding_qty = int(account_context.same_code_holding_qty or 0)
+        if total_asset <= 0 or market_price <= 0 or holding_qty <= 0:
+            return 0.0
+        return min(1.0, (market_price * holding_qty) / total_asset)
+
+    def _safe_float(self, payload: Optional[dict], key: str) -> Optional[float]:
+        if not payload:
+            return None
+        value = payload.get(key)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _safe_int(self, payload: Optional[dict], key: str) -> Optional[int]:
+        if not payload:
+            return None
+        value = payload.get(key)
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _position_status(self, ratio: float, holding_count: int) -> str:
         if ratio >= AccountAdapterService.POSITION_HIGH or holding_count >= AccountAdapterService.HOLDING_COUNT_HIGH:

@@ -23,11 +23,10 @@ class MarketEnvService:
     # 评分阈值配置
     INDEX_SCORE_WEIGHT = 0.4  # 指数评分权重
     SENTIMENT_SCORE_WEIGHT = 0.6  # 情绪评分权重
-
-    # 指数评分阈值
-    INDEX_EXCELLENT = 2.0  # 指数涨幅 > 2%
-    INDEX_GOOD = 0.5       # 指数涨幅 > 0.5%
-    INDEX_BAD = -0.5      # 指数跌幅 > -0.5%
+    INDEX_NEUTRAL_BAND = 0.3
+    INDEX_SCORE_SENSITIVITY = 18.0
+    INDEX_RESONANCE_STRONG_BONUS = 12.0
+    INDEX_RESONANCE_WEAK_BONUS = 6.0
 
     # 情绪评分阈值
     SENTIMENT_EXCELLENT = 80  # 情绪评分 > 80
@@ -84,14 +83,30 @@ class MarketEnvService:
             当前市场环境
         """
         compact_trade_date = trade_date.replace("-", "")
+        effective_trade_date = compact_trade_date
+        if not self.client.should_use_realtime_quote(compact_trade_date):
+            effective_trade_date = str(
+                self.client.get_last_completed_trade_date(compact_trade_date)
+            ).replace("-", "")[:8] or compact_trade_date
+
         cached = self._get_cached_env(compact_trade_date)
         if cached:
             return cached
 
-        index_payload = self.client.get_index_quote_with_meta(compact_trade_date)
-        limit_payload = self.client.get_limit_stats_with_meta(compact_trade_date)
-        turnover_payload = self.client.get_market_turnover_with_meta(compact_trade_date)
-        up_down_payload = self.client.get_up_down_ratio_with_meta(compact_trade_date)
+        index_payload = self.client.get_index_quote_with_meta(effective_trade_date)
+        limit_payload = self.client.get_limit_stats_with_meta(effective_trade_date)
+        turnover_payload = self.client.get_market_turnover_with_meta(effective_trade_date)
+        up_down_payload = self.client.get_up_down_ratio_with_meta(effective_trade_date)
+
+        if any(
+            payload.get("status") == "unavailable"
+            for payload in (limit_payload, turnover_payload, up_down_payload)
+        ):
+            fallback_trade_date = str(self.client.get_last_completed_trade_date(compact_trade_date)).replace("-", "")[:8]
+            if fallback_trade_date and fallback_trade_date != compact_trade_date:
+                return self.get_current_env(
+                    f"{fallback_trade_date[:4]}-{fallback_trade_date[4:6]}-{fallback_trade_date[6:8]}"
+                )
 
         index_quotes = index_payload.get("rows", [])
         limit_stats = limit_payload.get("stats", {})
@@ -105,7 +120,7 @@ class MarketEnvService:
             str(up_down_payload.get("data_trade_date") or ""),
         ]
         resolved_candidates = [d for d in resolved_candidates if d]
-        resolved_trade_date = compact_trade_date
+        resolved_trade_date = effective_trade_date
         if resolved_candidates:
             resolved_trade_date = Counter(resolved_candidates).most_common(1)[0][0]
 
@@ -170,43 +185,34 @@ class MarketEnvService:
 
     def _calculate_index_score(self, data: MarketEnvInput) -> float:
         """计算指数评分 (0-100)"""
-        scores = []
+        index_changes = [data.index_sh, data.index_sz, data.index_cyb]
+        base_score = sum(self._score_single_index(change_pct) for change_pct in index_changes) / len(index_changes)
+        resonance_adjustment = self._calculate_index_resonance_adjustment(index_changes)
+        return max(0, min(100, base_score + resonance_adjustment))
 
-        # 上证指数评分
-        if data.index_sh > self.INDEX_EXCELLENT:
-            scores.append(100)
-        elif data.index_sh > self.INDEX_GOOD:
-            scores.append(70)
-        elif data.index_sh > self.INDEX_BAD:
-            scores.append(50)
-        else:
-            scores.append(20)
+    def _score_single_index(self, change_pct: float) -> float:
+        """
+        将单个指数涨跌幅映射到连续分值。
 
-        # 深成指评分
-        if data.index_sz > self.INDEX_EXCELLENT:
-            scores.append(100)
-        elif data.index_sz > self.INDEX_GOOD:
-            scores.append(70)
-        elif data.index_sz > self.INDEX_BAD:
-            scores.append(50)
-        else:
-            scores.append(20)
+        0% 附近保持中性分，随涨跌幅线性扩张；大跌时快速压低分数，
+        避免过去“普跌也能因为同向而加分”的问题。
+        """
+        return max(5.0, min(95.0, 50.0 + change_pct * self.INDEX_SCORE_SENSITIVITY))
 
-        # 创业板评分
-        if data.index_cyb > self.INDEX_EXCELLENT:
-            scores.append(100)
-        elif data.index_cyb > self.INDEX_GOOD:
-            scores.append(70)
-        elif data.index_cyb > self.INDEX_BAD:
-            scores.append(50)
-        else:
-            scores.append(20)
+    def _calculate_index_resonance_adjustment(self, index_changes) -> float:
+        """指数共振只在同向上涨时加分，同向下跌时减分。"""
+        positive_count = sum(1 for change in index_changes if change > self.INDEX_NEUTRAL_BAND)
+        negative_count = sum(1 for change in index_changes if change < -self.INDEX_NEUTRAL_BAND)
 
-        # 计算共振程度（指数同向程度）
-        same_direction = sum(1 for s in [data.index_sh, data.index_sz, data.index_cyb] if s * data.index_sh > 0)
-        resonance_bonus = same_direction * 10  # 共振加分
-
-        return sum(scores) / len(scores) + resonance_bonus
+        if positive_count == len(index_changes):
+            return self.INDEX_RESONANCE_STRONG_BONUS
+        if negative_count == len(index_changes):
+            return -self.INDEX_RESONANCE_STRONG_BONUS
+        if positive_count >= 2 and negative_count == 0:
+            return self.INDEX_RESONANCE_WEAK_BONUS
+        if negative_count >= 2 and positive_count == 0:
+            return -self.INDEX_RESONANCE_WEAK_BONUS
+        return 0.0
 
     def _calculate_sentiment_score(self, data: MarketEnvInput) -> float:
         """计算情绪评分 (0-100)"""
@@ -214,55 +220,82 @@ class MarketEnvService:
 
         # 涨跌停评分
         if data.limit_up_count:
-            if data.limit_up_count > 50:
-                score += 20
+            if data.limit_up_count > 80:
+                score += 18
+            elif data.limit_up_count > 50:
+                score += 12
             elif data.limit_up_count > 30:
-                score += 10
+                score += 6
             elif data.limit_up_count < 10:
                 score -= 10
 
         # 跌停评分
         if data.limit_down_count:
-            if data.limit_down_count > 20:
+            if data.limit_down_count > 30:
                 score -= 20
+            elif data.limit_down_count > 20:
+                score -= 15
             elif data.limit_down_count > 10:
-                score -= 10
+                score -= 8
             elif data.limit_down_count < 5:
-                score += 5
+                score += 3
 
         # 炸板率评分
         if data.broken_board_rate:
-            if data.broken_board_rate > 30:
-                score -= 15
-            elif data.broken_board_rate > 20:
-                score -= 10
+            if data.broken_board_rate > 35:
+                score -= 18
+            elif data.broken_board_rate > 25:
+                score -= 12
+            elif data.broken_board_rate > 15:
+                score -= 6
             elif data.broken_board_rate < 10:
-                score += 10
+                score += 6
 
         # 涨跌家数比评分
         if data.up_down_ratio:
             up = data.up_down_ratio.get("up", 0)
             down = data.up_down_ratio.get("down", 1)
             ratio = up / max(down, 1)
-            if ratio > 3:
-                score += 15
-            elif ratio > 2:
-                score += 10
-            elif ratio > 1:
-                score += 5
-            elif ratio < 0.5:
-                score -= 15
-            elif ratio < 0.8:
-                score -= 5
+            if ratio > 2.5:
+                score += 12
+            elif ratio > 1.5:
+                score += 6
+            elif ratio > 1.0:
+                score += 2
+            elif ratio < 0.4:
+                score -= 18
+            elif ratio < 0.7:
+                score -= 10
+            elif ratio < 1.0:
+                score -= 4
 
         # 成交额评分
         if data.market_turnover:
-            if data.market_turnover > 15000:
-                score += 10
-            elif data.market_turnover > 10000:
-                score += 5
-            elif data.market_turnover < 6000:
-                score -= 10
+            if data.market_turnover > 18000:
+                score += 6
+            elif data.market_turnover > 12000:
+                score += 3
+            elif data.market_turnover < 5000:
+                score -= 8
+            elif data.market_turnover < 7000:
+                score -= 5
+
+        if (
+            data.limit_up_count
+            and data.limit_down_count
+            and data.limit_up_count > 40
+            and data.limit_down_count < 8
+            and (data.broken_board_rate or 0) < 15
+        ):
+            score += 5
+
+        if (
+            data.limit_down_count
+            and data.limit_up_count is not None
+            and data.limit_down_count > data.limit_up_count
+            and (data.broken_board_rate or 0) > 25
+        ):
+            score -= 5
 
         return max(0, min(100, score))
 
@@ -277,21 +310,28 @@ class MarketEnvService:
 
     def _determine_breakout_allowed(self, env_tag: MarketEnvTag, data: MarketEnvInput) -> bool:
         """判断是否允许突破型操作"""
+        up = (data.up_down_ratio or {}).get("up", 0)
+        down = (data.up_down_ratio or {}).get("down", 0)
+        breadth_ratio = up / max(down, 1)
+
         if env_tag == MarketEnvTag.DEFENSE:
             return False
 
         if env_tag == MarketEnvTag.NEUTRAL:
-            # 中性环境下，炸板率高不允许
-            if data.broken_board_rate and data.broken_board_rate > 25:
+            if data.broken_board_rate and data.broken_board_rate > 20:
+                return False
+            if data.limit_down_count and data.limit_down_count > 12:
+                return False
+            if breadth_ratio < 1.0:
                 return False
             return True
 
-        # 进攻环境，检查是否满足进攻条件
-        # 涨停数足够、炸板率不高
-        if data.limit_up_count and data.limit_up_count > 30:
-            if data.broken_board_rate and data.broken_board_rate < 20:
-                return True
-
+        if data.broken_board_rate and data.broken_board_rate > 25:
+            return False
+        if data.limit_up_count and data.limit_up_count < 30:
+            return False
+        if breadth_ratio < 1.0:
+            return False
         return True
 
     def _determine_risk_level(self, overall_score: float) -> RiskLevel:
@@ -311,38 +351,89 @@ class MarketEnvService:
         data: MarketEnvInput
     ) -> str:
         """生成市场环境简评"""
-        comments = []
+        lead = self._comment_lead(env_tag, data)
+        reasons = self._comment_reasons(data, index_score, sentiment_score)
+        action = self._comment_action_hint(env_tag, data)
 
-        # 环境定性
-        if env_tag == MarketEnvTag.ATTACK:
-            comments.append("市场处于进攻状态，氛围活跃")
-        elif env_tag == MarketEnvTag.NEUTRAL:
-            comments.append("市场处于中性状态，谨慎操作")
-        else:
-            comments.append("市场处于防守状态，控制仓位")
+        parts = [lead]
+        if reasons:
+            parts.append(reasons)
+        if action:
+            parts.append(action)
+        return "；".join(parts)
 
-        # 指数情况
+    def _comment_lead(self, env_tag: MarketEnvTag, data: MarketEnvInput) -> str:
         avg_change = (data.index_sh + data.index_sz + data.index_cyb) / 3
-        if avg_change > 1:
-            comments.append("指数共振上涨，强度较高")
-        elif avg_change > 0:
-            comments.append("指数温和上涨")
-        elif avg_change > -1:
-            comments.append("指数小幅调整")
-        else:
-            comments.append("指数明显回落")
+        if env_tag == MarketEnvTag.ATTACK:
+            if avg_change > 1.0:
+                return "市场偏进攻，指数与情绪基本同向走强"
+            return "市场偏进攻，但强度主要来自情绪侧"
+        if env_tag == MarketEnvTag.DEFENSE:
+            if avg_change < -1.0:
+                return "市场偏防守，指数端已经明显转弱"
+            return "市场偏防守，情绪端承接不足"
+        if avg_change > 0.5:
+            return "市场中性偏强，但还没强到可以无脑追价"
+        if avg_change < -0.5:
+            return "市场中性偏弱，先按分歧市看待"
+        return "市场中性，指数和情绪都没有形成明显主导"
 
-        # 情绪情况
-        if data.limit_up_count and data.limit_up_count > 40:
-            comments.append("涨停家数较多")
-        if data.limit_down_count and data.limit_down_count > 15:
-            comments.append("跌停家数较多，注意风险")
+    def _comment_reasons(self, data: MarketEnvInput, index_score: float, sentiment_score: float) -> str:
+        reasons = []
+        avg_change = (data.index_sh + data.index_sz + data.index_cyb) / 3
+        up = (data.up_down_ratio or {}).get("up", 0)
+        down = (data.up_down_ratio or {}).get("down", 0)
+        breadth_ratio = up / max(down, 1)
 
-        # 炸板率
-        if data.broken_board_rate and data.broken_board_rate > 25:
-            comments.append("炸板率偏高，追高风险大")
+        if avg_change > 1.0:
+            reasons.append("三大指数同步上行")
+        elif avg_change > 0.3:
+            reasons.append("指数端维持温和走强")
+        elif avg_change < -1.0:
+            reasons.append("三大指数同步走弱")
+        elif avg_change < -0.3:
+            reasons.append("指数端处于回落状态")
 
-        return "，".join(comments)
+        if data.limit_up_count >= 50 and (data.broken_board_rate or 0) < 15:
+            reasons.append(f"涨停 {data.limit_up_count} 家且炸板率仅 {data.broken_board_rate:.1f}%")
+        elif data.limit_down_count >= 15:
+            reasons.append(f"跌停 {data.limit_down_count} 家，亏钱效应偏强")
+        elif data.limit_up_count >= 30:
+            reasons.append(f"涨停维持在 {data.limit_up_count} 家，题材仍有活跃度")
+
+        if breadth_ratio > 1.5:
+            reasons.append(f"涨跌家数比 {breadth_ratio:.2f}，赚钱效应占优")
+        elif breadth_ratio < 0.8:
+            reasons.append(f"涨跌家数比 {breadth_ratio:.2f}，个股普遍偏弱")
+
+        if data.market_turnover >= 15000:
+            reasons.append(f"成交额 {data.market_turnover / 10000:.1f} 万亿，流动性充足")
+        elif data.market_turnover and data.market_turnover < 7000:
+            reasons.append(f"成交额 {data.market_turnover / 10000:.1f} 万亿，量能偏弱")
+
+        if not reasons:
+            dominant = "指数" if index_score >= sentiment_score else "情绪"
+            reasons.append(f"{dominant}侧暂无明显失真，但强弱差距不大")
+
+        return "，".join(reasons[:3])
+
+    def _comment_action_hint(self, env_tag: MarketEnvTag, data: MarketEnvInput) -> str:
+        up = (data.up_down_ratio or {}).get("up", 0)
+        down = (data.up_down_ratio or {}).get("down", 0)
+        breadth_ratio = up / max(down, 1)
+
+        if env_tag == MarketEnvTag.ATTACK:
+            if (data.broken_board_rate or 0) > 20:
+                return "可以做强势确认，但别在高炸板率环境里追最后一笔"
+            return "允许做强势突破，优先主线和强更强，不做后排跟风"
+        if env_tag == MarketEnvTag.DEFENSE:
+            if breadth_ratio < 0.8:
+                return "先收缩仓位，少做突破，多看反抽减仓和低风险承接"
+            return "控制仓位，只有回踩承接清晰时才考虑试错"
+
+        if (data.broken_board_rate or 0) > 20 or breadth_ratio < 1.0:
+            return "先等确认，不抢突破，优先做更舒服的回踩或分歧转强"
+        return "可以小仓位参与确认型机会，但不适合激进追价"
 
 
 # 全局服务实例

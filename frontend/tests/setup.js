@@ -49,6 +49,8 @@ config.global.components = {
   ElCol: passthrough('div'),
   ElButton: passthrough('button'),
   ElTag: passthrough('span'),
+  ElSelect: passthrough('select'),
+  ElOption: emptyStub('option'),
   ElTabs: passthrough('div'),
   ElTabPane: passthrough('section'),
   ElEmpty: passthrough('div'),

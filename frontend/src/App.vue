@@ -47,9 +47,14 @@
                 :value="account.id"
               />
             </el-select>
-            <el-tag v-else-if="currentAccount" type="warning">
-              {{ currentAccount.account_name }}
-            </el-tag>
+            <div v-else-if="currentAccount" class="current-account">
+              <span class="current-account-label">
+                {{ isAdmin ? '当前账户' : '我的账户' }}
+              </span>
+              <el-tag type="warning" effect="plain">
+                {{ currentAccount.account_name }}
+              </el-tag>
+            </div>
           </div>
           <el-tag>{{ currentDate }}</el-tag>
           <el-button type="danger" plain size="small" @click="handleLogout">退出登录</el-button>
@@ -336,6 +341,18 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.current-account {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.current-account-label {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  white-space: nowrap;
 }
 
 /* 内容区 */

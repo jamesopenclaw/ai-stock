@@ -30,6 +30,63 @@ class TestMarketEnv:
         """创建服务实例"""
         return MarketEnvService()
 
+    def test_get_current_env_uses_last_completed_trade_date_before_realtime_window(self, service, monkeypatch):
+        """
+        测试：盘前分析应直接使用最近已完成交易日，而不是先请求今天再回退
+        """
+        class StubGateway:
+            def __init__(self):
+                self.requested_dates = []
+
+            def now_trade_date(self):
+                return "2026-03-31"
+
+            def should_use_realtime_quote(self, trade_date):
+                return False
+
+            def get_last_completed_trade_date(self, trade_date):
+                assert trade_date == "20260331"
+                return "20260330"
+
+            def get_index_quote_with_meta(self, trade_date):
+                self.requested_dates.append(("index", trade_date))
+                return {
+                    "rows": [
+                        {"change_pct": 1.0},
+                        {"change_pct": 0.8},
+                        {"change_pct": 0.6},
+                    ],
+                    "data_trade_date": "20260330",
+                }
+
+            def get_limit_stats_with_meta(self, trade_date):
+                self.requested_dates.append(("limit", trade_date))
+                return {
+                    "stats": {"limit_up_count": 50, "limit_down_count": 5, "broken_board_rate": 10.0},
+                    "data_trade_date": "20260330",
+                }
+
+            def get_market_turnover_with_meta(self, trade_date):
+                self.requested_dates.append(("turnover", trade_date))
+                return {"market_turnover": 12000, "data_trade_date": "20260330"}
+
+            def get_up_down_ratio_with_meta(self, trade_date):
+                self.requested_dates.append(("updown", trade_date))
+                return {"up_down_ratio": {"up": 2500, "down": 1500}, "data_trade_date": "20260330"}
+
+        gateway = StubGateway()
+        monkeypatch.setattr(service, "client", gateway)
+
+        result = service.get_current_env("2026-03-31")
+
+        assert result.trade_date == "2026-03-30"
+        assert gateway.requested_dates == [
+            ("index", "20260330"),
+            ("limit", "20260330"),
+            ("turnover", "20260330"),
+            ("updown", "20260330"),
+        ]
+
     # ========== 市场环境判定测试 ==========
 
     def test_market_env_attack_with_strong_index(self, service):
@@ -420,6 +477,144 @@ class TestMarketEnv:
         # 同向应该有更高的指数评分
         assert result_same.index_score > result_diff.index_score, \
             "指数共振应有更高的评分"
+
+    def test_index_resonance_downside_is_penalty(self, service):
+        """
+        测试：同向下跌应扣分，而不是因为共振被抬高
+        """
+        market_data_same_down = MarketEnvInput(
+            trade_date="2026-03-19",
+            index_sh=-1.2,
+            index_sz=-1.4,
+            index_cyb=-1.6,
+            up_down_ratio={"up": 1600, "down": 1800},
+            limit_up_count=28,
+            limit_down_count=8,
+            broken_board_rate=16.0,
+            market_turnover=9500,
+            risk_appetite_tag="中性"
+        )
+        market_data_mixed = MarketEnvInput(
+            trade_date="2026-03-19",
+            index_sh=-1.2,
+            index_sz=0.2,
+            index_cyb=0.1,
+            up_down_ratio={"up": 1600, "down": 1800},
+            limit_up_count=28,
+            limit_down_count=8,
+            broken_board_rate=16.0,
+            market_turnover=9500,
+            risk_appetite_tag="中性"
+        )
+
+        result_same_down = service.analyze(market_data_same_down)
+        result_mixed = service.analyze(market_data_mixed)
+
+        assert result_same_down.index_score < result_mixed.index_score, \
+            "同向下跌应降低指数评分"
+
+    def test_neutral_breakout_requires_positive_breadth(self, service):
+        """
+        测试：中性环境下，若涨跌家数不占优，则不允许突破型交易
+        """
+        market_data = MarketEnvInput(
+            trade_date="2026-03-19",
+            index_sh=0.5,
+            index_sz=0.4,
+            index_cyb=0.2,
+            up_down_ratio={"up": 1700, "down": 2000},
+            limit_up_count=32,
+            limit_down_count=9,
+            broken_board_rate=18.0,
+            market_turnover=11000,
+            risk_appetite_tag="中性"
+        )
+
+        result = service.analyze(market_data)
+
+        assert result.market_env_tag == MarketEnvTag.NEUTRAL
+        assert result.breakout_allowed is False, "中性环境下涨跌家数不占优时不应追突破"
+
+    def test_sentiment_quality_matters_more_than_raw_turnover(self, service):
+        """
+        测试：高成交额不能抵消明显走弱的情绪结构
+        """
+        weak_quality = MarketEnvInput(
+            trade_date="2026-03-19",
+            index_sh=-0.4,
+            index_sz=-0.6,
+            index_cyb=-0.8,
+            up_down_ratio={"up": 1200, "down": 2800},
+            limit_up_count=18,
+            limit_down_count=24,
+            broken_board_rate=38.0,
+            market_turnover=19000,
+            risk_appetite_tag="中性"
+        )
+        healthy_quality = MarketEnvInput(
+            trade_date="2026-03-19",
+            index_sh=-0.4,
+            index_sz=-0.6,
+            index_cyb=-0.8,
+            up_down_ratio={"up": 2600, "down": 1400},
+            limit_up_count=52,
+            limit_down_count=4,
+            broken_board_rate=9.0,
+            market_turnover=12000,
+            risk_appetite_tag="中性"
+        )
+
+        weak_result = service.analyze(weak_quality)
+        healthy_result = service.analyze(healthy_quality)
+
+        assert weak_result.sentiment_score < healthy_result.sentiment_score, \
+            "高成交额不应盖过明显走弱的情绪质量"
+
+    def test_market_comment_contains_actionable_reason_and_hint_in_defense(self, service):
+        """
+        测试：防守环境评语应同时包含原因和操作提示
+        """
+        market_data = MarketEnvInput(
+            trade_date="2026-03-19",
+            index_sh=-1.1,
+            index_sz=-1.5,
+            index_cyb=-1.8,
+            up_down_ratio={"up": 900, "down": 2600},
+            limit_up_count=12,
+            limit_down_count=22,
+            broken_board_rate=34.0,
+            market_turnover=6800,
+            risk_appetite_tag="保守"
+        )
+
+        result = service.analyze(market_data)
+
+        assert "市场偏防守" in result.market_comment
+        assert ("跌停" in result.market_comment or "涨跌家数比" in result.market_comment)
+        assert ("控制仓位" in result.market_comment or "先收缩仓位" in result.market_comment)
+
+    def test_market_comment_contains_breakout_guidance_in_attack(self, service):
+        """
+        测试：进攻环境评语应给出突破型操作提示
+        """
+        market_data = MarketEnvInput(
+            trade_date="2026-03-19",
+            index_sh=1.8,
+            index_sz=2.0,
+            index_cyb=2.3,
+            up_down_ratio={"up": 3200, "down": 1200},
+            limit_up_count=68,
+            limit_down_count=3,
+            broken_board_rate=11.0,
+            market_turnover=14500,
+            risk_appetite_tag="积极"
+        )
+
+        result = service.analyze(market_data)
+
+        assert "市场偏进攻" in result.market_comment
+        assert ("涨停" in result.market_comment or "赚钱效应" in result.market_comment)
+        assert "允许做强势突破" in result.market_comment
 
     def test_get_current_env_uses_cache_for_same_trade_date(self, service, monkeypatch):
         calls = {

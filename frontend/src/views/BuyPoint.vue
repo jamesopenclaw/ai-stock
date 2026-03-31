@@ -665,6 +665,7 @@ const backupAvailablePoints = computed(() => {
 const reviewSnapshotTypeLabel = (value) => {
   if (value === 'buy_available') return '买点-可买'
   if (value === 'buy_observe') return '买点-观察'
+  if (value === 'buy_add') return '加仓候选'
   if (value === 'pool_account') return '三池-可参与池'
   if (value === 'pool_market') return '三池-观察池'
   return value || '-'
@@ -686,6 +687,7 @@ const reviewRowLabel = (row) => `${reviewSnapshotTypeLabel(row.snapshot_type)} /
 
 const reviewActionableRows = computed(() => (
   (reviewStatsData.value?.bucket_stats || [])
+    .filter((row) => row.snapshot_type !== 'buy_add')
     .map((row) => ({
       ...row,
       shortLabel: reviewRowLabel(row),

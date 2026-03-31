@@ -67,9 +67,10 @@ class SellPointService:
 
         for position in holdings:
             sector_name = self._resolve_position_sector(position.ts_code, trade_date)
-            sell_point = self._analyze_position(position, market_env, sector_map)
+            sell_point = self._analyze_position(position, market_env, sector_map, sector_name)
             # 叠加板块共振判断：若个股所属板块不在主线/次主线，提升离场优先级
             self._apply_sector_resonance_adjustment(sell_point, position, sector_name, sector_map, market_env)
+            self._normalize_execution_constraints(sell_point, position)
 
             if sell_point.sell_signal_tag in [SellSignalTag.HOLD, SellSignalTag.OBSERVE]:
                 hold.append(sell_point)
@@ -109,7 +110,8 @@ class SellPointService:
         self,
         position: AccountPosition,
         market_env,
-        sector_map: Dict
+        sector_map: Dict,
+        sector_name: str = "",
     ) -> SellPointOutput:
         """
         分析单个持仓的卖点
@@ -127,7 +129,7 @@ class SellPointService:
 
         # 判断卖点类型和信号
         sell_type, signal_tag, priority, reason, trigger, comment = self._determine_sell(
-            pnl_pct, can_sell, market_env
+            position, pnl_pct, can_sell, market_env, sector_map, sector_name
         )
 
         return SellPointOutput(
@@ -175,6 +177,33 @@ class SellPointService:
             )
 
         return sorted(points, key=sort_key)
+
+    def _can_partially_reduce(self, holding_qty: int | None) -> bool:
+        """A 股按 100 股一手交易，至少 200 股才存在明确的部分减仓空间。"""
+        return bool(holding_qty and holding_qty >= 200)
+
+    def _normalize_execution_constraints(
+        self,
+        sell_point: SellPointOutput,
+        position: AccountPosition,
+    ) -> None:
+        """将不可执行的减仓建议修正为可执行动作。"""
+        if sell_point.sell_signal_tag != SellSignalTag.REDUCE:
+            return
+
+        if self._can_partially_reduce(position.holding_qty):
+            return
+
+        sell_point.sell_signal_tag = SellSignalTag.SELL
+        if sell_point.sell_point_type == SellPointType.REDUCE_POSITION:
+            sell_point.sell_point_type = (
+                SellPointType.STOP_PROFIT if (position.pnl_pct or 0) > 0 else SellPointType.STOP_LOSS
+            )
+        if sell_point.sell_priority == SellPriority.MEDIUM:
+            sell_point.sell_priority = SellPriority.HIGH
+        sell_point.sell_reason = f"{sell_point.sell_reason}；当前仅有{position.holding_qty or 0}股，无法按一手部分减仓"
+        sell_point.sell_trigger_cond = "满足原触发条件时一次卖出"
+        sell_point.sell_comment = "A股最小交易单位为100股，这笔仓位没有可执行的部分减仓空间"
 
     def _apply_sector_resonance_adjustment(
         self,
@@ -276,11 +305,57 @@ class SellPointService:
 
     def _determine_sell(
         self,
+        position: AccountPosition,
         pnl_pct: float,
         can_sell: bool,
-        market_env
+        market_env,
+        sector_map: Dict,
+        sector_name: str = "",
     ) -> tuple:
         """确定卖点"""
+        reason_text = position.holding_reason or ""
+        reason_invalid = any(tag in reason_text for tag in ["失效", "证伪", "逻辑坏了", "不成立"])
+        reason_strong = any(tag in reason_text for tag in ["主升", "主线", "龙头", "核心", "趋势", "突破"])
+        reason_tactical = any(tag in reason_text for tag in ["套利", "反弹", "轮动", "低吸", "博弈"])
+        sector = sector_map.get(sector_name) if sector_name else None
+        sector_supportive = bool(
+            sector
+            and sector.sector_mainline_tag in {
+                SectorMainlineTag.MAINLINE,
+                SectorMainlineTag.SUB_MAINLINE,
+                SectorMainlineTag.FOLLOW,
+            }
+            and sector.sector_tradeability_tag != SectorTradeabilityTag.NOT_RECOMMENDED
+        )
+        sector_weak = bool(
+            sector
+            and (
+                sector.sector_mainline_tag == SectorMainlineTag.TRASH
+                or sector.sector_tradeability_tag == SectorTradeabilityTag.NOT_RECOMMENDED
+            )
+        )
+        structure_strong = (
+            market_env.market_env_tag == MarketEnvTag.ATTACK
+            and (sector_supportive or reason_strong)
+            and not sector_weak
+        )
+        structure_weak = (
+            sector_weak
+            or (market_env.market_env_tag == MarketEnvTag.DEFENSE and not sector_supportive)
+            or (reason_tactical and market_env.market_env_tag != MarketEnvTag.ATTACK)
+        )
+
+        # 0. 原始逻辑失效优先退出
+        if reason_invalid:
+            return (
+                SellPointType.INVALID_EXIT,
+                SellSignalTag.SELL,
+                SellPriority.HIGH,
+                "原买入理由已经失效，优先退出",
+                "下一次反弹不能转强时卖出",
+                "买入逻辑被证伪，不再适合继续拿",
+            )
+
         # 1. 止损判断（优先）
         if pnl_pct <= self.STOP_LOSS_PCT:
             # 严重亏损 -> 止损
@@ -293,9 +368,29 @@ class SellPointService:
                 f"止损出局，亏损{pnl_pct:.1f}%"
             )
 
-        # 2. 市场环境恶化 -> 卖出
-        if market_env.market_env_tag == MarketEnvTag.DEFENSE:
-            if pnl_pct < 0:
+        # 2. T+1 约束处理
+        if not can_sell:
+            if pnl_pct >= self.STOP_PROFIT_PCT and structure_weak:
+                return (
+                    SellPointType.REDUCE_POSITION,
+                    SellSignalTag.OBSERVE,
+                    SellPriority.MEDIUM,
+                    f"盈利{pnl_pct:.1f}%，但T+1锁定，明天优先处理",
+                    "次日若冲高不能续强则先减仓",
+                    "今天动不了，先把减仓计划定好",
+                )
+            return (
+                SellPointType.INVALID_EXIT,
+                SellSignalTag.OBSERVE,
+                SellPriority.LOW,
+                "T+1锁定，今日无法卖出",
+                "次日根据结构强弱处理",
+                "今日先观察，明天再执行",
+            )
+
+        # 3. 市场环境恶化且结构偏弱 -> 先减仓
+        if market_env.market_env_tag == MarketEnvTag.DEFENSE and pnl_pct < 0:
+            if pnl_pct <= self.STOP_LOSS_PCT_STRICT or structure_weak:
                 return (
                     SellPointType.REDUCE_POSITION,
                     SellSignalTag.REDUCE,
@@ -305,10 +400,9 @@ class SellPointService:
                     "弱市先降仓，不必急着一次卖完"
                 )
 
-        # 3. 止盈判断
+        # 4. 结构走弱后的止盈/减仓
         if pnl_pct >= self.STOP_PROFIT_PCT:
-            # 盈利较高，考虑止盈
-            if market_env.market_env_tag == MarketEnvTag.DEFENSE:
+            if structure_weak and market_env.market_env_tag == MarketEnvTag.DEFENSE:
                 return (
                     SellPointType.STOP_PROFIT,
                     SellSignalTag.SELL,
@@ -317,78 +411,89 @@ class SellPointService:
                     "收盘前卖出",
                     "保护盈利，市场转弱"
                 )
-            elif market_env.market_env_tag == MarketEnvTag.NEUTRAL:
+            if structure_weak:
                 return (
                     SellPointType.STOP_PROFIT,
                     SellSignalTag.REDUCE,
                     SellPriority.MEDIUM,
-                    f"盈利{pnl_pct:.1f}%，可部分止盈",
-                    "卖出一半仓位",
-                    "中性市场，部分止盈"
+                    f"盈利{pnl_pct:.1f}%，但结构性价比在下降，先落一部分利润",
+                    "冲高不能续强时先减仓",
+                    "先把利润装进口袋，保留继续走强的仓位"
                 )
 
-        # 4. 减仓判断
+        # 5. 减仓判断：不再只按盈利阈值，需叠加结构走弱
         if pnl_pct >= self.REDUCE_PCT:
-            if not can_sell:
-                # T+1 不能卖，观察
+            if structure_weak:
                 return (
-                    SellPointType.INVALID_EXIT,
-                    SellSignalTag.OBSERVE,
-                    SellPriority.LOW,
-                    f"盈利{pnl_pct:.1f}%，但T+1锁定",
-                    "次日观察是否企稳",
-                    "T+1，次日处理"
+                    SellPointType.REDUCE_POSITION,
+                    SellSignalTag.REDUCE,
+                    SellPriority.MEDIUM,
+                    f"盈利{pnl_pct:.1f}%，结构边际走弱，适合减仓锁定部分利润",
+                    "反弹到压力位不能放量续强时减仓",
+                    "先降一点仓位，避免利润回撤"
                 )
-            return (
-                SellPointType.REDUCE_POSITION,
-                SellSignalTag.REDUCE,
-                SellPriority.MEDIUM,
-                f"盈利{pnl_pct:.1f}%，可减仓锁定部分利润",
-                "卖出一半仓位",
-                "部分止盈"
-            )
 
-        # 5. T+1 约束处理
-        if not can_sell:
-            return (
-                SellPointType.INVALID_EXIT,
-                SellSignalTag.OBSERVE,
-                SellPriority.LOW,
-                "T+1锁定，今日无法卖出",
-                "次日根据情况处理",
-                "持有观察"
-            )
-
-        # 6. 持有观察
+        # 6. 持有观察或保护利润
         if pnl_pct > 0:
-            return (
-                SellPointType.INVALID_EXIT,
-                SellSignalTag.HOLD,
-                SellPriority.LOW,
-                "盈利中，继续持有",
-                "持有观察",
-                "趋势未坏，持有"
-            )
-        else:
-            # 小幅亏损
-            if market_env.market_env_tag == MarketEnvTag.ATTACK:
+            if structure_strong:
                 return (
                     SellPointType.INVALID_EXIT,
                     SellSignalTag.HOLD,
                     SellPriority.LOW,
-                    "小幅亏损，市场强势可继续持有",
-                    "持有等待反弹",
-                    "市场进攻持有"
+                    f"盈利{pnl_pct:.1f}%，趋势与板块仍有支撑，继续持有",
+                    "跌破关键承接前继续持有",
+                    "结构没坏，不急着因为浮盈就减仓"
                 )
-            else:
+            if (
+                pnl_pct >= self.STOP_PROFIT_PCT_TIGHT
+                and market_env.market_env_tag != MarketEnvTag.ATTACK
+                and not sector_supportive
+                and not reason_strong
+            ):
                 return (
-                    SellPointType.STOP_LOSS,
+                    SellPointType.REDUCE_POSITION,
                     SellSignalTag.REDUCE,
                     SellPriority.MEDIUM,
-                    f"亏损{pnl_pct:.1f}%，市场转弱应减仓",
-                    "卖出三分之一",
-                    "控制亏损"
+                    f"盈利{pnl_pct:.1f}%，先上移保护位并减一部分更稳妥",
+                    "冲高回落或跌破日内承接时减仓",
+                    "环境一般时，先锁一部分利润"
                 )
+            return (
+                SellPointType.INVALID_EXIT,
+                SellSignalTag.HOLD,
+                SellPriority.LOW,
+                "盈利中，继续持有观察",
+                "不破支撑先持有",
+                "先看趋势是否延续"
+            )
+
+        # 7. 小幅亏损处理
+        if market_env.market_env_tag == MarketEnvTag.ATTACK and not structure_weak:
+            return (
+                SellPointType.INVALID_EXIT,
+                SellSignalTag.HOLD,
+                SellPriority.LOW,
+                "小幅亏损，但市场和结构仍可接受，继续观察",
+                "守住关键支撑可继续持有",
+                "这是正常波动，不急着机械处理"
+            )
+        if sector_supportive and pnl_pct > self.STOP_LOSS_PCT_STRICT:
+            return (
+                SellPointType.INVALID_EXIT,
+                SellSignalTag.OBSERVE,
+                SellPriority.LOW,
+                f"亏损{pnl_pct:.1f}%，但板块仍有支撑，先观察承接",
+                "跌破关键支撑再减仓",
+                "先区分正常分歧还是走弱确认"
+            )
+        return (
+            SellPointType.REDUCE_POSITION,
+            SellSignalTag.REDUCE,
+            SellPriority.MEDIUM,
+            f"亏损{pnl_pct:.1f}%，结构没有明显优势，先减仓控制回撤",
+            "反弹无力或跌破支撑时减仓",
+            "先把风险敞口降下来"
+        )
 
 
 # 全局服务实例

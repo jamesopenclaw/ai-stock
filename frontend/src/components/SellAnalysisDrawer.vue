@@ -26,9 +26,16 @@
 
     <div class="drawer-body">
       <el-empty v-if="!tsCode" description="请选择一只持仓后再查看卖点 SOP" />
-      <el-skeleton v-else-if="loading" :rows="14" animated />
-      <el-empty v-else-if="!data" description="暂无卖点分析结果" />
       <template v-else>
+        <div v-if="loadError" class="drawer-error">
+          {{ loadError }}
+        </div>
+        <el-skeleton v-if="loading && !data" :rows="14" animated />
+        <el-empty
+          v-else-if="!data"
+          :description="loadError ? '卖点 SOP 加载失败' : '暂无卖点分析结果'"
+        />
+        <template v-else>
         <div class="overview-card">
           <div class="overview-top">
             <div class="overview-badge" :class="actionBadgeClass">
@@ -187,6 +194,7 @@
             <div class="section-emphasis">{{ execution?.reason || '-' }}</div>
           </section>
         </div>
+        </template>
       </template>
     </div>
   </el-drawer>
@@ -210,6 +218,7 @@ const emit = defineEmits(['update:modelValue'])
 
 const loading = ref(false)
 const data = ref(null)
+const loadError = ref('')
 
 const basic = computed(() => data.value?.basic_info || null)
 const accountContext = computed(() => data.value?.account_context || null)
@@ -432,16 +441,21 @@ const getLocalDate = () => {
 const loadData = async () => {
   if (!props.tsCode) return
   loading.value = true
+  loadError.value = ''
   try {
-    const res = await stockApi.sellAnalysis(props.tsCode, displayTradeDate.value)
+    const res = await stockApi.sellAnalysis(props.tsCode, displayTradeDate.value, { timeout: 90000 })
     const payload = res.data || {}
     if (payload.code !== 200) {
-      ElMessage.error(payload.message || '加载卖点 SOP 失败')
+      loadError.value = payload.message || '加载卖点 SOP 失败'
+      data.value = null
+      ElMessage.error(loadError.value)
       return
     }
     data.value = payload.data || null
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '加载卖点 SOP 失败'
+    loadError.value = message
+    data.value = null
     ElMessage.error(message)
   } finally {
     loading.value = false

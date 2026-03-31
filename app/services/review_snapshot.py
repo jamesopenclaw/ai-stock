@@ -27,7 +27,11 @@ class ReviewSnapshotService:
         "pool_account": "可参与池",
         "buy_available": "可买",
         "buy_observe": "观察",
+        "buy_add": "加仓",
     }
+    BUY_SNAPSHOT_TYPES = ("buy_available", "buy_observe")
+    ADD_SNAPSHOT_TYPES = ("buy_add",)
+    BUY_STATS_SNAPSHOT_TYPES = BUY_SNAPSHOT_TYPES + ADD_SNAPSHOT_TYPES
 
     def __init__(self):
         self._outcome_refresh_task: Optional[asyncio.Task] = None
@@ -49,21 +53,26 @@ class ReviewSnapshotService:
             row.stock_pool_tag or "",
             round(float(row.stock_score or 0.0), 4),
             round(float(row.base_price or 0.0), 4),
+            row.trade_mode or "",
+            row.add_position_decision or "",
+            int(row.add_position_score_total or 0),
+            row.add_position_scene or "",
         )
 
-    async def _buy_snapshot_unchanged(
+    async def _analysis_snapshot_unchanged(
         self,
         session,
         trade_date: str,
         normalized_account_id: str,
+        snapshot_types: Tuple[str, ...],
         rows: List[ReviewSnapshot],
     ) -> bool:
-        """同一交易日买点快照内容未变化时跳过重写，避免反复 DELETE + INSERT。"""
+        """同一交易日快照内容未变化时跳过重写，避免反复 DELETE + INSERT。"""
         result = await session.execute(
             select(ReviewSnapshot)
             .where(ReviewSnapshot.trade_date == trade_date)
             .where(ReviewSnapshot.account_id == normalized_account_id)
-            .where(ReviewSnapshot.snapshot_type.in_(["buy_available", "buy_observe"]))
+            .where(ReviewSnapshot.snapshot_type.in_(snapshot_types))
         )
         existing_rows = result.scalars().all()
         if len(existing_rows) != len(rows):
@@ -175,6 +184,7 @@ class ReviewSnapshotService:
         trade_date: str,
         stock_pools=None,
         buy_analysis=None,
+        add_position_analysis=None,
         sell_analysis=None,
         account_output=None,
         account_id: Optional[str] = None,
@@ -258,23 +268,51 @@ class ReviewSnapshotService:
                     )
                 )
 
+        if add_position_analysis is not None:
+            delete_targets.append(("buy_add", normalized_account_id))
+            for item in add_position_analysis:
+                rows.append(
+                    ReviewSnapshot(
+                        trade_date=trade_date,
+                        account_id=normalized_account_id,
+                        snapshot_type="buy_add",
+                        ts_code=item.get("ts_code", ""),
+                        stock_name=item.get("stock_name", ""),
+                        candidate_source_tag=item.get("candidate_source_tag", "") or "",
+                        candidate_bucket_tag=item.get("candidate_bucket_tag", "") or "",
+                        buy_signal_tag=item.get("buy_signal_tag", "") or "",
+                        buy_point_type=item.get("buy_point_type", "") or "",
+                        stock_score=float(item.get("stock_score") or 0.0),
+                        base_price=float(item.get("base_price") or 0.0),
+                        trade_mode=item.get("trade_mode", "") or "",
+                        add_position_decision=item.get("add_position_decision", "") or "",
+                        add_position_score_total=int(item.get("add_position_score_total") or 0),
+                        add_position_scene=item.get("add_position_scene", "") or "",
+                    )
+                )
+
         if not delete_targets:
             return 0
 
         async with async_session_factory() as session:
-            if buy_analysis is not None and stock_pools is None:
-                buy_rows = [
+            if stock_pools is None:
+                analysis_rows = [
                     row
                     for row in rows
-                    if row.snapshot_type in {"buy_available", "buy_observe"}
+                    if row.snapshot_type in self.BUY_STATS_SNAPSHOT_TYPES
                 ]
-                if await self._buy_snapshot_unchanged(
-                    session,
-                    trade_date,
-                    normalized_account_id,
-                    buy_rows,
-                ):
-                    return 0
+                analysis_snapshot_types = tuple(
+                    sorted({row.snapshot_type for row in analysis_rows})
+                )
+                if analysis_rows and analysis_snapshot_types:
+                    if await self._analysis_snapshot_unchanged(
+                        session,
+                        trade_date,
+                        normalized_account_id,
+                        analysis_snapshot_types,
+                        analysis_rows,
+                    ):
+                        return 0
             for snapshot_type, target_account_id in delete_targets:
                 await session.execute(
                     delete(ReviewSnapshot)
@@ -293,6 +331,7 @@ class ReviewSnapshotService:
         trade_date: str,
         stock_pools=None,
         buy_analysis=None,
+        add_position_analysis=None,
         account_id: Optional[str] = None,
     ) -> int:
         """安全保存分析快照，失败时只记日志。"""
@@ -302,6 +341,7 @@ class ReviewSnapshotService:
                 trade_date,
                 stock_pools=stock_pools,
                 buy_analysis=buy_analysis,
+                add_position_analysis=add_position_analysis,
                 **snapshot_kwargs,
             )
         except Exception as exc:
@@ -432,6 +472,9 @@ class ReviewSnapshotService:
             lambda: {
                 "candidate_bucket_tag": "",
                 "snapshot_type": "",
+                "trade_mode": "",
+                "add_position_decision": "",
+                "add_position_scene": "",
                 "count": 0,
                 "resolved_1d_count": 0,
                 "resolved_3d_count": 0,
@@ -452,10 +495,17 @@ class ReviewSnapshotService:
         )
 
         for row in rows:
-            key = (row.snapshot_type, row.candidate_bucket_tag or "未分层")
+            key = (
+                row.snapshot_type,
+                row.candidate_bucket_tag or "未分层",
+                row.add_position_decision or "",
+            )
             item = stats[key]
-            item["candidate_bucket_tag"] = key[1]
             item["snapshot_type"] = key[0]
+            item["candidate_bucket_tag"] = key[1]
+            item["trade_mode"] = row.trade_mode or ""
+            item["add_position_decision"] = key[2]
+            item["add_position_scene"] = row.add_position_scene or ""
             item["count"] += 1
             if row.resolved_days >= 1:
                 item["resolved_1d_count"] += 1
@@ -569,7 +619,11 @@ class ReviewSnapshotService:
             result = await session.execute(
                 select(ReviewSnapshot)
                 .where(ReviewSnapshot.trade_date.in_(trade_dates))
-                .where(ReviewSnapshot.snapshot_type.in_(["buy_available", "buy_observe", "pool_account", "pool_market"]))
+                .where(
+                    ReviewSnapshot.snapshot_type.in_(
+                        ["buy_available", "buy_observe", "pool_account", "pool_market"]
+                    )
+                )
                 .where(self._review_snapshot_scope_clause(normalized_account_id))
             )
             rows = result.scalars().all()
@@ -632,7 +686,7 @@ class ReviewSnapshotService:
             result = await session.execute(
                 select(ReviewSnapshot)
                 .where(ReviewSnapshot.trade_date.in_(trade_dates))
-                .where(ReviewSnapshot.snapshot_type.in_(["buy_available", "buy_observe"]))
+                .where(ReviewSnapshot.snapshot_type.in_(self.BUY_STATS_SNAPSHOT_TYPES))
                 .where(self._review_snapshot_scope_clause(normalized_account_id))
             )
             rows = result.scalars().all()

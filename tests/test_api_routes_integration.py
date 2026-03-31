@@ -229,14 +229,19 @@ async def test_sell_point_route_uses_lightweight_context_path(monkeypatch):
             total_count=0,
         )
 
+    async def fake_save_snapshot(*args, **kwargs):
+        return 0
+
     monkeypatch.setattr(decision.decision_context_service, "build_context", fail_build_context)
     monkeypatch.setattr(decision.decision_context_service, "get_holdings_from_db", fake_get_holdings)
     monkeypatch.setattr(decision.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(decision.market_env_service, "get_current_env", fake_market_env)
     monkeypatch.setattr(decision.sell_point_service, "analyze", fake_sell_analyze)
+    monkeypatch.setattr(decision.review_snapshot_service, "save_analysis_snapshot_safe", fake_save_snapshot)
 
     response = await decision.analyze_sell_point(
         trade_date="2026-03-28",
+        refresh=False,
         include_llm=False,
         current_account=SimpleNamespace(id="account-1"),
     )
@@ -279,21 +284,27 @@ async def test_sell_point_route_uses_short_ttl_cache(monkeypatch):
             total_count=0,
         )
 
+    async def fake_save_snapshot(*args, **kwargs):
+        return 0
+
     monkeypatch.setattr(decision, "_sell_point_page_cache", {})
     monkeypatch.setattr(decision.decision_context_service, "get_holdings_from_db", fake_get_holdings)
     monkeypatch.setattr(decision.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(decision.market_env_service, "get_current_env", fake_market_env)
     monkeypatch.setattr(decision.sell_point_service, "analyze", fake_sell_analyze)
+    monkeypatch.setattr(decision.review_snapshot_service, "save_analysis_snapshot_safe", fake_save_snapshot)
 
     current_account = SimpleNamespace(id="account-1")
     first = await decision.analyze_sell_point(
         trade_date="2026-03-28",
+        refresh=False,
         force_llm_refresh=False,
         include_llm=False,
         current_account=current_account,
     )
     second = await decision.analyze_sell_point(
         trade_date="2026-03-28",
+        refresh=False,
         force_llm_refresh=False,
         include_llm=False,
         current_account=current_account,

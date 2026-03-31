@@ -532,6 +532,10 @@ class BuyPointSopAccountContext(BaseModel):
     current_use: str = ""
     market_suitability: str = ""
     account_conclusion: str = ""
+    same_code_holding_qty: Optional[int] = None
+    same_code_cost_price: Optional[float] = None
+    same_code_market_price: Optional[float] = None
+    same_code_pnl_pct: Optional[float] = None
 
 
 class BuyPointSopDailyJudgement(BaseModel):
@@ -566,12 +570,32 @@ class BuyPointSopOrderPlan(BaseModel):
     below_no_buy: str = ""
 
 
+class BuyPointSopAddPositionDecision(BaseModel):
+    """加仓决策"""
+    eligible: bool = False
+    decision: str = ""
+    score_total: int = 0
+    trend_score: int = 0
+    position_score: int = 0
+    volume_price_score: int = 0
+    sector_sentiment_score: int = 0
+    account_risk_score: int = 0
+    trigger_scene: str = ""
+    blockers: List[str] = Field(default_factory=list)
+    reason: str = ""
+
+
 class BuyPointSopPositionAdvice(BaseModel):
     """仓位建议"""
     suggestion: str = ""
     reason: str = ""
     invalidation_level: str = ""
     invalidation_action: str = ""
+    plan_position_pct: Optional[float] = None
+    increment_position_pct: Optional[float] = None
+    max_position_pct: Optional[float] = None
+    risk_control_action: Optional[str] = None
+    exit_priority: Optional[str] = None
 
 
 class BuyPointSopExecution(BaseModel):
@@ -590,6 +614,7 @@ class BuyPointSopResponse(BaseModel):
     daily_judgement: BuyPointSopDailyJudgement
     intraday_judgement: BuyPointSopIntradayJudgement
     order_plan: BuyPointSopOrderPlan
+    add_position_decision: Optional[BuyPointSopAddPositionDecision] = None
     position_advice: BuyPointSopPositionAdvice
     execution: BuyPointSopExecution
 
@@ -642,7 +667,7 @@ class SellPointOutput(BaseModel):
     # 简评
     sell_comment: str = ""
     # 持有观察下的加仓提示
-    add_signal_tag: Optional[str] = Field(None, description="建议加仓/可关注加仓")
+    add_signal_tag: Optional[str] = Field(None, description="建议加仓/仅可小加/可关注加仓")
     add_signal_reason: Optional[str] = Field(None, description="加仓提示原因")
     # LLM 辅助解释
     llm_action_sentence: Optional[str] = None

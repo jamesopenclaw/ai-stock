@@ -305,6 +305,233 @@ async def test_buy_point_sop_service_marks_add_position_context(monkeypatch):
     assert "先看回踩后能否企稳" in result.order_plan.trigger_condition
 
 
+@pytest.mark.asyncio
+async def test_buy_point_sop_service_builds_positive_add_position_decision(monkeypatch):
+    market_env = MarketEnvOutput(
+        trade_date="2026-03-23",
+        market_env_tag=MarketEnvTag.ATTACK,
+        breakout_allowed=True,
+        risk_level=RiskLevel.LOW,
+        market_comment="进攻环境",
+        index_score=80,
+        sentiment_score=83,
+        overall_score=81.5,
+    )
+    target_input = SimpleNamespace(
+        ts_code="002463.SZ",
+        stock_name="沪电股份",
+        sector_name="元器件",
+        close=28.1,
+        open=27.7,
+        high=28.35,
+        low=27.6,
+        pre_close=27.3,
+        change_pct=2.93,
+        turnover_rate=6.8,
+        amount=160000,
+        avg_price=27.92,
+        intraday_volume_ratio=1.9,
+        vol_ratio=1.7,
+        quote_time="2026-03-23 10:35:00",
+        data_source="realtime_sina",
+    )
+    context = SimpleNamespace(
+        trade_date="2026-03-23",
+        resolved_stock_trade_date="2026-03-23",
+        market_env=market_env,
+        sector_scan=SimpleNamespace(),
+        stocks=[target_input],
+        holdings_list=[
+            {
+                "ts_code": "002463.SZ",
+                "holding_qty": 200,
+                "cost_price": 26.8,
+                "market_price": 28.1,
+                "pnl_pct": 4.85,
+                "holding_market_value": 5620,
+            }
+        ],
+        holdings=[],
+        account=SimpleNamespace(
+            total_asset=100000,
+            available_cash=70000,
+            total_position_ratio=0.28,
+            holding_count=2,
+            today_new_buy_count=0,
+        ),
+    )
+    scored_stock = _sample_scored_stock(pool_tag=StockPoolTag.HOLDING_PROCESS)
+    pools = StockPoolsOutput(
+        trade_date="2026-03-23",
+        holding_process_pool=[scored_stock],
+        total_count=1,
+    )
+
+    async def fake_build_context(*args, **kwargs):
+        return context
+
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.build_context",
+        fake_build_context,
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.merge_single_stock_into_context",
+        lambda trade_date, stocks, ts_code, candidate_source_tag="买点分析": (stocks, True),
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.build_single_stock_input",
+        lambda *args, **kwargs: target_input,
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.stock_filter_service.filter_with_context",
+        lambda *args, **kwargs: [scored_stock],
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.stock_filter_service.classify_pools",
+        lambda *args, **kwargs: pools,
+    )
+    monkeypatch.setattr(
+        buy_point_sop_service,
+        "_load_history_payload",
+        lambda *args, **kwargs: (_history_rows_with_higher_pressure(), "2026-03-23"),
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.buy_point_service._analyze_stock_buy_point",
+        lambda *args, **kwargs: SimpleNamespace(
+            buy_signal_tag=BuySignalTag.CAN_BUY,
+            buy_point_type=BuyPointType.RETRACE_SUPPORT,
+            buy_trigger_cond="回踩确认后再加",
+            buy_confirm_cond="承接后放量再起",
+            buy_invalid_cond="跌破 MA10 放弃",
+            buy_invalid_price=27.2,
+        ),
+    )
+
+    result = await buy_point_sop_service.analyze("002463.SZ", "2026-03-23")
+
+    assert result.account_context.current_use == "加仓"
+    assert result.add_position_decision is not None
+    assert result.add_position_decision.decision == "可加"
+    assert result.add_position_decision.score_total >= 8
+    assert result.position_advice.suggestion == "标准加仓"
+    assert result.position_advice.increment_position_pct == 0.2
+    assert result.position_advice.exit_priority == "先撤新增仓"
+    assert result.execution.action == "加"
+
+
+@pytest.mark.asyncio
+async def test_buy_point_sop_service_blocks_losing_add_position(monkeypatch):
+    market_env = MarketEnvOutput(
+        trade_date="2026-03-23",
+        market_env_tag=MarketEnvTag.NEUTRAL,
+        breakout_allowed=False,
+        risk_level=RiskLevel.MEDIUM,
+        market_comment="中性环境",
+        index_score=55,
+        sentiment_score=56,
+        overall_score=55.5,
+    )
+    target_input = SimpleNamespace(
+        ts_code="002463.SZ",
+        stock_name="沪电股份",
+        sector_name="元器件",
+        close=27.2,
+        open=27.0,
+        high=27.5,
+        low=26.9,
+        pre_close=27.3,
+        change_pct=-0.37,
+        turnover_rate=5.0,
+        amount=100000,
+        avg_price=27.08,
+        intraday_volume_ratio=1.2,
+        vol_ratio=1.1,
+        quote_time="2026-03-23 10:35:00",
+        data_source="realtime_sina",
+    )
+    context = SimpleNamespace(
+        trade_date="2026-03-23",
+        resolved_stock_trade_date="2026-03-23",
+        market_env=market_env,
+        sector_scan=SimpleNamespace(),
+        stocks=[target_input],
+        holdings_list=[
+            {
+                "ts_code": "002463.SZ",
+                "holding_qty": 200,
+                "cost_price": 28.0,
+                "market_price": 27.2,
+                "pnl_pct": -2.86,
+                "holding_market_value": 5440,
+            }
+        ],
+        holdings=[],
+        account=SimpleNamespace(
+            total_asset=100000,
+            available_cash=50000,
+            total_position_ratio=0.45,
+            holding_count=2,
+            today_new_buy_count=0,
+        ),
+    )
+    scored_stock = _sample_scored_stock(pool_tag=StockPoolTag.HOLDING_PROCESS)
+    scored_stock.change_pct = -0.37
+    scored_stock.close = 27.2
+    pools = StockPoolsOutput(
+        trade_date="2026-03-23",
+        holding_process_pool=[scored_stock],
+        total_count=1,
+    )
+
+    async def fake_build_context(*args, **kwargs):
+        return context
+
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.build_context",
+        fake_build_context,
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.merge_single_stock_into_context",
+        lambda trade_date, stocks, ts_code, candidate_source_tag="买点分析": (stocks, True),
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.build_single_stock_input",
+        lambda *args, **kwargs: target_input,
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.stock_filter_service.filter_with_context",
+        lambda *args, **kwargs: [scored_stock],
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.stock_filter_service.classify_pools",
+        lambda *args, **kwargs: pools,
+    )
+    monkeypatch.setattr(
+        buy_point_sop_service,
+        "_load_history_payload",
+        lambda *args, **kwargs: (_history_rows(), "2026-03-23"),
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.buy_point_service._analyze_stock_buy_point",
+        lambda *args, **kwargs: SimpleNamespace(
+            buy_signal_tag=BuySignalTag.OBSERVE,
+            buy_point_type=BuyPointType.RETRACE_SUPPORT,
+            buy_trigger_cond="先观察",
+            buy_confirm_cond="重新转强再说",
+            buy_invalid_cond="跌破就放弃",
+            buy_invalid_price=26.5,
+        ),
+    )
+
+    result = await buy_point_sop_service.analyze("002463.SZ", "2026-03-23")
+
+    assert result.add_position_decision is not None
+    assert result.add_position_decision.decision == "不加"
+    assert any("亏损" in item for item in result.add_position_decision.blockers)
+    assert result.position_advice.suggestion == "继续持有"
+    assert result.execution.action == "不加"
+
+
 def test_buy_point_sop_account_context_blocks_breakthrough_when_weak_holding_pending():
     account = SimpleNamespace(
         total_asset=100000,

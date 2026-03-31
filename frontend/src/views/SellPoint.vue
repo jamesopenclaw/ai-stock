@@ -54,6 +54,7 @@
           </div>
           <div v-if="addSignalCount" class="overview-add-signals">
             <span class="add-signal-pill add-signal-pill-strong">建议加仓 {{ addSuggestionCount }}</span>
+            <span v-if="addSmallAddCount" class="add-signal-pill add-signal-pill-watch">仅可小加 {{ addSmallAddCount }}</span>
             <span v-if="addWatchCount" class="add-signal-pill add-signal-pill-watch">可关注加仓 {{ addWatchCount }}</span>
           </div>
           <div v-if="llmStatusVisible" class="llm-status" :class="llmStatusClass">
@@ -517,8 +518,9 @@ const llmStatusText = computed(() => {
   return llmStatus.value.message || (llmStatus.value.success ? 'LLM 解释增强已生效' : 'LLM 当前未生效')
 })
 const addSuggestionCount = computed(() => (sellData.value.hold_positions || []).filter((point) => point.add_signal_tag === '建议加仓').length)
+const addSmallAddCount = computed(() => (sellData.value.hold_positions || []).filter((point) => point.add_signal_tag === '仅可小加').length)
 const addWatchCount = computed(() => (sellData.value.hold_positions || []).filter((point) => point.add_signal_tag === '可关注加仓').length)
-const addSignalCount = computed(() => addSuggestionCount.value + addWatchCount.value)
+const addSignalCount = computed(() => addSuggestionCount.value + addSmallAddCount.value + addWatchCount.value)
 
 const topActions = computed(() => {
   const ordered = [
