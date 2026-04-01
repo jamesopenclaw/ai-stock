@@ -12,6 +12,7 @@ from app.models.schemas import (
     SectorOutput,
     SectorScanResponse,
     LeaderSectorResponse,
+    HotSectorBoardsResponse,
     ApiResponse
 )
 from app.services.market_env import market_env_service
@@ -304,3 +305,26 @@ async def get_sector_top_stocks(
         )
     except Exception as e:
         return ApiResponse(code=500, message=f"获取板块 Top 股票失败: {str(e)}")
+
+
+@router.get("/hot", response_model=ApiResponse)
+async def get_hot_sectors(
+    trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
+    limit: int = Query(6, description="每类榜单返回数量", ge=1, le=20),
+    refresh: bool = Query(False, description="是否强制刷新新浪热榜缓存"),
+) -> ApiResponse:
+    """获取新浪实时热门板块、行业和概念榜。"""
+    if not trade_date:
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        result = HotSectorBoardsResponse.model_validate(
+            tushare_client.get_sina_hot_sector_boards(
+                trade_date,
+                limit=limit,
+                refresh=refresh,
+            )
+        )
+        return ApiResponse(data=result.model_dump())
+    except Exception as e:
+        return ApiResponse(code=500, message=f"获取实时热门板块失败: {str(e)}")

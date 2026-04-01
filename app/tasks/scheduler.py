@@ -27,6 +27,9 @@ class TaskScheduler:
         "notify": 2,
     }
     RETRY_DELAY_SECONDS = 1.0
+    REVIEW_OUTCOME_REFRESH_BATCH_ROWS = 20
+    REVIEW_OUTCOME_REFRESH_MAX_PASSES = 5
+    REVIEW_OUTCOME_REFRESH_SLEEP_SECONDS = 0.5
 
     def __init__(self):
         self.logger = logger
@@ -162,6 +165,20 @@ class TaskScheduler:
             "risk_alerts": risk_alerts,
             "review_snapshot_count": snapshot_count,
         }
+
+    async def refresh_review_outcomes_for_scheduler(self, limit_days: int = 20) -> int:
+        """由调度器低速补齐复盘收益，避免页面访问触发高频详情查询。"""
+        total_updated = 0
+        for _ in range(self.REVIEW_OUTCOME_REFRESH_MAX_PASSES):
+            updated = await review_snapshot_service.refresh_snapshot_outcomes(
+                limit_days=limit_days,
+                max_rows=self.REVIEW_OUTCOME_REFRESH_BATCH_ROWS,
+            )
+            total_updated += updated
+            if updated < self.REVIEW_OUTCOME_REFRESH_BATCH_ROWS:
+                break
+            await asyncio.sleep(self.REVIEW_OUTCOME_REFRESH_SLEEP_SECONDS)
+        return total_updated
 
     def _build_risk_alerts(self, market_env, account: AccountInput, buy_analysis, holdings) -> list:
         """构建风控提醒。"""
@@ -338,6 +355,12 @@ class TaskScheduler:
     async def _run_daily_pipeline(self, trade_date: str) -> dict:
         await self.sync_data(trade_date)
         report_data = await self.run_analysis(trade_date)
+        try:
+            refreshed_outcomes = await self.refresh_review_outcomes_for_scheduler()
+            report_data["review_outcome_refresh_count"] = refreshed_outcomes
+        except Exception as exc:
+            self.logger.warning(f"调度器补齐复盘收益失败: {exc}")
+            report_data["review_outcome_refresh_count"] = 0
         await self.notify_report(trade_date, report_data)
         return report_data
 

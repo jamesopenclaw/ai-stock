@@ -95,3 +95,64 @@ async def test_enqueue_task_returns_duplicate_when_existing_task_reused(monkeypa
         "mode": "daily",
         "status": "running",
     }
+
+
+@pytest.mark.asyncio
+async def test_run_daily_pipeline_refreshes_review_outcomes(monkeypatch):
+    scheduler = TaskScheduler()
+    calls = []
+
+    async def fake_sync_data(trade_date):
+        calls.append(("sync", trade_date))
+
+    async def fake_run_analysis(trade_date):
+        calls.append(("analyze", trade_date))
+        return {"trade_date": trade_date, "summary": {}}
+
+    async def fake_refresh_review_outcomes_for_scheduler(limit_days=20):
+        calls.append(("refresh_review", limit_days))
+        return 12
+
+    async def fake_notify_report(trade_date, report_data):
+        calls.append(("notify", trade_date, report_data.get("review_outcome_refresh_count")))
+
+    monkeypatch.setattr(scheduler, "sync_data", fake_sync_data)
+    monkeypatch.setattr(scheduler, "run_analysis", fake_run_analysis)
+    monkeypatch.setattr(scheduler, "refresh_review_outcomes_for_scheduler", fake_refresh_review_outcomes_for_scheduler)
+    monkeypatch.setattr(scheduler, "notify_report", fake_notify_report)
+
+    result = await scheduler._run_daily_pipeline("2026-04-01")
+
+    assert result["review_outcome_refresh_count"] == 12
+    assert calls == [
+        ("sync", "2026-04-01"),
+        ("analyze", "2026-04-01"),
+        ("refresh_review", 20),
+        ("notify", "2026-04-01", 12),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_daily_pipeline_ignores_review_outcome_refresh_failure(monkeypatch):
+    scheduler = TaskScheduler()
+
+    async def fake_sync_data(trade_date):
+        return None
+
+    async def fake_run_analysis(trade_date):
+        return {"trade_date": trade_date}
+
+    async def fake_refresh_review_outcomes_for_scheduler(limit_days=20):
+        raise RuntimeError("review refresh boom")
+
+    async def fake_notify_report(trade_date, report_data):
+        assert report_data["review_outcome_refresh_count"] == 0
+
+    monkeypatch.setattr(scheduler, "sync_data", fake_sync_data)
+    monkeypatch.setattr(scheduler, "run_analysis", fake_run_analysis)
+    monkeypatch.setattr(scheduler, "refresh_review_outcomes_for_scheduler", fake_refresh_review_outcomes_for_scheduler)
+    monkeypatch.setattr(scheduler, "notify_report", fake_notify_report)
+
+    result = await scheduler._run_daily_pipeline("2026-04-01")
+
+    assert result["review_outcome_refresh_count"] == 0

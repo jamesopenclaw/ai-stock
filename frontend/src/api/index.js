@@ -220,6 +220,14 @@ export const sectorApi = {
     }),
     { ttlMs: options.ttlMs ?? 30 * 1000, refresh: Boolean(options.refresh) }
   ),
+  hot: (tradeDate, limit = 6, options = {}) => cachedGet(
+    scopedCacheKey('sector-hot', [tradeDate, String(limit)]),
+    () => api.get('/sector/hot', {
+      params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
+      timeout: options.timeout
+    }),
+    { ttlMs: options.ttlMs ?? 30 * 1000, refresh: Boolean(options.refresh) }
+  ),
   list: (tradeDate, limit, options = {}) => api.get('/sector/list', {
     params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
     timeout: options.timeout

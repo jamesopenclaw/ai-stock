@@ -58,6 +58,9 @@ class TushareClient:
     REALTIME_VOLUME_RATIO_CACHE_TTL_SECONDS = 60
     REALTIME_MARKET_MIN_TOTAL = 3000
     REALTIME_AGGREGATE_TIMEOUT_SECONDS = 5.0
+    HOT_SECTOR_CACHE_TTL_SECONDS = 30
+    STOCK_DETAIL_INTRADAY_CACHE_TTL_SECONDS = 20
+    STOCK_DETAIL_HISTORY_CACHE_TTL_SECONDS = 6 * 60 * 60
     STOCK_BASIC_CACHE_TTL_SECONDS = 6 * 60 * 60
     EXPANDED_STOCK_LIST_CACHE_TTL_SECONDS = 5 * 60
     TRADE_DATE_RESOLUTION_CACHE_TTL_SECONDS = 6 * 60 * 60
@@ -82,10 +85,16 @@ class TushareClient:
         }
         self._realtime_market_source_cooldowns = {}
         self._realtime_market_fetch_lock = threading.Lock()
+        self._sina_hot_sector_cache = {
+            "cache_key": "",
+            "fetched_at": 0.0,
+            "snapshot": None,
+        }
         self._stock_basic_industry_cache = {
             "fetched_at": 0.0,
             "mapping": {},
         }
+        self._stock_detail_cache = {}
         self._stock_basic_snapshot_cache = {
             "fetched_at": 0.0,
             "mapping": {},
@@ -332,6 +341,137 @@ class TushareClient:
             "total": up + flat + down,
         }
 
+    def _normalize_sina_symbol(self, symbol: str) -> Optional[str]:
+        raw = str(symbol or "").strip().lower()
+        if not raw:
+            return None
+        if raw.startswith(("sh", "sz", "bj")) and raw[2:].isdigit():
+            return normalize_ts_code(f"{raw[2:]}.{raw[:2].upper()}")
+        normalized = normalize_ts_code(raw.upper())
+        return normalized or None
+
+    def _normalize_sina_plate_item(self, row: Dict[str, object], source_type: str) -> Optional[Dict[str, object]]:
+        sector_name = str(row.get("category_cn") or "").strip()
+        if not sector_name:
+            return None
+        try:
+            sector_change_pct = round(float(row.get("percent") or 0.0), 2)
+        except Exception:
+            sector_change_pct = 0.0
+        try:
+            stock_count = int(float(row.get("sym_count") or 0))
+        except Exception:
+            stock_count = 0
+        quote_time = str(row.get("time") or "").strip() or None
+        return {
+            "sector_id": str(row.get("id") or "").strip() or None,
+            "sector_name": sector_name,
+            "sector_source_type": source_type,
+            "sector_change_pct": sector_change_pct,
+            "leader_stock_name": str(row.get("lead_cname") or "").strip() or None,
+            "leader_stock_ts_code": self._normalize_sina_symbol(row.get("lead_shares")),
+            "stock_count": stock_count,
+            "quote_time": quote_time,
+            "data_source": "sina_hot_sector",
+        }
+
+    def _fetch_sina_plate_list(
+        self,
+        session: requests.Session,
+        plate: str,
+        *,
+        limit: int = 5,
+    ) -> List[Dict[str, object]]:
+        response = session.get(
+            "https://gu.sina.cn/hq/api/openapi.php/StockV2Service.getPlateList",
+            params={
+                "num": str(limit),
+                "page": "1",
+                "sort": "percent",
+                "asc": "0",
+                "dpc": "1",
+                "plate": plate,
+            },
+            timeout=self.REALTIME_AGGREGATE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        rows = (((payload or {}).get("result") or {}).get("data") or {}).get("data") or []
+        return rows if isinstance(rows, list) else []
+
+    def get_sina_hot_sector_boards(
+        self,
+        trade_date: str,
+        *,
+        limit: int = 5,
+        refresh: bool = False,
+    ) -> Dict[str, object]:
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        display_trade_date = (
+            f"{compact_trade_date[:4]}-{compact_trade_date[4:6]}-{compact_trade_date[6:8]}"
+            if len(compact_trade_date) == 8
+            else str(trade_date)
+        )
+        cache_key = f"{display_trade_date}:{int(limit)}"
+        cache = getattr(self, "_sina_hot_sector_cache", None)
+        if cache is None:
+            cache = {"cache_key": "", "fetched_at": 0.0, "snapshot": None}
+            self._sina_hot_sector_cache = cache
+
+        if (
+            not refresh
+            and cache.get("cache_key") == cache_key
+            and time_module.monotonic() - float(cache.get("fetched_at") or 0.0) <= self.HOT_SECTOR_CACHE_TTL_SECONDS
+            and cache.get("snapshot")
+        ):
+            return copy.deepcopy(cache["snapshot"])
+
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://gu.sina.cn/#/index/index",
+        })
+
+        plate_mapping = (
+            ("all", "leader", "leader_boards"),
+            ("sw2", "industry", "industry_boards"),
+            ("chgn", "concept", "concept_boards"),
+        )
+        payload: Dict[str, object] = {
+            "trade_date": display_trade_date,
+            "resolved_trade_date": display_trade_date,
+            "data_source": "sina_hot_sector",
+            "leader_boards": [],
+            "industry_boards": [],
+            "concept_boards": [],
+        }
+        quote_times: List[str] = []
+
+        for plate, source_type, target_key in plate_mapping:
+            try:
+                rows = self._fetch_sina_plate_list(session, plate, limit=limit)
+            except Exception as e:
+                logger.warning(f"新浪热门板块拉取失败（plate={plate}）: {e}")
+                rows = []
+
+            normalized_rows = []
+            for row in rows:
+                normalized = self._normalize_sina_plate_item(row, source_type)
+                if normalized:
+                    normalized_rows.append(normalized)
+                    if normalized.get("quote_time"):
+                        quote_times.append(str(normalized["quote_time"]))
+            payload[target_key] = normalized_rows
+
+        if quote_times:
+            latest_quote_time = max(quote_times)
+            payload["resolved_trade_date"] = latest_quote_time[:10]
+
+        cache["cache_key"] = cache_key
+        cache["fetched_at"] = time_module.monotonic()
+        cache["snapshot"] = copy.deepcopy(payload)
+        return payload
+
     def _fetch_sina_market_overview_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
         """通过新浪行情中心页面背后的开放接口获取市场概览。"""
         if self._is_realtime_source_in_cooldown("sina_overview"):
@@ -411,6 +551,55 @@ class TushareClient:
             data_source="realtime_sina_overview",
             status="live",
         )
+
+    def _stock_detail_cache_ttl(self, trade_date: str) -> int:
+        return (
+            self.STOCK_DETAIL_INTRADAY_CACHE_TTL_SECONDS
+            if self._should_use_realtime_quote(trade_date)
+            else self.STOCK_DETAIL_HISTORY_CACHE_TTL_SECONDS
+        )
+
+    def _get_cached_stock_detail(self, ts_code: str, trade_date: str) -> Optional[Dict]:
+        cache = getattr(self, "_stock_detail_cache", None)
+        if cache is None:
+            cache = {}
+            self._stock_detail_cache = cache
+        cache_key = f"{normalize_ts_code(ts_code)}:{str(trade_date).replace('-', '').strip()[:8]}"
+        entry = cache.get(cache_key)
+        if not entry:
+            return None
+        ttl = float(entry.get("ttl") or 0.0)
+        if ttl <= 0 or time_module.monotonic() - float(entry.get("fetched_at") or 0.0) > ttl:
+            cache.pop(cache_key, None)
+            return None
+        return copy.deepcopy(entry.get("detail"))
+
+    def _cache_stock_detail(
+        self,
+        ts_code: str,
+        request_trade_date: str,
+        detail: Dict,
+        *,
+        resolved_trade_date: Optional[str] = None,
+    ) -> Dict:
+        cache = getattr(self, "_stock_detail_cache", None)
+        if cache is None:
+            cache = {}
+            self._stock_detail_cache = cache
+
+        compact_request_trade_date = str(request_trade_date).replace("-", "").strip()[:8]
+        ttl = self._stock_detail_cache_ttl(compact_request_trade_date)
+        payload = copy.deepcopy(detail)
+        entry = {
+            "fetched_at": time_module.monotonic(),
+            "ttl": ttl,
+            "detail": payload,
+        }
+        cache[f"{normalize_ts_code(ts_code)}:{compact_request_trade_date}"] = entry
+        compact_resolved_trade_date = str(resolved_trade_date or "").replace("-", "").strip()[:8]
+        if compact_resolved_trade_date and compact_resolved_trade_date != compact_request_trade_date:
+            cache[f"{normalize_ts_code(ts_code)}:{compact_resolved_trade_date}"] = entry
+        return copy.deepcopy(payload)
 
     def _fetch_public_page_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
         """通过公开网页首屏埋点补充盘中涨跌停统计。"""
@@ -2768,10 +2957,18 @@ class TushareClient:
         """
         ts_code = normalize_ts_code(ts_code)
         trade_date = str(trade_date).replace("-", "").strip()
+        cached_detail = self._get_cached_stock_detail(ts_code, trade_date)
+        if cached_detail is not None:
+            return cached_detail
         detail = self._mock_stock_detail(ts_code)
 
         if not self.token:
-            return self._overlay_realtime_detail(detail, trade_date)
+            return self._cache_stock_detail(
+                ts_code,
+                trade_date,
+                self._overlay_realtime_detail(detail, trade_date),
+                resolved_trade_date=trade_date,
+            )
 
         try:
             effective_trade_date = self._resolve_trade_date(trade_date)
@@ -2835,12 +3032,27 @@ class TushareClient:
                         "data_source": "daily",
                     }
                 )
-                return self._overlay_realtime_detail(detail, trade_date)
+                return self._cache_stock_detail(
+                    ts_code,
+                    trade_date,
+                    self._overlay_realtime_detail(detail, trade_date),
+                    resolved_trade_date=data_trade_date,
+                )
 
-            return self._overlay_realtime_detail(detail, trade_date)
+            return self._cache_stock_detail(
+                ts_code,
+                trade_date,
+                self._overlay_realtime_detail(detail, trade_date),
+                resolved_trade_date=effective_trade_date,
+            )
         except Exception as e:
             logger.error(f"获取个股详情失败: {e}")
-            return self._overlay_realtime_detail(detail, trade_date)
+            return self._cache_stock_detail(
+                ts_code,
+                trade_date,
+                self._overlay_realtime_detail(detail, trade_date),
+                resolved_trade_date=trade_date,
+            )
 
     def get_stock_quote_map(self, ts_codes: List[str], trade_date: str) -> Dict[str, Dict]:
         """批量获取个股行情详情，供持仓页等需要快速刷新现价的场景使用。"""

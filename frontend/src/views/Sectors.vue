@@ -87,6 +87,50 @@
         </div>
       </div>
 
+      <div v-if="hasHotBoards" class="hot-boards-panel">
+        <div class="hot-boards-head">
+          <div>
+            <div class="hot-boards-title">新浪热榜</div>
+            <div class="hot-boards-desc">补一眼盘中最热的板块、行业和概念，作为外部热度参考，不替代你的板块扫描结论。</div>
+          </div>
+          <div class="hot-boards-meta">{{ hotBoardsMeta }}</div>
+        </div>
+        <div class="hot-boards-grid">
+          <section v-for="group in hotBoardGroups" :key="group.key" class="hot-board-card">
+            <div class="hot-board-card-head">
+              <div>
+                <div class="hot-board-card-title">{{ group.label }}</div>
+                <div class="hot-board-card-copy">{{ group.copy }}</div>
+              </div>
+            </div>
+            <div v-if="group.rows.length" class="hot-board-list">
+              <button
+                v-for="item in group.rows"
+                :key="`${group.key}-${item.sector_id || item.sector_name}`"
+                type="button"
+                class="hot-board-row"
+                @click="goToPage('/buy', item.sector_name)"
+              >
+                <div class="hot-board-row-main">
+                  <div class="hot-board-row-name">{{ item.sector_name }}</div>
+                  <div class="hot-board-row-meta">
+                    <span>{{ item.leader_stock_name || '暂无领涨股' }}</span>
+                    <span v-if="item.stock_count">成分 {{ item.stock_count }}</span>
+                  </div>
+                </div>
+                <div class="hot-board-row-side">
+                  <strong :class="item.sector_change_pct > 0 ? 'text-red' : 'text-green'">
+                    {{ item.sector_change_pct?.toFixed(2) }}%
+                  </strong>
+                  <span>{{ formatHotBoardTime(item.quote_time) }}</span>
+                </div>
+              </button>
+            </div>
+            <div v-else class="hot-board-empty">当前未拿到这类热榜。</div>
+          </section>
+        </div>
+      </div>
+
       <div v-if="focusRows.length" class="focus-board">
         <div class="focus-board-head">
           <div>
@@ -305,6 +349,14 @@ const leaderLoaded = ref(false)
 const activeTab = ref('mainline')
 const marketEnv = ref(null)
 const leaderData = ref(null)
+const hotBoards = ref({
+  trade_date: '',
+  resolved_trade_date: '',
+  data_source: '',
+  leader_boards: [],
+  industry_boards: [],
+  concept_boards: [],
+})
 const router = useRouter()
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
@@ -368,6 +420,39 @@ const focusRows = computed(() => (
     ...(scanData.value.sub_mainline_sectors || []).slice(0, 2),
   ].slice(0, 4)
 ))
+
+const hotBoardGroups = computed(() => ([
+  {
+    key: 'leader',
+    label: '领涨板块',
+    copy: '盘中最强的综合热度方向',
+    rows: hotBoards.value.leader_boards || [],
+  },
+  {
+    key: 'industry',
+    label: '热门行业',
+    copy: '更偏行业逻辑的强势分支',
+    rows: hotBoards.value.industry_boards || [],
+  },
+  {
+    key: 'concept',
+    label: '热门概念',
+    copy: '更偏题材情绪的热度排行',
+    rows: hotBoards.value.concept_boards || [],
+  },
+]))
+
+const hasHotBoards = computed(() => hotBoardGroups.value.some((group) => group.rows.length))
+
+const hotBoardsMeta = computed(() => {
+  const quoteTime = [
+    ...(hotBoards.value.leader_boards || []),
+    ...(hotBoards.value.industry_boards || []),
+    ...(hotBoards.value.concept_boards || []),
+  ].map((item) => item.quote_time).filter(Boolean).sort().pop()
+  if (!quoteTime) return '外部热榜实时参考'
+  return `新浪实时热榜 · ${formatHotBoardTime(quoteTime)}`
+})
 
 const summaryCards = computed(() => ([
   {
@@ -556,6 +641,16 @@ const sectorActionCopy = (row) => {
   return '先记录这个方向，但不要占用太多注意力。'
 }
 
+const formatHotBoardTime = (quoteTime) => {
+  const text = String(quoteTime || '').trim()
+  if (!text) return '未更新'
+  const timePart = text.split(' ')[1]
+  if (timePart) {
+    return `更新 ${timePart.slice(0, 5)}`
+  }
+  return text
+}
+
 const goToPage = (path, sectorName = '') => {
   if (sectorName) {
     router.push({ path, query: { focus_sector: sectorName } })
@@ -609,8 +704,9 @@ const applyScanData = (data) => {
 
 const loadSupportingData = async (tradeDate, version, options = {}) => {
   const failedModules = []
-  const [marketRes] = await Promise.allSettled([
-    marketApi.getEnv(tradeDate, { timeout: SECTORS_REQUEST_TIMEOUT })
+  const [marketRes, hotRes] = await Promise.allSettled([
+    marketApi.getEnv(tradeDate, { timeout: SECTORS_REQUEST_TIMEOUT }),
+    sectorApi.hot(tradeDate, 6, { timeout: SECTORS_REQUEST_TIMEOUT, refresh: Boolean(options.refresh) }),
   ])
 
   if (loadVersion.value !== version) {
@@ -621,6 +717,20 @@ const loadSupportingData = async (tradeDate, version, options = {}) => {
     marketEnv.value = marketRes.value.data?.data || null
   } else if (!isAbortedRequest(marketRes.reason)) {
     failedModules.push('市场环境')
+  }
+
+  if (hotRes.status === 'fulfilled') {
+    hotBoards.value = {
+      trade_date: '',
+      resolved_trade_date: '',
+      data_source: '',
+      leader_boards: [],
+      industry_boards: [],
+      concept_boards: [],
+      ...(hotRes.value.data?.data || {})
+    }
+  } else if (!isAbortedRequest(hotRes.reason)) {
+    failedModules.push('新浪热榜')
   }
 
   if (failedModules.length && !options.silent) {
@@ -658,6 +768,14 @@ const loadData = async (options = {}) => {
   loading.value = true
   marketEnv.value = null
   leaderData.value = null
+  hotBoards.value = {
+    trade_date: '',
+    resolved_trade_date: '',
+    data_source: '',
+    leader_boards: [],
+    industry_boards: [],
+    concept_boards: [],
+  }
   leaderLoaded.value = false
   leaderLoading.value = false
   try {
@@ -860,6 +978,99 @@ onMounted(() => {
   color: var(--color-text-sec);
   font-size: 12px;
 }
+.hot-boards-panel {
+  margin-bottom: 16px;
+  padding: 18px;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top left, rgba(61, 119, 255, 0.12), transparent 32%),
+    linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.04));
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.hot-boards-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.hot-boards-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.hot-boards-desc,
+.hot-boards-meta {
+  color: var(--color-text-sec);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.hot-boards-meta {
+  white-space: nowrap;
+}
+.hot-boards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.hot-board-card {
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--color-hover);
+  border: 1px solid var(--color-border);
+  display: grid;
+  gap: 12px;
+}
+.hot-board-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.hot-board-card-copy,
+.hot-board-empty,
+.hot-board-row-meta,
+.hot-board-row-side span {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+.hot-board-list {
+  display: grid;
+  gap: 8px;
+}
+.hot-board-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.02);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+.hot-board-row:hover {
+  border-color: rgba(61, 119, 255, 0.28);
+  background: rgba(61, 119, 255, 0.06);
+  transform: translateY(-1px);
+}
+.hot-board-row-main,
+.hot-board-row-side {
+  display: grid;
+  gap: 4px;
+}
+.hot-board-row-name {
+  font-weight: 700;
+}
+.hot-board-row-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.hot-board-row-side {
+  justify-items: end;
+  text-align: right;
+}
 .sector-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -975,9 +1186,18 @@ onMounted(() => {
 @media (max-width: 1100px) {
   .scan-hero,
   .scan-metrics,
+  .hot-boards-grid,
   .sector-card-grid,
   .focus-board-grid {
     grid-template-columns: 1fr;
+  }
+
+  .hot-boards-head {
+    flex-direction: column;
+  }
+
+  .hot-boards-meta {
+    white-space: normal;
   }
 }
 </style>

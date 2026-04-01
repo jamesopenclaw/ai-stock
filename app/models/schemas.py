@@ -227,6 +227,29 @@ class SectorTopStocksResponse(BaseModel):
     total: int = Field(0, description="返回数量")
 
 
+class HotSectorItem(BaseModel):
+    """实时热门板块条目"""
+    sector_id: Optional[str] = Field(None, description="外部源板块 ID")
+    sector_name: str
+    sector_source_type: str = Field(..., description="leader / industry / concept")
+    sector_change_pct: float = Field(0.0, description="板块涨跌幅(%)")
+    leader_stock_name: Optional[str] = Field(None, description="领涨股名称")
+    leader_stock_ts_code: Optional[str] = Field(None, description="领涨股 ts_code")
+    stock_count: Optional[int] = Field(None, description="成分股数量")
+    quote_time: Optional[str] = Field(None, description="行情时间")
+    data_source: Optional[str] = Field(None, description="数据源")
+
+
+class HotSectorBoardsResponse(BaseModel):
+    """实时热门板块响应"""
+    trade_date: str
+    resolved_trade_date: Optional[str] = Field(None, description="实际使用的交易日")
+    data_source: str = Field("sina_hot_sector", description="数据源")
+    leader_boards: List[HotSectorItem] = Field(default_factory=list, description="领涨板块")
+    industry_boards: List[HotSectorItem] = Field(default_factory=list, description="热门行业")
+    concept_boards: List[HotSectorItem] = Field(default_factory=list, description="热门概念")
+
+
 # ========== 个股相关 ==========
 
 class StockStrengthTag(str, Enum):

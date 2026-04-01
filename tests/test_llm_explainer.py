@@ -453,6 +453,124 @@ class TestLlmExplainer:
         assert calls["cache_write"] == 1
         assert sample_sell_response.reduce_positions[0].llm_action_sentence == "先减一部分，把仓位降下来。"
 
+    def test_sell_system_prompt_requires_sample_scope_and_t1_guardrails(self, service):
+        prompt = service.SELL_SYSTEM_PROMPT
+
+        assert "不是重新做投资判断" in prompt
+        assert "can_sell_today=false" in prompt
+        assert "今天不能卖/不能减" in prompt
+        assert "partial_sample" in prompt
+        assert "已提供样本" in prompt
+
+    def test_rewrite_sell_points_payload_marks_partial_sample_and_includes_t1_flag(
+        self,
+        service,
+        sample_sell_response,
+        monkeypatch,
+    ):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.DEFENSE
+            market_comment = "市场偏弱"
+
+        captured = {}
+
+        locked_point = SellPointOutput(
+            ts_code="300750.SZ",
+            stock_name="宁德时代",
+            market_price=201.5,
+            cost_price=198.0,
+            pnl_pct=1.7,
+            holding_qty=100,
+            holding_days=1,
+            can_sell_today=False,
+            sell_signal_tag=SellSignalTag.HOLD,
+            sell_point_type=SellPointType.INVALID_EXIT,
+            sell_trigger_cond="今日先观察，次日若走弱再处理",
+            sell_reason="刚买入未过T+1，先盯次日反馈",
+            sell_priority=SellPriority.LOW,
+            sell_comment="今天不能动，重点看次日是否转弱",
+        )
+        expanded_response = SellPointResponse(
+            trade_date="2026-03-20",
+            hold_positions=[locked_point, locked_point.model_copy(update={"ts_code": "000001.SZ", "stock_name": "平安银行"})],
+            reduce_positions=sample_sell_response.reduce_positions,
+            sell_positions=[
+                locked_point.model_copy(
+                    update={
+                        "ts_code": "600519.SH",
+                        "stock_name": "贵州茅台",
+                        "can_sell_today": True,
+                        "sell_signal_tag": SellSignalTag.SELL,
+                        "sell_point_type": SellPointType.STOP_PROFIT,
+                        "sell_priority": SellPriority.HIGH,
+                        "sell_reason": "冲高后承接不足，先兑现",
+                        "sell_trigger_cond": "冲高回落且承接转弱时卖出",
+                        "sell_comment": "别把浮盈拖回去",
+                    }
+                )
+            ],
+            total_count=4,
+        )
+
+        async def fake_runtime():
+            return {
+                "enabled": True,
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://example.com/v1",
+                "provider": "openai",
+                "max_input_items": 3,
+            }
+
+        async def fake_cache_get(*, cache_key):
+            return None
+
+        async def fake_chat_json_with_status(system_prompt, payload, **kwargs):
+            captured["system_prompt"] = system_prompt
+            captured["payload"] = payload
+            return (
+                {
+                    "page_summary": "仅根据已提供样本，先处理高优先级风险。",
+                    "action_summary": "今天能动的先按规则执行，T+1 锁定的先观察。",
+                    "notes": [],
+                },
+                type(
+                    "_Status",
+                    (),
+                    {
+                        "enabled": True,
+                        "success": True,
+                        "status": "success",
+                        "message": "LLM 解释增强已生效",
+                    },
+                )(),
+            )
+
+        async def fake_cache_upsert(**kwargs):
+            return None
+
+        monkeypatch.setattr(llm_client, "get_runtime_config", fake_runtime)
+        monkeypatch.setattr(llm_cache_service, "get_cache", fake_cache_get)
+        monkeypatch.setattr(llm_client, "chat_json_with_status", fake_chat_json_with_status)
+        monkeypatch.setattr(llm_cache_service, "upsert_cache", fake_cache_upsert)
+
+        summary, status = asyncio.run(
+            service.rewrite_sell_points_with_status(
+                expanded_response,
+                MockMarketEnv(),
+                force_refresh=True,
+            )
+        )
+
+        assert summary is not None
+        assert status.success is True
+        assert captured["system_prompt"] == service.SELL_SYSTEM_PROMPT
+        assert captured["payload"]["input_scope"] == "partial_sample"
+        assert captured["payload"]["positions_total_count"] == 4
+        assert captured["payload"]["positions_sampled_count"] == 3
+        assert len(captured["payload"]["positions"]) == 3
+        assert any(item["can_sell_today"] is False for item in captured["payload"]["positions"])
+
     def test_explain_stock_checkup_returns_disabled_status_when_llm_disabled(self, service, sample_checkup_snapshot):
         report, status = asyncio.run(
             service.explain_stock_checkup_with_status(

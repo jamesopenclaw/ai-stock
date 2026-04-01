@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from app.models.review_snapshot import ReviewSnapshot
 from app.models.schemas import (
@@ -183,3 +184,115 @@ def test_aggregate_bucket_stats_splits_add_position_decisions():
     assert stats_by_decision["可加"]["add_position_scene"] == "回踩确认"
     assert stats_by_decision["仅可小加"]["snapshot_type"] == "buy_add"
     assert stats_by_decision["仅可小加"]["trade_mode"] == "加仓"
+
+
+class _ExecuteRowsResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return list(self._rows)
+
+
+class _ExecuteScalarsResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return list(self._rows)
+
+
+class _RefreshReadSession:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def execute(self, stmt):
+        return _ExecuteRowsResult(self._rows)
+
+
+class _RefreshWriteSession:
+    def __init__(self, rows):
+        self._rows = rows
+        self.commit_called = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def execute(self, stmt):
+        return _ExecuteScalarsResult(self._rows)
+
+    async def commit(self):
+        self.commit_called = True
+
+
+@pytest.mark.asyncio
+async def test_refresh_snapshot_outcomes_batches_quote_reads_by_future_date(monkeypatch):
+    service = ReviewSnapshotService()
+    pending_rows = [
+        SimpleNamespace(id="row-1", trade_date="2026-03-20", ts_code="000001.SZ", base_price=10.0),
+        SimpleNamespace(id="row-2", trade_date="2026-03-20", ts_code="000002.SZ", base_price=20.0),
+    ]
+    stored_rows = [
+        ReviewSnapshot(id="row-1", trade_date="2026-03-20", ts_code="000001.SZ", base_price=10.0),
+        ReviewSnapshot(id="row-2", trade_date="2026-03-20", ts_code="000002.SZ", base_price=20.0),
+    ]
+    read_session = _RefreshReadSession(pending_rows)
+    write_session = _RefreshWriteSession(stored_rows)
+    sessions = iter([read_session, write_session])
+
+    monkeypatch.setattr(
+        "app.services.review_snapshot.async_session_factory",
+        lambda: next(sessions),
+    )
+    monkeypatch.setattr(
+        "app.services.review_snapshot.datetime",
+        type("FakeDatetime", (), {"now": staticmethod(lambda: SimpleNamespace(strftime=lambda fmt: "2026-04-01"))}),
+    )
+    monkeypatch.setattr(
+        "app.services.review_snapshot.market_data_gateway.get_future_trade_dates",
+        lambda trade_date, count=5: ["20260321", "20260324"],
+    )
+    quote_calls = []
+
+    def fake_get_stock_quote_map(ts_codes, trade_date):
+        quote_calls.append((tuple(sorted(ts_codes)), trade_date))
+        mapping = {
+            "20260321": {
+                "000001.SZ": {"close": 10.5},
+                "000002.SZ": {"close": 20.4},
+            },
+            "20260324": {
+                "000001.SZ": {"close": 11.2},
+                "000002.SZ": {"close": 21.0},
+            },
+        }
+        return mapping[trade_date]
+
+    monkeypatch.setattr(
+        "app.services.review_snapshot.market_data_gateway.get_stock_quote_map",
+        fake_get_stock_quote_map,
+    )
+
+    updated = await service.refresh_snapshot_outcomes(limit_days=10, max_rows=10)
+
+    assert updated == 2
+    assert quote_calls == [
+        (("000001.SZ", "000002.SZ"), "20260321"),
+        (("000001.SZ", "000002.SZ"), "20260324"),
+    ]
+    assert stored_rows[0].resolved_days == 2
+    assert stored_rows[0].return_1d == 5.0
+    assert stored_rows[1].return_1d == 2.0
+    assert write_session.commit_called is True

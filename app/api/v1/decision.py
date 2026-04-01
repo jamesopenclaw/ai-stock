@@ -613,10 +613,6 @@ async def get_review_stats(
             refresh_outcomes=refresh_outcomes,
             **review_kwargs,
         )
-        if data.get("pending_outcome_count", 0) > 0 and not data.get("refresh_in_progress"):
-            started = review_snapshot_service.ensure_background_refresh(limit_days=limit_days)
-            if started:
-                data["refresh_in_progress"] = True
         return ApiResponse(data=data)
     except Exception as e:
         return ApiResponse(code=500, message=f"获取复盘统计失败: {str(e)}")

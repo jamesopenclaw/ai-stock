@@ -380,6 +380,8 @@ class ReviewSnapshotService:
             ]
 
         updates = []
+        future_dates_by_row: Dict[str, List[str]] = {}
+        codes_by_future_date: Dict[str, set[str]] = defaultdict(set)
         for row in rows:
             if row["trade_date"] >= today:
                 continue
@@ -387,10 +389,26 @@ class ReviewSnapshotService:
             future_dates = market_data_gateway.get_future_trade_dates(compact, count=5)
             if not future_dates:
                 continue
+            future_dates_by_row[str(row["id"])] = future_dates
+            for future_date in future_dates:
+                codes_by_future_date[future_date].add(str(row["ts_code"]))
 
+        quote_maps_by_future_date: Dict[str, Dict[str, Dict]] = {}
+        for future_date, ts_codes in codes_by_future_date.items():
+            if not ts_codes:
+                continue
+            quote_maps_by_future_date[future_date] = market_data_gateway.get_stock_quote_map(
+                list(ts_codes),
+                future_date,
+            )
+
+        for row in rows:
+            future_dates = future_dates_by_row.get(str(row["id"])) or []
+            if not future_dates:
+                continue
             closes: List[float] = []
             for d in future_dates:
-                detail = market_data_gateway.get_stock_detail(row["ts_code"], d)
+                detail = (quote_maps_by_future_date.get(d) or {}).get(str(row["ts_code"])) or {}
                 close = float(detail.get("close") or 0)
                 if close > 0:
                     closes.append(close)

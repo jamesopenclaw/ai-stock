@@ -106,7 +106,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { decisionApi, marketApi, accountApi, sectorApi, getToday } from '../api'
+import { decisionApi, marketApi, accountApi, sectorApi, getToday } from '../../api'
 
 const today = ref(getToday())
 const loading = ref(false)

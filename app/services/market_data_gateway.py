@@ -41,6 +41,9 @@ class MarketDataGateway:
     def get_stock_detail(self, ts_code: str, trade_date: str) -> Dict:
         return tushare_client.get_stock_detail(ts_code, str(trade_date).replace("-", ""))
 
+    def get_stock_quote_map(self, ts_codes: List[str], trade_date: str) -> Dict[str, Dict]:
+        return tushare_client.get_stock_quote_map(ts_codes, str(trade_date).replace("-", ""))
+
     def get_expanded_stock_list_with_meta(
         self,
         trade_date: str,

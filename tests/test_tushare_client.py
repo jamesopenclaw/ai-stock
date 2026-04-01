@@ -231,6 +231,26 @@ def test_get_stock_detail_overlays_realtime_quote_when_available():
     assert detail["intraday_volume_ratio"] is not None
 
 
+def test_get_stock_detail_uses_short_cache_for_same_request():
+    """同一股票同一交易日重复读取详情时，应命中短缓存，避免重复打日线接口。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._resolve_trade_date = lambda d: "20260320"
+    client._recent_open_dates = lambda trade_date, count=5: ["20260320"]
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_detail_cache = {}
+    client._should_use_realtime_quote = lambda d: False
+    client._get_ths_concept_names_for_stock = lambda ts_code: []
+
+    first = client.get_stock_detail("002025.SZ", "2026-03-20")
+    second = client.get_stock_detail("002025.SZ", "2026-03-20")
+
+    assert client.pro.daily_calls == [("002025.SZ", "20260320", "20260320", None)]
+    assert client.pro.daily_basic_calls == [("002025.SZ", "20260320", "ts_code,turnover_rate,volume_ratio")]
+    assert second == first
+
+
 def test_get_stock_quote_map_batches_daily_query_and_realtime_overlay():
     """批量行情应共用一次 daily/daily_basic 查询，并统一叠加实时覆盖。"""
     client = TushareClient.__new__(TushareClient)
@@ -1303,3 +1323,104 @@ def test_estimate_realtime_limit_stats_handles_multi_board_rules():
     assert stats["touched_limit_up_count"] == 3
     assert stats["broken_board_count"] == 1
     assert stats["broken_board_rate"] == 33.3
+
+
+class _FakeJsonResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSinaPlateSession:
+    def __init__(self, payloads):
+        self.payloads = payloads
+        self.calls = []
+        self.headers = {}
+
+    def get(self, url, params=None, timeout=None):
+        plate = (params or {}).get("plate")
+        self.calls.append((url, dict(params or {}), timeout))
+        return _FakeJsonResponse(self.payloads[plate])
+
+
+def test_get_sina_hot_sector_boards_normalizes_payload_and_uses_cache(monkeypatch):
+    """新浪板块榜应统一归一化为热门板块结构，并复用短缓存。"""
+    client = TushareClient.__new__(TushareClient)
+    client._sina_hot_sector_cache = {
+        "cache_key": "",
+        "fetched_at": 0.0,
+        "snapshot": None,
+    }
+
+    payloads = {
+        "all": {
+            "result": {
+                "data": {
+                    "data": [
+                        {
+                            "id": "chgn_701272",
+                            "category_cn": "NPU",
+                            "percent": 5.7390527228587,
+                            "lead_cname": "芯原股份",
+                            "lead_shares": "sh688521",
+                            "sym_count": 11,
+                            "time": "2026-04-01 11:29:00",
+                        }
+                    ]
+                }
+            }
+        },
+        "sw2": {
+            "result": {
+                "data": {
+                    "data": [
+                        {
+                            "id": "sw2_370100",
+                            "category_cn": "化学制药",
+                            "percent": 4.9576022407184,
+                            "lead_cname": "广生堂",
+                            "lead_shares": "sz300436",
+                            "sym_count": 158,
+                            "time": "2026-04-01 11:29:00",
+                        }
+                    ]
+                }
+            }
+        },
+        "chgn": {
+            "result": {
+                "data": {
+                    "data": [
+                        {
+                            "id": "chgn_701272",
+                            "category_cn": "NPU",
+                            "percent": 5.7390527228587,
+                            "lead_cname": "芯原股份",
+                            "lead_shares": "sh688521",
+                            "sym_count": 11,
+                            "time": "2026-04-01 11:29:00",
+                        }
+                    ]
+                }
+            }
+        },
+    }
+    fake_session = _FakeSinaPlateSession(payloads)
+    monkeypatch.setattr("app.data.tushare_client.requests.Session", lambda: fake_session)
+
+    result = client.get_sina_hot_sector_boards("2026-04-01", limit=3, refresh=True)
+    cached = client.get_sina_hot_sector_boards("2026-04-01", limit=3, refresh=False)
+
+    assert len(fake_session.calls) == 3
+    assert result["resolved_trade_date"] == "2026-04-01"
+    assert result["leader_boards"][0]["sector_name"] == "NPU"
+    assert result["leader_boards"][0]["leader_stock_ts_code"] == "688521.SH"
+    assert result["industry_boards"][0]["sector_name"] == "化学制药"
+    assert result["industry_boards"][0]["leader_stock_ts_code"] == "300436.SZ"
+    assert result["concept_boards"][0]["sector_source_type"] == "concept"
+    assert cached == result

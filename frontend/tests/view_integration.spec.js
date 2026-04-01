@@ -25,7 +25,9 @@ const marketApi = {
 }
 
 const sectorApi = {
+  hot: vi.fn(),
   leader: vi.fn(),
+  scan: vi.fn(),
 }
 
 const accountApi = {
@@ -95,6 +97,7 @@ const mountView = async (component) => {
         BuyAnalysisDrawer: { template: '<div class="buy-analysis-drawer-stub" />' },
         SellAnalysisDrawer: { template: '<div class="sell-analysis-drawer-stub" />' },
         StockCheckupDrawer: { template: '<div class="stock-checkup-drawer-stub" />' },
+        SectorTopStocksDrawer: { template: '<div class="sector-top-stocks-drawer-stub" />' },
       },
     },
   })
@@ -121,7 +124,9 @@ beforeEach(() => {
   marketApi.getEnv.mockReset()
   marketApi.getIndex.mockReset()
   marketApi.getStats.mockReset()
+  sectorApi.hot.mockReset()
   sectorApi.leader.mockReset()
+  sectorApi.scan.mockReset()
   accountApi.profile.mockReset()
   accountApi.overview.mockReset()
   accountApi.deletePosition.mockReset()
@@ -360,6 +365,66 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('市场结论')
     expect(wrapper.text()).toContain('主要依据')
     expect(wrapper.text()).toContain('操作建议')
+  })
+
+  it('Sectors 页面会加载新浪热榜并展示热门行业和概念', async () => {
+    sectorApi.scan.mockResolvedValue(makeResponse({
+      trade_date: '2026-04-01',
+      resolved_trade_date: '2026-04-01',
+      sector_data_mode: 'hybrid',
+      threshold_profile: 'attack',
+      mainline_sectors: [
+        {
+          sector_name: '创新药',
+          sector_source_type: 'industry',
+          sector_change_pct: 4.8,
+          sector_score: 91,
+          sector_strength_rank: 1,
+          sector_mainline_tag: '主线',
+          sector_continuity_tag: '可持续',
+          sector_tradeability_tag: '可交易',
+          sector_continuity_days: 3,
+          sector_reason_tags: ['主线加强'],
+          sector_comment: '主线继续走强',
+          sector_summary_reason: '医药分支最强',
+          sector_tier: 'A',
+          sector_action_hint: '可执行',
+        },
+      ],
+      sub_mainline_sectors: [],
+      follow_sectors: [],
+      trash_sectors: [],
+      total_sectors: 1,
+    }))
+    sectorApi.hot.mockResolvedValue(makeResponse({
+      trade_date: '2026-04-01',
+      resolved_trade_date: '2026-04-01',
+      data_source: 'sina_hot_sector',
+      leader_boards: [
+        { sector_id: 'chgn_701272', sector_name: 'NPU', sector_source_type: 'leader', sector_change_pct: 5.74, leader_stock_name: '芯原股份', leader_stock_ts_code: '688521.SH', stock_count: 11, quote_time: '2026-04-01 11:29:00' },
+      ],
+      industry_boards: [
+        { sector_id: 'sw2_370100', sector_name: '化学制药', sector_source_type: 'industry', sector_change_pct: 4.96, leader_stock_name: '广生堂', leader_stock_ts_code: '300436.SZ', stock_count: 158, quote_time: '2026-04-01 11:29:00' },
+      ],
+      concept_boards: [
+        { sector_id: 'chgn_701272', sector_name: 'NPU', sector_source_type: 'concept', sector_change_pct: 5.74, leader_stock_name: '芯原股份', leader_stock_ts_code: '688521.SH', stock_count: 11, quote_time: '2026-04-01 11:29:00' },
+      ],
+    }))
+    marketApi.getEnv.mockResolvedValue(makeResponse({
+      market_env_tag: '进攻',
+      overall_score: 76.5,
+    }))
+
+    const { default: SectorsView } = await import('../src/views/Sectors.vue')
+    const wrapper = await mountView(SectorsView)
+
+    expect(sectorApi.scan).toHaveBeenCalledOnce()
+    expect(sectorApi.hot).toHaveBeenCalledOnce()
+    expect(wrapper.text()).toContain('新浪热榜')
+    expect(wrapper.text()).toContain('热门行业')
+    expect(wrapper.text()).toContain('热门概念')
+    expect(wrapper.text()).toContain('化学制药')
+    expect(wrapper.text()).toContain('芯原股份')
   })
 
   it('BuyAnalysisDrawer 会在加载失败时显示真实错误，不再只显示空态', async () => {

@@ -573,6 +573,7 @@ async def test_sell_point_marks_add_signal_from_buy_sop(monkeypatch):
 @pytest.mark.asyncio
 async def test_review_stats_uses_current_account_scope(monkeypatch):
     captured = {}
+    ensure_called = {"value": False}
 
     async def fake_get_review_stats(limit_days=10, refresh_outcomes=False, account_id=None):
         captured["limit_days"] = limit_days
@@ -583,7 +584,7 @@ async def test_review_stats_uses_current_account_scope(monkeypatch):
             "snapshot_count": 1,
             "bucket_stats": [],
             "stats_mode": "buy",
-            "pending_outcome_count": 0,
+            "pending_outcome_count": 3,
             "pending_1d_count": 0,
             "pending_3d_count": 0,
             "pending_5d_count": 0,
@@ -592,6 +593,11 @@ async def test_review_stats_uses_current_account_scope(monkeypatch):
         }
 
     monkeypatch.setattr(decision.review_snapshot_service, "get_review_stats", fake_get_review_stats)
+    monkeypatch.setattr(
+        decision.review_snapshot_service,
+        "ensure_background_refresh",
+        lambda limit_days=20: ensure_called.__setitem__("value", True),
+    )
 
     response = await decision.get_review_stats(
         limit_days=12,
@@ -611,3 +617,4 @@ async def test_review_stats_uses_current_account_scope(monkeypatch):
         "refresh_outcomes": True,
         "account_id": "acct-001",
     }
+    assert ensure_called["value"] is False

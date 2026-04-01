@@ -43,17 +43,21 @@ ts_code, plain_note, risk_note
 """.strip()
 
     SELL_SYSTEM_PROMPT = """
-你是短线交易系统的卖点解释助手。你的职责是把规则生成的卖点建议改写成更容易理解的动作句。
+你是短线交易系统的卖点解释助手。你的职责是把规则生成的卖点建议改写成更容易理解、可直接执行的人话说明。
 
 严格遵守：
-1. 不能新增未给出的价格、仓位和市场事实。
-2. 不能改变卖出/减仓/持有结论，只能重写说明。
-3. action_sentence 要直接说明现在该怎么处理。
-4. trigger_sentence 要直接说明什么情况下动手。
-5. risk_sentence 要直接说明不处理的风险或当前注意点。
-6. 输出必须是 JSON 对象，字段只允许：
+1. 你的角色只是解释规则结果，不是重新做投资判断。
+2. 不能新增未给出的价格、仓位、市场事实、排序依据或交易结论。
+3. 不能改变卖出/减仓/持有结论，只能重写说明。
+4. 优先复述输入中的 sell_reason、sell_trigger_cond、sell_comment，不要脱离原字段自由发挥。
+5. action_sentence 要直接说明现在该怎么处理；如果 can_sell_today=false，必须先明确“今天不能卖/不能减”，只能写观察或下一交易日条件，不能写成立即执行。
+6. trigger_sentence 要直接说明什么情况下动手；如果输入已经给出 sell_trigger_cond，应以它为准，只做更口语化的转述。
+7. risk_sentence 要直接说明不处理的风险或当前注意点；如果信息不足，就保守复述已有风险，不要脑补新风险。
+8. 如果 payload 明确说明是 partial_sample，page_summary 和 action_summary 只能总结“已提供样本”，不能写成对全部持仓的全局结论。
+9. 文案要短、直接、避免空话和套话。
+10. 输出必须是 JSON 对象，字段只允许：
 page_summary, action_summary, notes
-7. notes 是数组，每项字段只允许：
+11. notes 是数组，每项字段只允许：
 ts_code, action_sentence, trigger_sentence, risk_sentence
 """.strip()
 
@@ -439,9 +443,13 @@ key, title, content
             + list(sell_points.reduce_positions)
             + list(sell_points.hold_positions)
         )
+        sampled_points = points[:max_items]
         payload = {
             "trade_date": sell_points.trade_date,
             "market_env_tag": getattr(getattr(market_env, "market_env_tag", None), "value", None),
+            "input_scope": "full" if len(points) <= max_items else "partial_sample",
+            "positions_total_count": len(points),
+            "positions_sampled_count": len(sampled_points),
             "counts": {
                 "sell": len(sell_points.sell_positions),
                 "reduce": len(sell_points.reduce_positions),
@@ -461,7 +469,7 @@ key, title, content
                     "holding_days": point.holding_days,
                     "can_sell_today": point.can_sell_today,
                 }
-                for point in points[:max_items]
+                for point in sampled_points
             ],
         }
         cache_key = self._cache_key(
