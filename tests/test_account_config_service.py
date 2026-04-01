@@ -91,6 +91,7 @@ async def test_get_llm_runtime_config_uses_last_good_cache_on_db_error(monkeypat
 @pytest.mark.asyncio
 async def test_get_account_config_returns_total_asset_only(monkeypatch):
     account_row = SimpleNamespace(
+        available_cash=880000.0,
         total_asset=880000.0,
         updated_at=None,
     )
@@ -104,22 +105,22 @@ async def test_get_account_config_returns_total_asset_only(monkeypatch):
     payload = await account_config_service.get_config(account_id="account-1")
 
     assert payload == {
-        "total_asset": 880000.0,
+        "available_cash": 880000.0,
         "updated_at": None,
     }
 
 
 @pytest.mark.asyncio
-async def test_update_account_config_only_updates_total_asset(monkeypatch):
+async def test_update_account_config_only_updates_available_cash(monkeypatch):
     session = _SequencedSession([None])
     monkeypatch.setattr(account_config_service, "async_session_factory", lambda: session)
 
     payload = await account_config_service.update_config(
-        {"total_asset": 660000.0},
+        {"available_cash": 660000.0},
         account_id="account-1",
     )
 
     created = session.added[0]
     assert created.account_id == "account-1"
-    assert created.total_asset == 660000.0
-    assert payload["total_asset"] == 660000.0
+    assert created.available_cash == 660000.0
+    assert payload["available_cash"] == 660000.0

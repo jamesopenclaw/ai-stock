@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.api.v1 import account
+from app.services.portfolio_service import portfolio_service
 
 
 def test_refresh_holdings_price_uses_batch_quote_chain(monkeypatch):
@@ -170,3 +171,31 @@ async def test_build_account_overview_payload_enriches_pnl_amounts(monkeypatch):
     assert payload["profile"]["today_pnl_amount"] == 96.0
     assert payload["positions"][0]["pnl_amount"] == 24.0
     assert payload["positions"][0]["today_pnl_amount"] == 96.0
+
+
+@pytest.mark.asyncio
+async def test_build_account_input_uses_available_cash_and_auto_computes_total_asset(monkeypatch):
+    async def fake_get_account_available_cash(account_id=None):
+        return 20000.0
+
+    monkeypatch.setattr(
+        "app.services.portfolio_service.get_account_available_cash",
+        fake_get_account_available_cash,
+    )
+
+    account_input = await portfolio_service.build_account_input_from_holdings(
+        [
+            {
+                "holding_market_value": 30000.0,
+                "holding_qty": 100,
+                "market_price": 300.0,
+                "buy_date": "2026-03-20",
+            }
+        ],
+        account_id="account-1",
+        trade_date="2026-03-23",
+    )
+
+    assert account_input.available_cash == 20000.0
+    assert account_input.total_asset == 50000.0
+    assert account_input.total_position_ratio == 0.6

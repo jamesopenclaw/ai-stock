@@ -18,11 +18,15 @@ const scopedCacheKey = (prefix, parts = []) => {
   return [prefix, accountId, ...parts].join(':')
 }
 
-const readCachedValue = (cacheKey, ttlMs) => {
+const readCachedValue = (cacheKey, ttlMs, options = {}) => {
   const now = Date.now()
   const memo = memoryCache.get(cacheKey)
   if (memo && now - memo.updatedAt < ttlMs) {
-    return memo.value
+    if (options.shouldUseCachedValue && !options.shouldUseCachedValue(memo.value)) {
+      memoryCache.delete(cacheKey)
+    } else {
+      return memo.value
+    }
   }
   if (typeof window === 'undefined') return null
   const raw = window.sessionStorage.getItem(cacheKey)
@@ -30,6 +34,10 @@ const readCachedValue = (cacheKey, ttlMs) => {
   try {
     const payload = JSON.parse(raw)
     if (!payload?.updatedAt || now - Number(payload.updatedAt) >= ttlMs) {
+      window.sessionStorage.removeItem(cacheKey)
+      return null
+    }
+    if (options.shouldUseCachedValue && !options.shouldUseCachedValue(payload.value)) {
       window.sessionStorage.removeItem(cacheKey)
       return null
     }
@@ -41,7 +49,14 @@ const readCachedValue = (cacheKey, ttlMs) => {
   }
 }
 
-const writeCachedValue = (cacheKey, value) => {
+const writeCachedValue = (cacheKey, value, options = {}) => {
+  if (options.shouldCacheValue && !options.shouldCacheValue(value)) {
+    memoryCache.delete(cacheKey)
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem(cacheKey)
+    }
+    return
+  }
   const payload = { value, updatedAt: Date.now() }
   memoryCache.set(cacheKey, payload)
   if (typeof window !== 'undefined') {
@@ -52,7 +67,7 @@ const writeCachedValue = (cacheKey, value) => {
 const cachedGet = async (cacheKey, fetcher, options = {}) => {
   const ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL_MS
   if (!options.refresh) {
-    const cachedValue = readCachedValue(cacheKey, ttlMs)
+    const cachedValue = readCachedValue(cacheKey, ttlMs, options)
     if (cachedValue) {
       return { data: { data: cachedValue } }
     }
@@ -64,7 +79,7 @@ const cachedGet = async (cacheKey, fetcher, options = {}) => {
 
   const requestPromise = fetcher()
     .then((response) => {
-      writeCachedValue(cacheKey, response.data?.data ?? null)
+      writeCachedValue(cacheKey, response.data?.data ?? null, options)
       return response
     })
     .finally(() => {
@@ -253,7 +268,12 @@ export const stockApi = {
       params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
       timeout: options.timeout
     }),
-    { ttlMs: options.ttlMs ?? 30 * 1000, refresh: Boolean(options.refresh) }
+    {
+      ttlMs: options.ttlMs ?? 30 * 1000,
+      refresh: Boolean(options.refresh),
+      shouldUseCachedValue: (value) => !value?.refresh_in_progress && !value?.stale_snapshot,
+      shouldCacheValue: (value) => !value?.refresh_in_progress && !value?.stale_snapshot,
+    }
   ),
   detail: (tsCode, tradeDate) => api.get(`/stock/detail/${tsCode}`, { params: { trade_date: tradeDate } }),
   buyAnalysis: (tsCode, tradeDate, options = {}) => api.get(`/stock/buy-analysis/${encodeURIComponent(tsCode)}`, {

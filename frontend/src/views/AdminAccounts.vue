@@ -17,6 +17,11 @@
       <el-table v-loading="loading" :data="accounts" style="width: 100%">
         <el-table-column prop="account_code" label="账户编码" min-width="140" />
         <el-table-column prop="account_name" label="账户名称" min-width="160" />
+        <el-table-column label="可用金额" min-width="140">
+          <template #default="{ row }">
+            {{ formatMoney(row.available_cash) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="owner_display_name" label="归属用户" min-width="160">
           <template #default="{ row }">
             {{ row.owner_display_name || row.owner_username || '-' }}
@@ -46,6 +51,9 @@
         </el-form-item>
         <el-form-item label="账户名称">
           <el-input v-model="editForm.account_name" />
+        </el-form-item>
+        <el-form-item label="可用金额">
+          <el-input-number v-model="editForm.available_cash" :min="0" :precision="2" :step="10000" style="width: 100%" />
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="editForm.status" style="width: 100%">
@@ -114,6 +122,7 @@ const bindDialogVisible = ref(false)
 const editForm = reactive({
   account_code: '',
   account_name: '',
+  available_cash: 1000000,
   owner_user_id: '',
   status: 'active',
 })
@@ -146,6 +155,7 @@ const resetEditForm = () => {
   editingId.value = ''
   editForm.account_code = ''
   editForm.account_name = ''
+  editForm.available_cash = 1000000
   editForm.owner_user_id = ''
   editForm.status = 'active'
 }
@@ -167,6 +177,7 @@ const openEditDialog = (row) => {
   editingId.value = row.id
   editForm.account_code = row.account_code
   editForm.account_name = row.account_name
+  editForm.available_cash = Number(row.available_cash ?? 1000000)
   editForm.owner_user_id = row.owner_user_id || ''
   editForm.status = row.status
   editDialogVisible.value = true
@@ -191,6 +202,7 @@ const submitEdit = async () => {
     if (isEdit.value) {
       await adminApi.updateAccount(editingId.value, {
         account_name: editForm.account_name,
+        available_cash: Number(editForm.available_cash ?? 0),
         status: editForm.status,
       })
       ElMessage.success('账户已更新')
@@ -198,6 +210,7 @@ const submitEdit = async () => {
       await adminApi.createAccount({
         account_code: editForm.account_code,
         account_name: editForm.account_name,
+        available_cash: Number(editForm.available_cash ?? 0),
         owner_user_id: editForm.owner_user_id || null,
         status: editForm.status,
       })
@@ -239,6 +252,14 @@ const switchToAccount = (row) => {
   })
   ElMessage.success(`已切换查看账户：${row.account_name}`)
   window.location.href = '/account'
+}
+
+const formatMoney = (value) => {
+  if (value == null || Number.isNaN(Number(value))) return '-'
+  return Number(value).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
 }
 
 onMounted(() => {

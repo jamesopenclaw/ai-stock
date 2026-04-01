@@ -14,5 +14,6 @@ class AccountSetting(Base):
     __tablename__ = "account_settings"
 
     account_id = Column(String(36), ForeignKey("trading_accounts.id"), primary_key=True)
+    available_cash = Column(Float, nullable=True, default=1_000_000.0)
     total_asset = Column(Float, nullable=False, default=1_000_000.0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

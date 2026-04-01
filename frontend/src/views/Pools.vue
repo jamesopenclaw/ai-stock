@@ -26,7 +26,9 @@
             </span>
           </div>
           <div class="header-actions">
-            <el-button @click="loadData({ refresh: true })" :loading="loading">刷新</el-button>
+            <el-button @click="loadData({ refresh: true })" :loading="refreshButtonLoading">
+              {{ poolsData.refresh_in_progress ? '刷新中...' : '刷新' }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -207,6 +209,9 @@
                   </div>
                   <div class="signal-badges">
                     <el-tag size="small" type="primary">{{ stock.candidate_bucket_tag || '观察补充' }}</el-tag>
+                    <el-tag v-if="stock.direction_signal_tag" size="small" type="warning">
+                      {{ stock.direction_signal_tag }}
+                    </el-tag>
                     <el-tag v-if="stock.representative_role_tag" size="small" type="danger">
                       {{ stock.representative_role_tag }}
                     </el-tag>
@@ -247,8 +252,12 @@
                   </div>
                   <div class="quote-side">
                     <span class="quote-pair">
-                      综合分
-                      <strong>{{ formatScore(stock.stock_score) }}</strong>
+                      市场分
+                      <strong>{{ formatScore(stock.market_strength_score) }}</strong>
+                    </span>
+                    <span class="quote-pair">
+                      执行分
+                      <strong>{{ formatScore(stock.execution_opportunity_score) }}</strong>
                     </span>
                     <span class="quote-pair">
                       量比
@@ -287,9 +296,12 @@
                     <div class="decision-copy">{{ stock.why_this_pool || stock.pool_decision_summary || stock.stock_comment || '因为它能代表当天最强偏好。' }}</div>
                   </div>
                   <div class="decision-card">
-                    <div class="decision-title">未进其他池</div>
-                    <div class="decision-copy">{{ notOtherPoolsLine(stock) }}</div>
+                    <div class="decision-title">暂不执行原因</div>
+                    <div class="decision-copy">{{ watchOnlyReasonLine(stock) }}</div>
                   </div>
+                </div>
+                <div v-if="stock.miss_risk_note" class="sample-role-line">
+                  机会提醒：{{ stock.miss_risk_note }}
                 </div>
 
                 <div class="condition-section">
@@ -351,6 +363,9 @@
                     <div class="signal-code">{{ stock.ts_code }}</div>
                   </div>
                   <div class="signal-badges">
+                    <el-tag v-if="stock.direction_signal_tag" size="small" type="warning">
+                      {{ stock.direction_signal_tag }}
+                    </el-tag>
                     <el-tag v-if="stock.representative_role_tag" size="small" type="danger">
                       {{ stock.representative_role_tag }}
                     </el-tag>
@@ -392,12 +407,12 @@
                   </div>
                   <div class="quote-side">
                     <span class="quote-pair">
-                      执行分
-                      <strong>{{ formatScore(stock.account_entry_score) }}</strong>
+                      市场分
+                      <strong>{{ formatScore(stock.market_strength_score) }}</strong>
                     </span>
                     <span class="quote-pair">
-                      综合分
-                      <strong>{{ formatScore(stock.stock_score) }}</strong>
+                      执行分
+                      <strong>{{ formatScore(stock.execution_opportunity_score) }}</strong>
                     </span>
                   </div>
                 </div>
@@ -432,9 +447,12 @@
                     <div class="decision-copy">{{ stock.why_this_pool || stock.pool_decision_summary || '结构更耐打，适合持续跟踪。' }}</div>
                   </div>
                   <div class="decision-card">
-                    <div class="decision-title">为什么不是别的池</div>
-                    <div class="decision-copy">{{ notOtherPoolsLine(stock) }}</div>
+                    <div class="decision-title">暂不执行原因</div>
+                    <div class="decision-copy">{{ watchOnlyReasonLine(stock) }}</div>
                   </div>
+                </div>
+                <div v-if="stock.miss_risk_note" class="sample-role-line">
+                  机会提醒：{{ stock.miss_risk_note }}
                 </div>
 
                 <div class="condition-section">
@@ -510,6 +528,9 @@
                       </div>
                       <div class="signal-badges">
                         <el-tag size="small" type="success">{{ stock.candidate_bucket_tag || '可参与' }}</el-tag>
+                        <el-tag v-if="stock.direction_signal_tag" size="small" type="warning">
+                          {{ stock.direction_signal_tag }}
+                        </el-tag>
                         <el-tag v-if="stock.representative_role_tag" size="small" type="danger">
                           {{ stock.representative_role_tag }}
                         </el-tag>
@@ -550,12 +571,16 @@
                       </div>
                       <div class="quote-side">
                         <span class="quote-pair">
-                          执行分
-                          <strong>{{ formatScore(stock.account_entry_score) }}</strong>
+                          市场分
+                          <strong>{{ formatScore(stock.market_strength_score) }}</strong>
                         </span>
                         <span class="quote-pair">
-                          综合分
-                          <strong>{{ formatScore(stock.stock_score) }}</strong>
+                          执行分
+                          <strong>{{ formatScore(stock.execution_opportunity_score) }}</strong>
+                        </span>
+                        <span class="quote-pair">
+                          账户分
+                          <strong>{{ formatScore(stock.account_entry_score) }}</strong>
                         </span>
                       </div>
                     </div>
@@ -776,7 +801,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { stockApi, decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
@@ -800,9 +825,12 @@ const reviewStatsData = ref(null)
 const loadError = ref('')
 const POOLS_TIMEOUT = 90000
 const REVIEW_STATS_TIMEOUT = 90000
+const POOLS_REFRESH_POLL_MS = 2500
 const route = useRoute()
 const router = useRouter()
 const focusOnly = ref(false)
+let refreshPollTimer = null
+const waitingForRefreshResult = ref(false)
 
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
@@ -812,6 +840,21 @@ const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 
 const trendCount = computed(() => poolsData.value.trend_recognition_pool?.length || 0)
 const accountCount = computed(() => poolsData.value.account_executable_pool?.length || 0)
 const holdingCount = computed(() => poolsData.value.holding_process_pool?.length || 0)
+const refreshButtonLoading = computed(() => loading.value || Boolean(poolsData.value.refresh_in_progress))
+
+const stopRefreshPolling = () => {
+  if (!refreshPollTimer) return
+  window.clearTimeout(refreshPollTimer)
+  refreshPollTimer = null
+}
+
+const scheduleRefreshPolling = () => {
+  if (refreshPollTimer) return
+  refreshPollTimer = window.setTimeout(async () => {
+    refreshPollTimer = null
+    await loadData({ polling: true })
+  }, POOLS_REFRESH_POLL_MS)
+}
 
 const matchesFocusSector = (stock) => {
   if (!focusSector.value) return false
@@ -1245,11 +1288,13 @@ const priorityTagType = (value) => {
 
 const accountEntryTag = (stock) => {
   if ((stock.pool_entry_reason || '').includes('防守')) return '防守试错'
+  if ((stock.pool_entry_reason || '').includes('试错')) return '进攻试错'
   return '满足准入'
 }
 
 const accountEntryTagType = (stock) => {
   if ((stock.pool_entry_reason || '').includes('防守')) return 'warning'
+  if ((stock.pool_entry_reason || '').includes('试错')) return 'danger'
   return 'success'
 }
 
@@ -1270,6 +1315,11 @@ const notOtherPoolsLine = (stock) => {
   return reasons.join(' ')
 }
 
+const watchOnlyReasonLine = (stock) => (
+  stock.why_not_executable_but_should_watch ||
+  notOtherPoolsLine(stock)
+)
+
 const emptyPoolText = (poolKey) => {
   if (poolKey === 'account') {
     return accountEmptyReason.value
@@ -1280,12 +1330,12 @@ const emptyPoolText = (poolKey) => {
   return '暂无需要观察的强势候选'
 }
 
-const marketActionLine = (stock) => stock.stock_comment || '先观察这只票是否继续保持强势结构。'
-const marketFooterLine = (stock) => `${stock.stock_strength_tag || '中'}强度，${stock.stock_continuity_tag || '可观察'}，继续等确认。`
-const trendActionLine = (stock) => stock.why_this_pool || '这只票更适合盯结构和承接，不急着看日内最炸。'
-const trendFooterLine = (stock) => `${stock.structure_state_tag || '结构'} / ${stock.next_tradeability_tag || '待确认'}，更适合做趋势锚。`
+const marketActionLine = (stock) => stock.direction_signal_reason || stock.stock_comment || '先观察这只票是否继续保持强势结构。'
+const marketFooterLine = (stock) => `${stock.stock_strength_tag || '中'}强度 / 市场分${formatScore(stock.market_strength_score)} / 执行分${formatScore(stock.execution_opportunity_score)}`
+const trendActionLine = (stock) => stock.direction_signal_reason || stock.why_this_pool || '这只票更适合盯结构和承接，不急着看日内最炸。'
+const trendFooterLine = (stock) => `${stock.structure_state_tag || '结构'} / ${stock.next_tradeability_tag || '待确认'} / 执行分${formatScore(stock.execution_opportunity_score)}`
 const accountActionLine = (stock) => stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但仍要等买点确认。'
-const accountFooterFlag = (stock) => ((stock.pool_entry_reason || '').includes('防守') ? '轻仓试错' : '等待买点页确认')
+const accountFooterFlag = (stock) => ((stock.pool_entry_reason || '').includes('试错') ? '试错仓先行' : '等待买点页确认')
 const holdingActionLine = (stock) => `${stock.sell_signal_tag || '观察'}：${stock.sell_reason || stock.sell_comment || '继续跟踪。'}`
 const holdingFooterFlag = (stock) => (stock.can_sell_today ? '今日可卖' : 'T+1锁定')
 const hardFilterLine = (stock) => stock.hard_filter_summary || '硬过滤状态未返回'
@@ -1333,11 +1383,15 @@ const clearFocusSector = () => {
 }
 
 const loadData = async (options = {}) => {
-  loading.value = true
+  if (!options.polling) {
+    loading.value = true
+  }
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
-    loadError.value = ''
+    if (!options.polling) {
+      loadError.value = ''
+    }
     const res = await stockApi.pools(tradeDate, 50, { ...options, timeout: POOLS_TIMEOUT })
     const payload = res.data.data || {
       market_watch_pool: [],
@@ -1347,17 +1401,32 @@ const loadData = async (options = {}) => {
       resolved_trade_date: '',
       sector_scan_trade_date: '',
       sector_scan_resolved_trade_date: '',
+      refresh_in_progress: false,
+      refresh_requested: false,
+      stale_snapshot: false,
     }
     poolsData.value = payload
     activeTab.value = resolveDefaultTab()
+    if (payload.refresh_in_progress) {
+      scheduleRefreshPolling()
+    } else {
+      stopRefreshPolling()
+      if (waitingForRefreshResult.value) {
+        ElMessage.success('三池结果已刷新完成。')
+        waitingForRefreshResult.value = false
+      }
+    }
     if (options.refresh) {
       if (payload.refresh_requested) {
+        waitingForRefreshResult.value = true
         ElMessage.success('已触发后台刷新，当前先展示已有三池结果。')
       } else if (payload.refresh_in_progress) {
+        waitingForRefreshResult.value = true
         ElMessage.info('三池后台刷新仍在进行中，当前先展示已有结果。')
       }
     }
   } catch (error) {
+    stopRefreshPolling()
     loadError.value = error?.code === 'ECONNABORTED'
       ? '三池分类加载超时，后端仍在重算候选池，请稍后刷新。'
       : `三池分类加载失败：${error?.message || '未知错误'}`
@@ -1380,6 +1449,10 @@ onMounted(() => {
   displayDate.value = getLocalDate()
   loadData()
   loadReviewInsight()
+})
+
+onUnmounted(() => {
+  stopRefreshPolling()
 })
 
 watch(reviewSourceFilter, () => {

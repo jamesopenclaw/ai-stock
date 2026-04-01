@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session_factory
 from app.core.security import hash_password, require_admin
+from app.models.account_setting import AccountSetting
 from app.models.schemas import ApiResponse
 from app.models.trading_account import TradingAccount
 from app.models.user import User
@@ -46,6 +47,7 @@ class CreateAccountRequest(BaseModel):
 
     account_code: str = Field(..., min_length=1, max_length=64)
     account_name: str = Field(..., min_length=1, max_length=64)
+    available_cash: Optional[float] = Field(None, ge=0)
     owner_user_id: Optional[str] = None
     status: str = Field("active", pattern="^(active|disabled)$")
 
@@ -54,6 +56,7 @@ class UpdateAccountRequest(BaseModel):
     """更新账户请求。"""
 
     account_name: Optional[str] = Field(None, min_length=1, max_length=64)
+    available_cash: Optional[float] = Field(None, ge=0)
     status: Optional[str] = Field(None, pattern="^(active|disabled)$")
 
 
@@ -166,16 +169,28 @@ async def list_accounts() -> ApiResponse:
             select(TradingAccount).order_by(TradingAccount.created_at.asc())
         )
         accounts = account_result.scalars().all()
+        setting_result = await session.execute(select(AccountSetting))
+        settings = setting_result.scalars().all()
 
         user_result = await session.execute(select(User))
         users = user_result.scalars().all()
 
     user_lookup = {user.id: user for user in users}
+    setting_lookup = {row.account_id: row for row in settings}
     return ApiResponse(
         data={
             "accounts": [
                 {
                     **serialize_account(account),
+                    "available_cash": (
+                        float(setting_lookup[account.id].available_cash)
+                        if setting_lookup.get(account.id) and setting_lookup[account.id].available_cash is not None
+                        else (
+                            float(setting_lookup[account.id].total_asset)
+                            if setting_lookup.get(account.id)
+                            else None
+                        )
+                    ),
                     "owner_username": user_lookup.get(account.owner_user_id).username
                     if user_lookup.get(account.owner_user_id)
                     else None,
@@ -210,6 +225,10 @@ async def create_account(request: CreateAccountRequest) -> ApiResponse:
         owner_user_id=request.owner_user_id,
         status=request.status,
     )
+    if request.available_cash is not None:
+        from app.services.account_config_service import update_available_cash
+
+        await update_available_cash(float(request.available_cash), account_id=account.id)
     return ApiResponse(data={"account": serialize_account(account)})
 
 
@@ -223,11 +242,17 @@ async def update_account(account_id: str, request: UpdateAccountRequest) -> ApiR
             return ApiResponse(code=404, message="交易账户不存在")
 
         payload = request.model_dump(exclude_unset=True)
+        available_cash = payload.pop("available_cash", None)
         for key, value in payload.items():
             setattr(account, key, value)
 
         await session.commit()
         await session.refresh(account)
+
+    if available_cash is not None:
+        from app.services.account_config_service import update_available_cash
+
+        await update_available_cash(float(available_cash), account_id=account_id)
 
     return ApiResponse(data={"account": serialize_account(account)})
 

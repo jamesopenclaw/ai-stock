@@ -57,6 +57,15 @@ class SectorActionHint(str, Enum):
     AVOID = "不碰"
 
 
+class SectorRotationTag(str, Enum):
+    """板块方向状态"""
+    STRENGTHENING = "强化中"
+    ROTATING = "切换中"
+    STABLE = "稳定主线"
+    WEAKENING = "衰减中"
+    NEUTRAL = "中性"
+
+
 # ========== 市场环境相关 ==========
 
 class MarketEnvInput(BaseModel):
@@ -173,6 +182,14 @@ class SectorOutput(BaseModel):
     sector_action_hint: Optional[SectorActionHint] = Field(
         None,
         description="执行建议",
+    )
+    sector_rotation_tag: Optional[SectorRotationTag] = Field(
+        None,
+        description="方向状态",
+    )
+    sector_rotation_reason: Optional[str] = Field(
+        None,
+        description="方向状态说明",
     )
     sector_summary_reason: Optional[str] = Field(None, description="主线总结")
     sector_news_summary: Optional[str] = None
@@ -386,6 +403,8 @@ class StockOutput(BaseModel):
     vol_ratio: Optional[float] = None
     turnover_rate: float = 0.0
     stock_score: float = Field(0.0, description="综合评分")
+    market_strength_score: float = Field(0.0, description="市场强度分")
+    execution_opportunity_score: float = Field(0.0, description="执行机会分")
     account_entry_score: float = Field(0.0, description="账户执行优先级分")
     candidate_source_tag: str = Field(default="", description="候选来源标签")
     candidate_bucket_tag: str = Field(default="", description="候选分层标签")
@@ -408,6 +427,8 @@ class StockOutput(BaseModel):
     day_strength_tag: Optional[DayStrengthTag] = None
     structure_state_tag: Optional[StructureStateTag] = None
     next_tradeability_tag: Optional[NextTradeabilityTag] = None
+    direction_signal_tag: Optional[str] = None
+    direction_signal_reason: Optional[str] = None
     # 证伪条件
     stock_falsification_cond: str = ""
     # 简评
@@ -415,6 +436,8 @@ class StockOutput(BaseModel):
     why_this_pool: Optional[str] = None
     not_other_pools: List[str] = Field(default_factory=list)
     pool_decision_summary: Optional[str] = None
+    miss_risk_note: Optional[str] = None
+    why_not_executable_but_should_watch: Optional[str] = None
     hard_filter_failed_rules: List[str] = Field(default_factory=list)
     hard_filter_failed_count: int = 0
     hard_filter_pass_count: int = 0

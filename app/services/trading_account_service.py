@@ -66,6 +66,7 @@ async def ensure_account_setting(account_id: str) -> None:
         session.add(
             AccountSetting(
                 account_id=account_id,
+                available_cash=float(settings.qingzhou_total_asset),
                 total_asset=float(settings.qingzhou_total_asset),
             )
         )
@@ -93,6 +94,7 @@ async def create_trading_account(
         session.add(
             AccountSetting(
                 account_id=account.id,
+                available_cash=float(settings.qingzhou_total_asset),
                 total_asset=float(settings.qingzhou_total_asset),
             )
         )

@@ -15,6 +15,7 @@ from app.models.schemas import (
     SectorTradeabilityTag,
     SectorTierTag,
     SectorActionHint,
+    SectorRotationTag,
     SectorDimensionScores,
     SectorLeaderStock,
     SectorTopStock,
@@ -894,6 +895,7 @@ class SectorScanService:
                 change_pct,
                 market_env=market_env,
             )
+            sector_dynamic = dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {})
             dimension_scores = self._calculate_dimension_scores(
                 sector=sector,
                 source_rank=source_rank,
@@ -903,6 +905,12 @@ class SectorScanService:
                 mainline_tag=mainline_tag,
                 tradeability_tag=tradeability_tag,
                 market_env=market_env,
+            )
+            rotation_tag, rotation_reason = self._determine_sector_rotation(
+                sector=sector,
+                mainline_tag=mainline_tag,
+                continuity_days=continuity_days,
+                dynamic_metrics=sector_dynamic,
             )
             sector_tier = self._determine_sector_tier(
                 dimension_scores=dimension_scores,
@@ -928,12 +936,13 @@ class SectorScanService:
                 dimension_scores=dimension_scores,
                 sector_tier=sector_tier,
                 action_hint=action_hint,
+                rotation_tag=rotation_tag,
                 data_mode=data_mode,
             )
 
             # 生成板块简评
             comment = self._generate_sector_comment(
-                mainline_tag, continuity_tag, tradeability_tag, change_pct
+                mainline_tag, continuity_tag, tradeability_tag, change_pct, rotation_tag
             )
 
             output = SectorOutput(
@@ -953,17 +962,20 @@ class SectorScanService:
                 sector_dimension_scores=dimension_scores,
                 sector_tier=sector_tier,
                 sector_action_hint=action_hint,
+                sector_rotation_tag=rotation_tag,
+                sector_rotation_reason=rotation_reason,
                 sector_summary_reason=self._build_sector_summary_reason(
                     dimension_scores=dimension_scores,
                     sector_tier=sector_tier,
                     action_hint=action_hint,
+                    rotation_tag=rotation_tag,
                 ),
                 sector_news_summary=sector.get("sector_news_summary"),
                 sector_falsification=sector.get("sector_falsification"),
-                front_runner_count=dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {}).get("front_runner_count"),
-                follow_runner_count=dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {}).get("follow_runner_count"),
-                afternoon_rebound_strength=dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {}).get("afternoon_rebound_strength"),
-                leader_broken=dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {}).get("leader_broken"),
+                front_runner_count=sector_dynamic.get("front_runner_count"),
+                follow_runner_count=sector_dynamic.get("follow_runner_count"),
+                afternoon_rebound_strength=sector_dynamic.get("afternoon_rebound_strength"),
+                leader_broken=sector_dynamic.get("leader_broken"),
             )
 
             result.append(output)
@@ -1327,11 +1339,46 @@ class SectorScanService:
             return SectorActionHint.OBSERVE
         return SectorActionHint.AVOID
 
+    def _determine_sector_rotation(
+        self,
+        sector: Dict,
+        mainline_tag: SectorMainlineTag,
+        continuity_days: int,
+        dynamic_metrics: Optional[Dict],
+    ) -> tuple[SectorRotationTag, str]:
+        """识别方向是否强化、切换或衰减。"""
+        dynamic_metrics = dynamic_metrics or {}
+        rebound = float(dynamic_metrics.get("afternoon_rebound_strength") or 0.0)
+        front_count = int(dynamic_metrics.get("front_runner_count") or 0)
+        follow_count = int(dynamic_metrics.get("follow_runner_count") or 0)
+        leader_broken = bool(dynamic_metrics.get("leader_broken"))
+        change_pct = float(sector.get("sector_change_pct", 0) or 0.0)
+        stock_count = int(sector.get("stock_count", 0) or 0)
+
+        if leader_broken:
+            return SectorRotationTag.WEAKENING, "前排龙头承接走弱，方向有衰减迹象。"
+        if (
+            continuity_days <= 2
+            and mainline_tag in {SectorMainlineTag.MAINLINE, SectorMainlineTag.SUB_MAINLINE}
+            and (rebound >= 0.55 or front_count >= 2 or change_pct >= 2.5)
+        ):
+            return SectorRotationTag.STRENGTHENING, "午后回流和前排扩散增强，方向处于强化阶段。"
+        if (
+            continuity_days <= 2
+            and (rebound >= 0.35 or follow_count >= max(2, min(stock_count, 4)))
+            and change_pct >= 1.0
+        ):
+            return SectorRotationTag.ROTATING, "联动开始扩散，方向处于切换确认阶段。"
+        if continuity_days >= 4 and mainline_tag == SectorMainlineTag.MAINLINE:
+            return SectorRotationTag.STABLE, "连续性和强度较稳定，仍是当前主线锚。"
+        return SectorRotationTag.NEUTRAL, "方向暂无明确强化或衰减信号。"
+
     def _build_sector_summary_reason(
         self,
         dimension_scores: SectorDimensionScores,
         sector_tier: SectorTierTag,
         action_hint: SectorActionHint,
+        rotation_tag: SectorRotationTag,
     ) -> str:
         """输出一句话主线总结，便于前端流程头部展示。"""
         reasons: List[str] = []
@@ -1353,6 +1400,9 @@ class SectorScanService:
         if dimension_scores.resilience_score >= 60:
             reasons.append("抗分化较强")
 
+        if rotation_tag != SectorRotationTag.NEUTRAL:
+            reasons.append(rotation_tag.value)
+
         reasons.append(f"{sector_tier.value}类")
         reasons.append(action_hint.value)
         return "，".join(reasons[:5])
@@ -1362,7 +1412,8 @@ class SectorScanService:
         mainline_tag: SectorMainlineTag,
         continuity_tag: SectorContinuityTag,
         tradeability_tag: SectorTradeabilityTag,
-        change_pct: float
+        change_pct: float,
+        rotation_tag: SectorRotationTag,
     ) -> str:
         """生成板块简评"""
         comments = []
@@ -1391,6 +1442,9 @@ class SectorScanService:
         else:
             comments.append("不建议")
 
+        if rotation_tag != SectorRotationTag.NEUTRAL:
+            comments.append(rotation_tag.value)
+
         return "，".join(comments)
 
     def _build_sector_reason_tags(
@@ -1406,6 +1460,7 @@ class SectorScanService:
         dimension_scores: SectorDimensionScores,
         sector_tier: SectorTierTag,
         action_hint: SectorActionHint,
+        rotation_tag: SectorRotationTag,
         data_mode: str,
     ) -> List[str]:
         """构建结构化解释标签，便于前端展示与复盘。"""
@@ -1470,6 +1525,9 @@ class SectorScanService:
             tags.append("需确认")
         else:
             tags.append("暂不参与")
+
+        if rotation_tag != SectorRotationTag.NEUTRAL:
+            tags.append(rotation_tag.value)
 
         tags.append(f"{sector_tier.value}类")
         tags.append(action_hint.value)

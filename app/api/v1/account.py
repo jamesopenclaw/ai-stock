@@ -61,7 +61,7 @@ def _invalidate_account_overview_cache(account_id: str) -> None:
 
 
 async def build_account_input(holdings: List[dict], account_id: Optional[str] = None) -> AccountInput:
-    """根据实际持仓动态构建账户信息（总资产来自数据库配置）"""
+    """根据实际持仓动态构建账户信息（可用金额来自配置，总资产自动推导）"""
     return await portfolio_service.build_account_input_from_holdings(holdings, account_id=account_id)
 
 
@@ -83,7 +83,7 @@ class UpdatePositionRequest(BaseModel):
 
 class AccountConfigUpdateRequest(BaseModel):
     """账户配置更新"""
-    total_asset: Optional[float] = Field(None, gt=0, description="总资产(元)")
+    available_cash: Optional[float] = Field(None, ge=0, description="可用金额(元)")
 
 
 async def get_stock_name(ts_code: str) -> str:

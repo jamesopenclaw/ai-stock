@@ -10,7 +10,7 @@ from app.core.database import async_session_factory
 from app.data.tushare_client import normalize_ts_code, tushare_client
 from app.models.holding import Holding
 from app.models.schemas import AccountInput
-from app.services.account_config_service import get_total_asset
+from app.services.account_config_service import get_account_available_cash
 
 
 def _safe_float(val, default: float = 0.0) -> float:
@@ -143,13 +143,13 @@ class PortfolioService:
             or (h.get("holding_qty", 0) * h.get("market_price", 0))
             for h in holdings
         )
-        total_asset = await get_total_asset(account_id=account_id)
-        available_cash = max(total_asset - market_value, 0)
+        available_cash = await get_account_available_cash(account_id=account_id)
+        total_asset = market_value + max(available_cash, 0)
         total_position_ratio = market_value / total_asset if total_asset > 0 else 0
 
         return AccountInput(
             total_asset=total_asset,
-            available_cash=available_cash,
+            available_cash=max(available_cash, 0),
             total_position_ratio=round(total_position_ratio, 4),
             holding_count=len(holdings),
             today_new_buy_count=self.count_today_new_buys(

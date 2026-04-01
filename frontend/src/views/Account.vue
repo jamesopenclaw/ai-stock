@@ -232,15 +232,15 @@
     <!-- 账户配置 -->
     <el-dialog v-model="showConfigDialog" title="账户设置" width="480px">
       <el-form label-width="100px">
-        <el-form-item label="总资产">
+        <el-form-item label="可用金额">
           <el-input-number
-            v-model="configForm.totalAsset"
-            :min="0.01"
+            v-model="configForm.availableCash"
+            :min="0"
             :precision="2"
             :step="10000"
             style="width: 100%"
           />
-          <div class="form-hint">单位：元（保存后用于计算可用资金与仓位）</div>
+          <div class="form-hint">单位：元。总资产会按“可用金额 + 持仓市值”自动计算。</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -278,7 +278,7 @@ const showDeleteDialog = ref(false)
 const deleteLoading = ref(false)
 const showConfigDialog = ref(false)
 const configSaving = ref(false)
-const configForm = ref({ totalAsset: 1_000_000 })
+const configForm = ref({ availableCash: 1_000_000 })
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型' })
 const deleteTarget = ref({ id: null, ts_code: '', stock_name: '' })
@@ -550,24 +550,24 @@ const openConfigDialog = async () => {
     const res = await accountApi.getConfig()
     const payload = res.data
     const data = payload?.code === 200 ? (payload.data || {}) : {}
-    const ta = data.total_asset != null ? data.total_asset : profile.value?.total_asset ?? 1_000_000
-    configForm.value = { totalAsset: Math.max(0.01, Number(Number(ta).toFixed(2))) }
+    const availableCash = data.available_cash != null ? data.available_cash : profile.value?.available_cash ?? 1_000_000
+    configForm.value = { availableCash: Math.max(0, Number(Number(availableCash).toFixed(2))) }
   } catch {
-    const ta = profile.value?.total_asset ?? 1_000_000
-    configForm.value = { totalAsset: Math.max(0.01, Number(Number(ta).toFixed(2))) }
+    const availableCash = profile.value?.available_cash ?? 1_000_000
+    configForm.value = { availableCash: Math.max(0, Number(Number(availableCash).toFixed(2))) }
   }
   showConfigDialog.value = true
 }
 
 const saveAccountConfig = async () => {
-  const total_asset = configForm.value.totalAsset
-  if (total_asset == null || total_asset <= 0) {
-    ElMessage.warning('总资产必须大于 0 元')
+  const available_cash = configForm.value.availableCash
+  if (available_cash == null || available_cash < 0) {
+    ElMessage.warning('可用金额不能小于 0 元')
     return
   }
   configSaving.value = true
   try {
-    const res = await accountApi.updateConfig({ total_asset })
+    const res = await accountApi.updateConfig({ available_cash })
     const payload = res.data
     if (payload.code === 200) {
       ElMessage.success('保存成功')

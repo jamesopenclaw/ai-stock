@@ -26,6 +26,7 @@ from app.models.schemas import (
     SectorTradeabilityTag,
     SectorTierTag,
     SectorActionHint,
+    SectorRotationTag,
     SectorTopStock,
 )
 from app.services.sector_scan import SectorScanService
@@ -240,6 +241,33 @@ class TestSectorScan:
         assert "题材口径" in sector.sector_reason_tags
         assert "连续性待确认" in sector.sector_reason_tags
         assert "需确认" in sector.sector_reason_tags
+
+    def test_sector_outputs_rotation_state(self, service):
+        sectors = [
+            {
+                "sector_name": "低空经济",
+                "sector_change_pct": 2.6,
+                "sector_source_type": "concept",
+                "stock_count": 7,
+                "sector_turnover": 180,
+            },
+        ]
+
+        service._build_dynamic_sector_metrics = lambda trade_date: {
+            ("低空经济", "concept"): {
+                "front_runner_count": 2,
+                "follow_runner_count": 4,
+                "afternoon_rebound_strength": 0.72,
+                "leader_broken": False,
+            }
+        }
+
+        scored = service._score_sectors(sectors, trade_date="2026-03-28")
+        sector = scored[0]
+
+        assert sector.sector_rotation_tag == SectorRotationTag.STRENGTHENING
+        assert sector.sector_rotation_reason
+        assert SectorRotationTag.STRENGTHENING.value in sector.sector_reason_tags
 
     def test_sector_outputs_dimension_scores_tier_and_action(self, service):
         """

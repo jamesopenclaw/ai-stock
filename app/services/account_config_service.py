@@ -47,8 +47,11 @@ def _serialize_platform_config(row: AccountConfig) -> Dict[str, Any]:
 
 
 def _serialize_account_setting(row: AccountSetting) -> Dict[str, Any]:
+    available_cash = row.available_cash
+    if available_cash is None:
+        available_cash = float(row.total_asset)
     return {
-        "total_asset": float(row.total_asset),
+        "available_cash": float(available_cash),
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
@@ -127,12 +130,12 @@ def _apply_platform_config_update(
 def _apply_account_setting_update(
     row: AccountSetting,
     *,
-    total_asset: Optional[float] = None,
+    available_cash: Optional[float] = None,
 ) -> None:
-    if total_asset is not None:
-        if total_asset <= 0:
-            raise ValueError("总资产必须大于 0")
-        row.total_asset = float(total_asset)
+    if available_cash is not None:
+        if available_cash < 0:
+            raise ValueError("可用金额不能小于 0")
+        row.available_cash = float(available_cash)
     row.updated_at = datetime.utcnow()
 
 
@@ -153,17 +156,20 @@ async def _get_singleton_config(session) -> Optional[AccountConfig]:
 def _build_account_setting(account_id: str) -> AccountSetting:
     return AccountSetting(
         account_id=account_id,
+        available_cash=float(settings.qingzhou_total_asset),
         total_asset=float(settings.qingzhou_total_asset),
         updated_at=datetime.utcnow(),
     )
 
 
-async def get_total_asset(account_id: Optional[str] = None) -> float:
-    """读取账户总资产。"""
+async def get_account_available_cash(account_id: Optional[str] = None) -> float:
+    """读取账户可用资金配置。"""
     async with async_session_factory() as session:
         if account_id:
             row = await _get_account_setting(session, account_id)
             if row is not None:
+                if row.available_cash is not None:
+                    return float(row.available_cash)
                 return float(row.total_asset)
 
         row = await _get_singleton_config(session)
@@ -173,14 +179,14 @@ async def get_total_asset(account_id: Optional[str] = None) -> float:
 
 
 async def get_config(account_id: Optional[str] = None) -> Dict[str, Any]:
-    """返回账户配置。账户维度仅暴露总资产；系统级 LLM 配置走单例表。"""
+    """返回账户配置。账户维度仅暴露可用资金；系统级 LLM 配置走单例表。"""
     async with async_session_factory() as session:
         if account_id:
             row = await _get_account_setting(session, account_id)
             if row is not None:
                 return _serialize_account_setting(row)
             return {
-                "total_asset": float(settings.qingzhou_total_asset),
+                "available_cash": float(settings.qingzhou_total_asset),
                 "updated_at": None,
             }
 
@@ -210,7 +216,7 @@ async def get_llm_runtime_config(account_id: Optional[str] = None) -> Dict[str, 
 
 
 async def update_config(payload: Dict[str, Any], account_id: Optional[str] = None) -> Dict[str, Any]:
-    """更新账户配置。账户维度仅支持总资产；系统级维度支持 LLM 配置。"""
+    """更新账户配置。账户维度仅支持可用资金；系统级维度支持 LLM 配置。"""
     global _last_good_llm_runtime_config
     async with async_session_factory() as session:
         if account_id:
@@ -221,7 +227,7 @@ async def update_config(payload: Dict[str, Any], account_id: Optional[str] = Non
 
             _apply_account_setting_update(
                 row,
-                total_asset=payload.get("total_asset"),
+                available_cash=payload.get("available_cash"),
             )
 
             await session.commit()
@@ -272,3 +278,8 @@ async def update_config(payload: Dict[str, Any], account_id: Optional[str] = Non
 async def update_total_asset(total_asset: float, account_id: Optional[str] = None) -> Dict[str, Any]:
     """兼容旧接口：仅更新总资产。"""
     return await update_config({"total_asset": total_asset}, account_id=account_id)
+
+
+async def update_available_cash(available_cash: float, account_id: Optional[str] = None) -> Dict[str, Any]:
+    """更新账户可用资金。"""
+    return await update_config({"available_cash": available_cash}, account_id=account_id)

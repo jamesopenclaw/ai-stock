@@ -252,6 +252,100 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('机器人一号')
   })
 
+  it('Pools 页面点击刷新后会轮询直到拿到最新三池结果', async () => {
+    vi.useFakeTimers()
+    stockApi.pools
+      .mockResolvedValueOnce(
+        makeResponse({
+          trade_date: '2026-03-28',
+          resolved_trade_date: '2026-03-27',
+          market_watch_pool: [
+            {
+              ts_code: '000001.SZ',
+              stock_name: '旧观察票',
+              sector_name: '机器人',
+              stock_strength_tag: '强',
+              stock_continuity_tag: '可持续',
+              stock_tradeability_tag: '可交易',
+              stock_core_tag: '核心',
+            },
+          ],
+          trend_recognition_pool: [],
+          account_executable_pool: [],
+          holding_process_pool: [],
+          refresh_in_progress: false,
+          refresh_requested: false,
+          stale_snapshot: false,
+        })
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          trade_date: '2026-03-28',
+          resolved_trade_date: '2026-03-27',
+          market_watch_pool: [
+            {
+              ts_code: '000001.SZ',
+              stock_name: '旧观察票',
+              sector_name: '机器人',
+              stock_strength_tag: '强',
+              stock_continuity_tag: '可持续',
+              stock_tradeability_tag: '可交易',
+              stock_core_tag: '核心',
+            },
+          ],
+          trend_recognition_pool: [],
+          account_executable_pool: [],
+          holding_process_pool: [],
+          refresh_in_progress: true,
+          refresh_requested: true,
+          stale_snapshot: true,
+        })
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          trade_date: '2026-03-28',
+          resolved_trade_date: '2026-03-28',
+          market_watch_pool: [
+            {
+              ts_code: '000002.SZ',
+              stock_name: '新观察票',
+              sector_name: '机器人',
+              stock_strength_tag: '强',
+              stock_continuity_tag: '可持续',
+              stock_tradeability_tag: '可交易',
+              stock_core_tag: '核心',
+            },
+          ],
+          trend_recognition_pool: [],
+          account_executable_pool: [],
+          holding_process_pool: [],
+          refresh_in_progress: false,
+          refresh_requested: false,
+          stale_snapshot: false,
+        })
+      )
+    decisionApi.reviewStats.mockResolvedValue(makeResponse({ bucket_stats: [] }))
+
+    const { default: PoolsView } = await import('../src/views/Pools.vue')
+    const wrapper = await mountView(PoolsView)
+
+    expect(wrapper.text()).toContain('旧观察票')
+
+    const refreshButton = wrapper.findAll('button').find((node) => node.text().includes('刷新'))
+    await refreshButton.trigger('click')
+    await flushPromises()
+
+    expect(messageSuccess).toHaveBeenCalledWith('已触发后台刷新，当前先展示已有三池结果。')
+
+    await vi.advanceTimersByTimeAsync(2500)
+    await flushPromises()
+
+    expect(stockApi.pools).toHaveBeenCalledTimes(3)
+    expect(wrapper.text()).toContain('新观察票')
+    expect(messageSuccess).toHaveBeenCalledWith('三池结果已刷新完成。')
+    vi.useRealTimers()
+  })
+
   it('BuyPoint 页面会加载买点和复盘数据，并展示主执行名单', async () => {
     routeQuery = { focus_sector: '机器人' }
     decisionApi.buyPoint.mockResolvedValue(

@@ -125,7 +125,7 @@ async def test_get_stock_pools_disables_llm_summary(monkeypatch):
 
     snapshot_calls = []
 
-    async def fake_save_snapshot(trade_date, stock_pools=None, buy_analysis=None):
+    async def fake_save_snapshot(trade_date, stock_pools=None, buy_analysis=None, **kwargs):
         snapshot_calls.append(
             {
                 "trade_date": trade_date,
@@ -137,7 +137,7 @@ async def test_get_stock_pools_disables_llm_summary(monkeypatch):
 
     full_snapshot_calls = []
 
-    async def fake_save_page_snapshot(trade_date, candidate_limit, stock_pools):
+    async def fake_save_page_snapshot(trade_date, candidate_limit, stock_pools, **kwargs):
         full_snapshot_calls.append(
             {
                 "trade_date": trade_date,

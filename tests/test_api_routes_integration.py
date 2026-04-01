@@ -86,7 +86,7 @@ async def test_root_and_health_routes(client):
 async def test_account_config_route_via_testclient(client, monkeypatch):
     async def fake_get_config(account_id=None):
         return {
-            "total_asset": 500000.0,
+            "available_cash": 500000.0,
             "updated_at": None,
         }
 
@@ -97,7 +97,7 @@ async def test_account_config_route_via_testclient(client, monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["code"] == 200
-    assert payload["data"]["total_asset"] == 500000.0
+    assert payload["data"]["available_cash"] == 500000.0
 
 
 @pytest.mark.asyncio
