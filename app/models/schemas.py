@@ -177,6 +177,10 @@ class SectorOutput(BaseModel):
     sector_summary_reason: Optional[str] = Field(None, description="主线总结")
     sector_news_summary: Optional[str] = None
     sector_falsification: Optional[str] = None
+    front_runner_count: Optional[int] = Field(None, description="板块前排股数量")
+    follow_runner_count: Optional[int] = Field(None, description="板块跟风股数量")
+    afternoon_rebound_strength: Optional[float] = Field(None, description="板块午后回流力度")
+    leader_broken: Optional[bool] = Field(None, description="龙头是否失守")
 
 
 class SectorScanRequest(BaseModel):
@@ -443,6 +447,18 @@ class StockOutput(BaseModel):
     review_bias_reason: Optional[str] = Field(None, description="复盘反馈说明")
 
 
+class IntradayFeatureSet(BaseModel):
+    """盘中特征集合"""
+    above_avg_line: Optional[bool] = Field(None, description="是否站上均价线")
+    close_quality: float = Field(0.0, description="收盘位置质量")
+    pullback_ratio: float = Field(0.0, description="冲高回落比例")
+    rebound_strength: float = Field(0.0, description="反抽强度")
+    breaks_prev_low: bool = Field(False, description="是否跌破前低")
+    reclaims_avg_line: bool = Field(False, description="是否重新站回均价线")
+    afternoon_rebound: bool = Field(False, description="是否存在午后回流")
+    volume_ratio: float = Field(0.0, description="量能比率")
+
+
 # ========== 三池相关 ==========
 
 class StockPoolsOutput(BaseModel):
@@ -685,6 +701,7 @@ class SellPointOutput(BaseModel):
     # 条件
     sell_trigger_cond: str = Field(..., description="卖点触发条件")
     sell_reason: str = Field(..., description="卖出/减仓原因")
+    reduce_reason_code: Optional[str] = Field(None, description="减仓原因代码")
     # 优先级
     sell_priority: SellPriority
     # 简评
@@ -1032,6 +1049,7 @@ class StockCheckupSellView(BaseModel):
     sell_point_type: Optional[str] = None
     sell_trigger_cond: str = ""
     sell_reason: str = ""
+    reduce_reason_code: Optional[str] = None
     sell_comment: str = ""
     can_sell_today: Optional[bool] = None
 

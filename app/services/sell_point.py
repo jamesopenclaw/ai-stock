@@ -128,7 +128,7 @@ class SellPointService:
         can_sell = position.can_sell_today
 
         # 判断卖点类型和信号
-        sell_type, signal_tag, priority, reason, trigger, comment = self._determine_sell(
+        sell_type, signal_tag, priority, reason, trigger, comment, reduce_reason_code = self._determine_sell(
             position, pnl_pct, can_sell, market_env, sector_map, sector_name
         )
 
@@ -147,6 +147,7 @@ class SellPointService:
             sell_point_type=sell_type,
             sell_trigger_cond=trigger,
             sell_reason=reason,
+            reduce_reason_code=reduce_reason_code,
             sell_priority=priority,
             sell_comment=comment
         )
@@ -204,6 +205,7 @@ class SellPointService:
         sell_point.sell_reason = f"{sell_point.sell_reason}；当前仅有{position.holding_qty or 0}股，无法按一手部分减仓"
         sell_point.sell_trigger_cond = "满足原触发条件时一次卖出"
         sell_point.sell_comment = "A股最小交易单位为100股，这笔仓位没有可执行的部分减仓空间"
+        sell_point.reduce_reason_code = None
 
     def _apply_sector_resonance_adjustment(
         self,
@@ -237,6 +239,23 @@ class SellPointService:
                 or sector.sector_tradeability_tag == SectorTradeabilityTag.NOT_RECOMMENDED
             )
         )
+        dynamic_supportive = bool(
+            sector
+            and (
+                int(getattr(sector, "front_runner_count", 0) or 0) >= 2
+                or int(getattr(sector, "follow_runner_count", 0) or 0) >= 4
+                or float(getattr(sector, "afternoon_rebound_strength", 0) or 0) >= 0.55
+            )
+            and not bool(getattr(sector, "leader_broken", False))
+        )
+        dynamic_weak = bool(
+            sector
+            and bool(getattr(sector, "leader_broken", False))
+            and int(getattr(sector, "front_runner_count", 0) or 0) <= 0
+            and float(getattr(sector, "afternoon_rebound_strength", 0) or 0) < 0.35
+        )
+        sector_supportive = sector_supportive or dynamic_supportive
+        sector_weak = sector_weak or dynamic_weak
 
         # 原买入逻辑失效时优先退出，这是最强约束。
         if reason_invalid:
@@ -246,6 +265,7 @@ class SellPointService:
             sell_point.sell_reason = "原买入理由已经失效，优先退出"
             sell_point.sell_trigger_cond = "下一次反弹不能转强时卖出"
             sell_point.sell_comment = "这类票不再适合继续拿"
+            sell_point.reduce_reason_code = None
             return
 
         # 已经明确触发止损/止盈卖出的，不再被板块规则覆盖。
@@ -262,10 +282,12 @@ class SellPointService:
                     sell_point.sell_reason = "市场偏弱，板块也没有支撑，亏损已接近止损线"
                     sell_point.sell_trigger_cond = "反弹无力时先退出"
                     sell_point.sell_comment = "弱市里不要硬扛弱板块"
+                    sell_point.reduce_reason_code = None
                 else:
                     sell_point.sell_signal_tag = SellSignalTag.REDUCE
                     sell_point.sell_point_type = SellPointType.REDUCE_POSITION
                     sell_point.sell_priority = SellPriority.MEDIUM
+                    sell_point.reduce_reason_code = "env_weak"
                     if position.pnl_pct > 0:
                         sell_point.sell_reason = "市场偏弱，这只票所在板块也不强，先落一部分利润"
                         sell_point.sell_trigger_cond = "冲高不能放量续强时减仓"
@@ -280,6 +302,7 @@ class SellPointService:
                 sell_point.sell_signal_tag = SellSignalTag.REDUCE if position.pnl_pct > 0 else SellSignalTag.HOLD
                 sell_point.sell_point_type = SellPointType.REDUCE_POSITION if position.pnl_pct > 0 else SellPointType.INVALID_EXIT
                 sell_point.sell_priority = SellPriority.MEDIUM if position.pnl_pct > 0 else SellPriority.LOW
+                sell_point.reduce_reason_code = "rebound_exit" if position.pnl_pct > 0 else None
                 sell_point.sell_reason = (
                     "当前没找到明确板块共振，先收缩仓位等待确认"
                     if position.pnl_pct > 0
@@ -299,9 +322,30 @@ class SellPointService:
                 sell_point.sell_signal_tag = SellSignalTag.REDUCE
                 sell_point.sell_point_type = SellPointType.REDUCE_POSITION
                 sell_point.sell_priority = SellPriority.MEDIUM
+                sell_point.reduce_reason_code = "env_weak"
                 sell_point.sell_reason = "板块走弱了，先降一点仓位更稳妥"
                 sell_point.sell_trigger_cond = "日内反弹无量时减仓"
                 sell_point.sell_comment = "先降风险敞口，等板块重新转强"
+
+    def _decision(
+        self,
+        sell_type: SellPointType,
+        signal_tag: SellSignalTag,
+        priority: SellPriority,
+        reason: str,
+        trigger: str,
+        comment: str,
+        reduce_reason_code: str | None = None,
+    ) -> tuple:
+        return (
+            sell_type,
+            signal_tag,
+            priority,
+            reason,
+            trigger,
+            comment,
+            reduce_reason_code,
+        )
 
     def _determine_sell(
         self,
@@ -334,6 +378,23 @@ class SellPointService:
                 or sector.sector_tradeability_tag == SectorTradeabilityTag.NOT_RECOMMENDED
             )
         )
+        dynamic_supportive = bool(
+            sector
+            and (
+                int(getattr(sector, "front_runner_count", 0) or 0) >= 2
+                or int(getattr(sector, "follow_runner_count", 0) or 0) >= 4
+                or float(getattr(sector, "afternoon_rebound_strength", 0) or 0) >= 0.55
+            )
+            and not bool(getattr(sector, "leader_broken", False))
+        )
+        dynamic_weak = bool(
+            sector
+            and bool(getattr(sector, "leader_broken", False))
+            and int(getattr(sector, "front_runner_count", 0) or 0) <= 0
+            and float(getattr(sector, "afternoon_rebound_strength", 0) or 0) < 0.35
+        )
+        sector_supportive = sector_supportive or dynamic_supportive
+        sector_weak = sector_weak or dynamic_weak
         structure_strong = (
             market_env.market_env_tag == MarketEnvTag.ATTACK
             and (sector_supportive or reason_strong)
@@ -342,12 +403,13 @@ class SellPointService:
         structure_weak = (
             sector_weak
             or (market_env.market_env_tag == MarketEnvTag.DEFENSE and not sector_supportive)
-            or (reason_tactical and market_env.market_env_tag != MarketEnvTag.ATTACK)
         )
+        if reason_tactical and market_env.market_env_tag == MarketEnvTag.DEFENSE:
+            structure_weak = True
 
         # 0. 原始逻辑失效优先退出
         if reason_invalid:
-            return (
+            return self._decision(
                 SellPointType.INVALID_EXIT,
                 SellSignalTag.SELL,
                 SellPriority.HIGH,
@@ -359,7 +421,7 @@ class SellPointService:
         # 1. 止损判断（优先）
         if pnl_pct <= self.STOP_LOSS_PCT:
             # 严重亏损 -> 止损
-            return (
+            return self._decision(
                 SellPointType.STOP_LOSS,
                 SellSignalTag.SELL,
                 SellPriority.HIGH,
@@ -371,15 +433,16 @@ class SellPointService:
         # 2. T+1 约束处理
         if not can_sell:
             if pnl_pct >= self.STOP_PROFIT_PCT and structure_weak:
-                return (
+                return self._decision(
                     SellPointType.REDUCE_POSITION,
                     SellSignalTag.OBSERVE,
                     SellPriority.MEDIUM,
                     f"盈利{pnl_pct:.1f}%，但T+1锁定，明天优先处理",
                     "次日若冲高不能续强则先减仓",
                     "今天动不了，先把减仓计划定好",
+                    "protect_profit" if pnl_pct > 0 else "structure_loose",
                 )
-            return (
+            return self._decision(
                 SellPointType.INVALID_EXIT,
                 SellSignalTag.OBSERVE,
                 SellPriority.LOW,
@@ -391,19 +454,20 @@ class SellPointService:
         # 3. 市场环境恶化且结构偏弱 -> 先减仓
         if market_env.market_env_tag == MarketEnvTag.DEFENSE and pnl_pct < 0:
             if pnl_pct <= self.STOP_LOSS_PCT_STRICT or structure_weak:
-                return (
+                return self._decision(
                     SellPointType.REDUCE_POSITION,
                     SellSignalTag.REDUCE,
                     SellPriority.MEDIUM,
                     f"市场偏弱，当前亏损{abs(pnl_pct):.1f}%，先减仓控制风险",
                     "反弹无力时先减一部分",
-                    "弱市先降仓，不必急着一次卖完"
+                    "弱市先降仓，不必急着一次卖完",
+                    "env_weak",
                 )
 
         # 4. 结构走弱后的止盈/减仓
         if pnl_pct >= self.STOP_PROFIT_PCT:
-            if structure_weak and market_env.market_env_tag == MarketEnvTag.DEFENSE:
-                return (
+            if structure_weak and market_env.market_env_tag == MarketEnvTag.DEFENSE and not sector_supportive:
+                return self._decision(
                     SellPointType.STOP_PROFIT,
                     SellSignalTag.SELL,
                     SellPriority.HIGH,
@@ -412,31 +476,33 @@ class SellPointService:
                     "保护盈利，市场转弱"
                 )
             if structure_weak:
-                return (
+                return self._decision(
                     SellPointType.STOP_PROFIT,
                     SellSignalTag.REDUCE,
                     SellPriority.MEDIUM,
                     f"盈利{pnl_pct:.1f}%，但结构性价比在下降，先落一部分利润",
                     "冲高不能续强时先减仓",
-                    "先把利润装进口袋，保留继续走强的仓位"
+                    "先把利润装进口袋，保留继续走强的仓位",
+                    "env_weak" if market_env.market_env_tag == MarketEnvTag.DEFENSE else "protect_profit",
                 )
 
         # 5. 减仓判断：不再只按盈利阈值，需叠加结构走弱
         if pnl_pct >= self.REDUCE_PCT:
             if structure_weak:
-                return (
+                return self._decision(
                     SellPointType.REDUCE_POSITION,
                     SellSignalTag.REDUCE,
                     SellPriority.MEDIUM,
                     f"盈利{pnl_pct:.1f}%，结构边际走弱，适合减仓锁定部分利润",
                     "反弹到压力位不能放量续强时减仓",
-                    "先降一点仓位，避免利润回撤"
+                    "先降一点仓位，避免利润回撤",
+                    "structure_loose",
                 )
 
         # 6. 持有观察或保护利润
         if pnl_pct > 0:
             if structure_strong:
-                return (
+                return self._decision(
                     SellPointType.INVALID_EXIT,
                     SellSignalTag.HOLD,
                     SellPriority.LOW,
@@ -450,15 +516,16 @@ class SellPointService:
                 and not sector_supportive
                 and not reason_strong
             ):
-                return (
+                return self._decision(
                     SellPointType.REDUCE_POSITION,
                     SellSignalTag.REDUCE,
                     SellPriority.MEDIUM,
                     f"盈利{pnl_pct:.1f}%，先上移保护位并减一部分更稳妥",
                     "冲高回落或跌破日内承接时减仓",
-                    "环境一般时，先锁一部分利润"
+                    "环境一般时，先锁一部分利润",
+                    "protect_profit",
                 )
-            return (
+            return self._decision(
                 SellPointType.INVALID_EXIT,
                 SellSignalTag.HOLD,
                 SellPriority.LOW,
@@ -469,7 +536,7 @@ class SellPointService:
 
         # 7. 小幅亏损处理
         if market_env.market_env_tag == MarketEnvTag.ATTACK and not structure_weak:
-            return (
+            return self._decision(
                 SellPointType.INVALID_EXIT,
                 SellSignalTag.HOLD,
                 SellPriority.LOW,
@@ -478,7 +545,7 @@ class SellPointService:
                 "这是正常波动，不急着机械处理"
             )
         if sector_supportive and pnl_pct > self.STOP_LOSS_PCT_STRICT:
-            return (
+            return self._decision(
                 SellPointType.INVALID_EXIT,
                 SellSignalTag.OBSERVE,
                 SellPriority.LOW,
@@ -486,13 +553,14 @@ class SellPointService:
                 "跌破关键支撑再减仓",
                 "先区分正常分歧还是走弱确认"
             )
-        return (
+        return self._decision(
             SellPointType.REDUCE_POSITION,
             SellSignalTag.REDUCE,
             SellPriority.MEDIUM,
             f"亏损{pnl_pct:.1f}%，结构没有明显优势，先减仓控制回撤",
             "反弹无力或跌破支撑时减仓",
-            "先把风险敞口降下来"
+            "先把风险敞口降下来",
+            "structure_loose",
         )
 
 

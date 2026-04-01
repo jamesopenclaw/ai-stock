@@ -59,6 +59,7 @@ ts_code, plain_note, risk_note
 page_summary, action_summary, notes
 11. notes 是数组，每项字段只允许：
 ts_code, action_sentence, trigger_sentence, risk_sentence
+12. 当 sell_signal_tag=减仓 时，优先表述为“强度下降/结构分歧/先做防守”，不要使用“日线已坏/必须离场”这类只适用于卖出结论的措辞。
 """.strip()
 
     STOCK_CHECKUP_SYSTEM_PROMPT = """
@@ -463,6 +464,7 @@ key, title, content
                     "sell_point_type": getattr(point.sell_point_type, "value", point.sell_point_type),
                     "sell_priority": getattr(point.sell_priority, "value", point.sell_priority),
                     "sell_reason": point.sell_reason,
+                    "reduce_reason_code": point.reduce_reason_code,
                     "sell_trigger_cond": point.sell_trigger_cond,
                     "sell_comment": point.sell_comment,
                     "pnl_pct": point.pnl_pct,

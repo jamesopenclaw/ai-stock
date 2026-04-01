@@ -144,6 +144,7 @@ class StockCheckupService:
                     sell_point_type=sell_point.sell_point_type.value,
                     sell_trigger_cond=sell_point.sell_trigger_cond,
                     sell_reason=sell_point.sell_reason,
+                    reduce_reason_code=sell_point.reduce_reason_code,
                     sell_comment=sell_point.sell_comment,
                     can_sell_today=sell_point.can_sell_today,
                 )

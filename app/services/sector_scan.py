@@ -758,6 +758,79 @@ class SectorScanService:
             logger.warning(f"挑选板块风向标失败: {e}")
             return []
 
+    def _build_dynamic_sector_metrics(
+        self,
+        trade_date: Optional[str],
+    ) -> Dict[tuple[str, str], Dict]:
+        """基于当日个股快照补充板块动态联动指标。"""
+        if not trade_date:
+            return {}
+        try:
+            payload = self.client.get_expanded_stock_list_with_meta(
+                trade_date.replace("-", ""),
+                top_gainers=300,
+            )
+            rows = payload.get("rows") or []
+        except Exception as exc:
+            logger.warning(f"构建板块动态联动指标失败: {exc}")
+            return {}
+
+        metrics: Dict[tuple[str, str], Dict] = {}
+        grouped: Dict[tuple[str, str], List[Dict]] = {}
+        for row in rows:
+            sector_name = str(row.get("sector_name") or "").strip()
+            if not sector_name:
+                continue
+            key = (sector_name, "industry")
+            grouped.setdefault(key, []).append(row)
+
+        for key, items in grouped.items():
+            sorted_rows = sorted(
+                items,
+                key=lambda row: (
+                    float(row.get("change_pct") or 0),
+                    float(row.get("amount") or 0),
+                ),
+                reverse=True,
+            )
+            front_count = sum(1 for row in items if float(row.get("change_pct") or 0) >= 5.0)
+            follow_count = sum(1 for row in items if float(row.get("change_pct") or 0) >= 1.5)
+            rebound_samples = 0
+            rebound_hits = 0
+            for row in items:
+                close = float(row.get("close") or 0)
+                open_price = float(row.get("open") or 0)
+                avg_price = float(row.get("avg_price") or 0)
+                if close <= 0 or open_price <= 0:
+                    continue
+                rebound_samples += 1
+                if close >= open_price and (avg_price <= 0 or close >= avg_price):
+                    rebound_hits += 1
+            afternoon_rebound_strength = (
+                round(rebound_hits / rebound_samples, 3) if rebound_samples > 0 else 0.0
+            )
+
+            leader_broken = False
+            leader = sorted_rows[0] if sorted_rows else None
+            if leader:
+                leader_close = float(leader.get("close") or 0)
+                leader_avg = float(leader.get("avg_price") or 0)
+                leader_change = float(leader.get("change_pct") or 0)
+                leader_broken = bool(
+                    leader_close > 0 and (
+                        (leader_avg > 0 and leader_close < leader_avg)
+                        or leader_change < 0.5
+                    )
+                )
+
+            metrics[key] = {
+                "front_runner_count": front_count,
+                "follow_runner_count": follow_count,
+                "afternoon_rebound_strength": afternoon_rebound_strength,
+                "leader_broken": leader_broken,
+            }
+        return metrics
+
     def _score_sectors(
         self,
         sectors: List[Dict],
@@ -776,6 +849,7 @@ class SectorScanService:
         """
         result = []
         ranked_sectors = self._rank_sectors_within_source(sectors)
+        dynamic_metrics = self._build_dynamic_sector_metrics(trade_date)
 
         continuity_days_map = (
             self._build_continuity_days_map(trade_date, ranked_sectors)
@@ -885,7 +959,11 @@ class SectorScanService:
                     action_hint=action_hint,
                 ),
                 sector_news_summary=sector.get("sector_news_summary"),
-                sector_falsification=sector.get("sector_falsification")
+                sector_falsification=sector.get("sector_falsification"),
+                front_runner_count=dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {}).get("front_runner_count"),
+                follow_runner_count=dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {}).get("follow_runner_count"),
+                afternoon_rebound_strength=dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {}).get("afternoon_rebound_strength"),
+                leader_broken=dynamic_metrics.get((sector.get("sector_name", "未知"), source_type), {}).get("leader_broken"),
             )
 
             result.append(output)

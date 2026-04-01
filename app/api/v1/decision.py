@@ -15,6 +15,7 @@ from app.models.schemas import (
     AccountPosition,
     SellPointResponse,
     SellPointOutput,
+    SellSignalTag,
     FullDecisionResponse,
     DecisionSummary,
     LlmCallStatus,
@@ -27,6 +28,7 @@ from app.services.sector_scan import sector_scan_service
 from app.services.stock_filter import stock_filter_service, merge_holdings_into_candidate_stocks
 from app.services.buy_point import buy_point_service
 from app.services.buy_point_sop import buy_point_sop_service
+from app.services.sell_point_sop import sell_point_sop_service
 from app.data.tushare_client import tushare_client
 from app.models.schemas import StockInput
 from app.services.decision_context import decision_context_service
@@ -118,6 +120,68 @@ def _resolve_add_signal_from_buy_sop(point: SellPointOutput, buy_sop_result) -> 
             return "可关注加仓", "结构已有加仓信号，但当前利润垫还不够厚，先关注，不急着扩大仓位。"
 
     return None, None
+
+
+async def _align_sell_point_display_with_sop(
+    trade_date: str,
+    account_id: Optional[str],
+    result: SellPointResponse,
+) -> SellPointResponse:
+    """卖点页展示动作以 SOP 最终执行为准，避免列表页与 SOP 抽屉冲突。"""
+    ordered_points = [
+        *list(result.sell_positions),
+        *list(result.reduce_positions),
+        *list(result.hold_positions),
+    ]
+    if not ordered_points:
+        return result
+
+    async def enrich_point(point: SellPointOutput) -> SellPointOutput:
+        try:
+            sop = await sell_point_sop_service.analyze(
+                point.ts_code,
+                trade_date,
+                account_id=account_id,
+            )
+        except Exception as exc:
+            logger.warning("sell-point sop align failed ts_code=%s error=%s", point.ts_code, exc)
+            return point
+
+        execution = getattr(sop, "execution", None)
+        order_plan = getattr(sop, "order_plan", None)
+        intraday = getattr(sop, "intraday_judgement", None)
+        action = str(getattr(execution, "action", "") or "")
+        if action == "清":
+            point.sell_signal_tag = SellSignalTag.SELL
+            point.sell_reason = getattr(execution, "reason", "") or point.sell_reason
+            point.sell_trigger_cond = getattr(order_plan, "stop_condition", "") or point.sell_trigger_cond
+            point.sell_comment = getattr(intraday, "note", "") or point.sell_comment
+        elif action == "减":
+            point.sell_signal_tag = SellSignalTag.REDUCE
+            point.sell_reason = getattr(execution, "reason", "") or point.sell_reason
+            point.sell_trigger_cond = (
+                getattr(order_plan, "take_profit_condition", "")
+                or getattr(order_plan, "rebound_condition", "")
+                or point.sell_trigger_cond
+            )
+            point.sell_comment = getattr(intraday, "note", "") or point.sell_comment
+        elif action == "拿":
+            point.sell_signal_tag = SellSignalTag.HOLD
+            point.sell_reason = getattr(execution, "reason", "") or point.sell_reason
+            point.sell_trigger_cond = getattr(order_plan, "hold_condition", "") or point.sell_trigger_cond
+            point.sell_comment = getattr(intraday, "note", "") or point.sell_comment
+        return point
+
+    updated_points = await asyncio.gather(*(enrich_point(point) for point in ordered_points))
+
+    result.sell_positions = [point for point in updated_points if point.sell_signal_tag == SellSignalTag.SELL]
+    result.reduce_positions = [point for point in updated_points if point.sell_signal_tag == SellSignalTag.REDUCE]
+    result.hold_positions = [
+        point
+        for point in updated_points
+        if point.sell_signal_tag not in {SellSignalTag.SELL, SellSignalTag.REDUCE}
+    ]
+    return result
 
 
 async def _enrich_hold_positions_with_add_signals(
@@ -312,6 +376,11 @@ async def analyze_sell_point(
             holdings,
             market_env=market_env,
             sector_scan=sector_scan,
+        )
+        result = await _align_sell_point_display_with_sop(
+            trade_date,
+            account_id,
+            result,
         )
         buy_sop_results = await _enrich_hold_positions_with_add_signals(
             trade_date,

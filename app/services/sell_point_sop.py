@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from app.data.tushare_client import normalize_ts_code
 from app.models.schemas import (
     AccountPosition,
+    IntradayFeatureSet,
     MarketEnvTag,
     SellPointOutput,
     SellPointSopAccountContext,
@@ -294,25 +295,23 @@ class SellPointSopService:
 
         if sell_point.sell_signal_tag == SellSignalTag.SELL:
             level = "D"
-        elif sell_point.sell_signal_tag == SellSignalTag.HOLD and stage in {"强趋势", "中继"} and not below_prev_low and not below_ma5:
-            level = "A"
-        elif sell_point.sell_signal_tag in {SellSignalTag.HOLD, SellSignalTag.OBSERVE} or stage == "松动":
-            level = "B"
         elif sell_point.sell_signal_tag == SellSignalTag.REDUCE or stage == "高潮":
             level = "C"
+        elif sell_point.sell_signal_tag in {SellSignalTag.HOLD, SellSignalTag.OBSERVE} or stage == "松动":
+            level = "B"
         else:
-            level = "D"
+            level = "A"
 
         reason_bits = [
             f"当前阶段偏{stage}",
-            "已经跌破前一日低点" if below_prev_low else "尚未跌破前一日低点",
-            "已经跌破5日线" if below_ma5 else "仍在5日线上方或附近",
+            "已经跌破前一日低点，日内承接转弱" if below_prev_low else "尚未跌破前一日低点",
+            "已经跌破5日线，短线强度下降" if below_ma5 else "仍在5日线附近，暂未完全走坏",
             "高位放量回落，先防利润回吐" if high_volume_fade else "暂未看到典型高位派发",
         ]
         if market_env.market_env_tag == MarketEnvTag.DEFENSE:
             reason_bits.append("市场偏防守，卖点容错要求更高")
         if below_ma10:
-            reason_bits.append("已经触及10日线下方，趋势保护优先")
+            reason_bits.append("已经触及10日线下方，结构保护优先")
 
         return SellPointSopDailyJudgement(
             current_stage=stage,
@@ -331,8 +330,9 @@ class SellPointSopService:
     ) -> SellPointSopIntradayJudgement:
         realtime = str(target_input.data_source or "").startswith("realtime_")
         price = float(target_input.close or holding.market_price or 0)
-        structure = self._resolve_intraday_structure(target_input, levels)
-        volume_quality = self._resolve_intraday_volume_quality(target_input, structure)
+        features = self._build_intraday_features(target_input, levels)
+        structure = self._resolve_intraday_structure(features)
+        volume_quality = self._resolve_intraday_volume_quality(features.volume_ratio, structure)
 
         if not holding.can_sell_today:
             return SellPointSopIntradayJudgement(
@@ -344,30 +344,38 @@ class SellPointSopService:
             )
 
         if not realtime:
-            conclusion = "清" if daily_level == "D" else "减" if daily_level == "C" else "拿"
-            if daily_level in {"A", "B"}:
-                conclusion = "拿" if sell_point.sell_signal_tag == SellSignalTag.HOLD else "减"
+            conclusion = "拿"
+            if daily_level == "D":
+                conclusion = "清"
+            elif daily_level == "C":
+                conclusion = "减"
+            elif sell_point.sell_signal_tag == SellSignalTag.REDUCE:
+                conclusion = "减"
             return SellPointSopIntradayJudgement(
                 price_vs_avg_line="均价线关系 [需确认]",
                 intraday_structure=f"{structure} [需确认]",
                 volume_quality=volume_quality,
                 conclusion=conclusion,
-                note="当前不是实时分时口径，具体卖法要结合盘中承接和派发再下单。",
+                note="当前不是实时分时口径，具体卖法要结合盘中承接和回流再确认。",
             )
 
-        if structure == "跌破关键低点" or sell_point.sell_signal_tag == SellSignalTag.SELL:
+        if structure == "跌破关键低点":
             conclusion = "清"
-        elif structure == "冲高回落" or sell_point.sell_signal_tag == SellSignalTag.REDUCE or daily_level == "C":
-            conclusion = "减"
-        else:
+        elif structure in {"冲高回落偏弱", "弱反抽"}:
+            conclusion = "减" if sell_point.sell_signal_tag != SellSignalTag.SELL else "清"
+        elif structure in {"冲高回落但承接尚可", "均价线附近拉扯"}:
+            conclusion = "拿" if daily_level in {"A", "B"} else "减"
+        elif structure == "强势横住":
             conclusion = "拿"
+        else:
+            conclusion = "减" if sell_point.sell_signal_tag == SellSignalTag.REDUCE else "拿"
 
         return SellPointSopIntradayJudgement(
             price_vs_avg_line=self._resolve_price_vs_avg_line(target_input, price),
             intraday_structure=structure,
             volume_quality=volume_quality,
             conclusion=conclusion,
-            note="当前口径已结合实时均价线判断强弱，具体承接和派发仍建议配合盘口观察。",
+            note="已结合实时分时结构与均价线关系，具体执行仍建议配合盘口观察。",
         )
 
     def _build_order_plan(
@@ -506,7 +514,7 @@ class SellPointSopService:
                 action="清",
                 partial_plan="不分批或只给一次弱反抽机会，核心是退出效率。",
                 key_level=order_plan.break_stop_price,
-                reason="日线已坏或分时明确转弱，继续拖只会损伤账户节奏。",
+                reason="当前更像结构失效或分时明显转弱，优先退出，避免后续更被动。",
             )
 
         if intraday_judgement.conclusion == "减":
@@ -517,16 +525,16 @@ class SellPointSopService:
             )
             return SellPointSopExecution(
                 action="减",
-                partial_plan="分批处理，先主动兑现一部分，再看反抽或失守位继续减。",
+                partial_plan="分批处理，先兑现一部分，再看反抽强度或关键位是否失守。",
                 key_level=key_level,
-                reason="这类票更适合先保护利润或先收风险，不必纠结卖在最高点。",
+                reason="当前更像强度下降或高位分歧，先减仓防守，比死扛或一把清掉都更稳。",
             )
 
         return SellPointSopExecution(
             action="拿",
             partial_plan="暂不分批，先观察关键位是否继续守住。",
             key_level=order_plan.observe_level,
-            reason="日线没有完全坏，分时也没给出必须处理的动作，先看结构是否继续站稳。",
+            reason="日线和分时都还没到必须处理的程度，先看承接是否延续。",
         )
 
     def _position_status(self, ratio: float, holding_count: int) -> str:
@@ -594,37 +602,65 @@ class SellPointSopService:
             return "高潮"
         return "中继"
 
-    def _resolve_intraday_structure(self, target_input, levels: SellDailyLevels) -> str:
+    def _build_intraday_features(self, target_input, levels: SellDailyLevels) -> IntradayFeatureSet:
         high = float(target_input.high or 0)
         low = float(target_input.low or 0)
         close = float(target_input.close or 0)
+        open_price = float(target_input.open or 0)
         change_pct = float(target_input.change_pct or 0)
         close_quality = self._close_quality(target_input)
+        avg_price = self._extract_avg_price(target_input)
+        above_avg = avg_price is not None and close >= avg_price
+        pullback_ratio = 0.0
+        if high > low:
+            pullback_ratio = max(0.0, min(1.0, (high - close) / (high - low)))
+        rebound_strength = 0.0
+        if close > 0 and low > 0 and close >= low:
+            rebound_strength = max(0.0, min(1.0, (close - low) / max(close, low)))
+        reclaims_avg_line = avg_price is not None and open_price > 0 and open_price < avg_price <= close
+        afternoon_rebound = bool(change_pct >= 0 and rebound_strength >= 0.015 and close_quality >= 0.45)
+        volume_ratio = float(getattr(target_input, "intraday_volume_ratio", None) or getattr(target_input, "vol_ratio", None) or 0)
+        return IntradayFeatureSet(
+            above_avg_line=above_avg if avg_price is not None else None,
+            close_quality=close_quality,
+            pullback_ratio=pullback_ratio,
+            rebound_strength=rebound_strength,
+            breaks_prev_low=bool(levels.prev_low is not None and close < levels.prev_low),
+            reclaims_avg_line=bool(reclaims_avg_line),
+            afternoon_rebound=afternoon_rebound,
+            volume_ratio=volume_ratio,
+        )
 
-        if levels.prev_low is not None and close < levels.prev_low:
+    def _resolve_intraday_structure(self, features: IntradayFeatureSet) -> str:
+        if features.above_avg_line is None:
+            return "分时结构 [需确认]"
+        if features.breaks_prev_low:
             return "跌破关键低点"
-        if change_pct > 0 and close_quality >= 0.7:
-            return "拉升后横住"
-        if close_quality < 0.35 and high > 0 and close > 0:
-            return "冲高回落"
-        return "低位磨底"
+        if features.above_avg_line and features.close_quality >= 0.72:
+            return "强势横住"
+        if (
+            features.pullback_ratio >= 0.35
+            and features.pullback_ratio < 0.6
+            and features.close_quality >= 0.4
+            and features.above_avg_line
+        ):
+            return "冲高回落但承接尚可"
+        if features.close_quality < 0.35 and not features.above_avg_line:
+            return "冲高回落偏弱"
+        if features.reclaims_avg_line or (features.above_avg_line is not None and abs(features.pullback_ratio - 0.5) > 0.45 and 0.45 <= features.close_quality <= 0.6):
+            return "均价线附近拉扯"
+        if features.rebound_strength <= 0.015 and features.close_quality < 0.5:
+            return "弱反抽"
+        return "震荡待定"
 
-    def _resolve_intraday_volume_quality(self, target_input, structure: str) -> str:
-        realtime_ratio = float(getattr(target_input, "intraday_volume_ratio", None) or 0)
-        if realtime_ratio >= 1.5 and structure in {"跌破关键低点", "冲高回落"}:
-            return f"实时放量回落 = 派发（相对放量 {realtime_ratio:.1f}）"
-        if realtime_ratio >= 1.5:
-            return f"实时放量稳住 = 承接（相对放量 {realtime_ratio:.1f}）"
-        if realtime_ratio > 0:
-            return f"实时缩量横盘 = 观望（相对放量 {realtime_ratio:.1f}）"
-
-        ratio = float(target_input.vol_ratio or 0)
-        if ratio >= 1.5 and structure in {"跌破关键低点", "冲高回落"}:
-            return f"放量回落 = 派发（量比 {ratio:.1f}）"
-        if ratio >= 1.5:
-            return f"放量稳住 = 承接（量比 {ratio:.1f}）"
-        if ratio > 0:
-            return f"缩量横盘 = 观望（量比 {ratio:.1f}）"
+    def _resolve_intraday_volume_quality(self, volume_ratio: float, structure: str) -> str:
+        weak_structures = {"跌破关键低点", "冲高回落偏弱", "弱反抽"}
+        if volume_ratio >= 1.5 and structure in weak_structures:
+            return f"实时放量回落 = 派发（相对放量 {volume_ratio:.1f}）"
+        if volume_ratio >= 1.5:
+            return f"实时放量稳住 = 承接（相对放量 {volume_ratio:.1f}）"
+        if volume_ratio > 0:
+            return f"实时缩量横盘 = 观望（相对放量 {volume_ratio:.1f}）"
         return "量能 [需确认]"
 
     def _resolve_price_vs_avg_line(self, target_input, fallback_price: float) -> str:
