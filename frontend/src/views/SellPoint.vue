@@ -97,6 +97,7 @@
                     <div class="signal-code">{{ point.ts_code }}</div>
                   </div>
                   <div class="signal-badges">
+                    <el-tag size="small" type="danger">{{ point.sell_signal_tag }}</el-tag>
                     <el-tag size="small" type="danger">{{ point.sell_point_type }}</el-tag>
                     <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
                     <el-tag v-if="hasLlmCopy(point)" size="small" type="info">LLM解读</el-tag>
@@ -208,6 +209,7 @@
                     <div class="signal-code">{{ point.ts_code }}</div>
                   </div>
                   <div class="signal-badges">
+                    <el-tag size="small" type="warning">{{ point.sell_signal_tag }}</el-tag>
                     <el-tag size="small" type="warning">{{ point.sell_point_type }}</el-tag>
                     <el-tag size="small" :type="priorityTagType(point.sell_priority)">{{ point.sell_priority }}优先</el-tag>
                     <el-tag v-if="hasLlmCopy(point)" size="small" type="info">LLM解读</el-tag>
@@ -480,30 +482,30 @@ const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, cu
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型' })
 const priceRefreshingMap = ref({})
-const SELL_POINT_CACHE_PREFIX = 'sell_point_snapshot_v1'
+const SELL_POINT_CACHE_PREFIX = 'sell_point_snapshot_v2'
 const DASHBOARD_CACHE_PREFIX = 'dashboard_snapshot_v2'
 
 const sellHeadline = computed(() => {
-  if (sellData.value.sell_positions?.length) return '先处理明确该卖的持仓，再考虑减仓和继续持有的部分'
-  if (sellData.value.reduce_positions?.length) return '当前以降风险为主，先把该减的仓位收回来'
-  return '当前没有强制离场压力，以持有观察为主'
+  if (sellData.value.sell_positions?.length) return '先处理 SOP 明确要求退出的持仓，再看减仓和继续观察的部分'
+  if (sellData.value.reduce_positions?.length) return '当前以防守和收缩风险为主，先把该减的仓位处理掉'
+  return '当前没有必须退出的持仓，按 SOP 以持有观察为主'
 })
 const sellAnalysisTradeDate = computed(() => sellData.value?.resolved_trade_date || displayDate.value)
 
 const sellGuidance = computed(() => {
-  if (sellData.value.sell_positions?.length) return '卖出区是优先级最高的动作，先看原因，再按执行条件动手，不要和减仓票混在一起处理。'
-  if (sellData.value.reduce_positions?.length) return '减仓区适合先做仓位调整，不代表整笔持仓逻辑完全结束。'
-  return '持有观察区代表暂时不急着动，但你仍然需要盯住后续处理条件。'
+  if (sellData.value.sell_positions?.length) return '本页已按卖点 SOP 的最终执行动作归类。卖出区代表优先退出，不要和减仓票混在一起处理。'
+  if (sellData.value.reduce_positions?.length) return '本页已按卖点 SOP 的最终执行动作归类。减仓区代表先做防守，不等于整笔持仓已经结束。'
+  return '本页已按卖点 SOP 的最终执行动作归类。持有观察区代表暂时不急着动，但仍要盯住后续处理条件。'
 })
 
 const sellChecklist = computed(() => {
   if (sellData.value.sell_positions?.length) {
-    return ['先清高优先级', '理由失效先走', '别把减仓票当卖出票处理']
+    return ['先清高优先级', '退出票优先执行', '别把减仓票当卖出票处理']
   }
   if (sellData.value.reduce_positions?.length) {
-    return ['先把风险降下来', '反弹无力就执行', '减仓后再看结构是否修复']
+    return ['先把风险降下来', '强度下降先防守', '减仓后再看结构是否修复']
   }
-  return ['当前先观察', '留意后续处理条件', '不要因为无动作就忽视风险']
+  return ['当前先观察', '留意后续处理条件', '承接没坏前不急着机械处理']
 })
 
 const llmStatus = computed(() => sellData.value.llm_status || null)
