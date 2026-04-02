@@ -341,6 +341,7 @@ import { sectorApi, marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import SectorTopStocksDrawer from '../components/SectorTopStocksDrawer.vue'
+import { formatLocalTime } from '../utils/datetime'
 
 const SECTORS_REQUEST_TIMEOUT = 90000
 const loading = ref(false)
@@ -644,8 +645,8 @@ const sectorActionCopy = (row) => {
 const formatHotBoardTime = (quoteTime) => {
   const text = String(quoteTime || '').trim()
   if (!text) return '未更新'
-  const timePart = text.split(' ')[1]
-  if (timePart) {
+  const timePart = formatLocalTime(text)
+  if (timePart && timePart !== '-') {
     return `更新 ${timePart.slice(0, 5)}`
   }
   return text

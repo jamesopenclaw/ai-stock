@@ -204,6 +204,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { stockApi } from '../api'
+import { formatLocalDateTime } from '../utils/datetime'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -253,7 +254,7 @@ const quoteMeta = computed(() => {
   const source = basic.value?.data_source
   const quoteTime = basic.value?.quote_time
   const sourceLabel = source && String(source).startsWith('realtime_') ? '盘中实时' : '日线回退'
-  if (quoteTime) return `${sourceLabel} ${quoteTime}`
+  if (quoteTime) return `${sourceLabel} ${formatLocalDateTime(quoteTime)}`
   return `${sourceLabel} ${displayTradeDate.value}`
 })
 const currentAction = computed(() => execution.value?.action || '拿')

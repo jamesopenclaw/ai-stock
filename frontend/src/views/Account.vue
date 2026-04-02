@@ -264,6 +264,7 @@ import { computed, ref, onMounted } from 'vue'
 import { accountApi, stockApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
+import { formatLocalTime } from '../utils/datetime'
 
 const profile = ref(null)
 const status = ref(null)
@@ -337,7 +338,7 @@ const simplifySource = (source) => {
 const formatQuoteMeta = (row) => {
   const source = simplifySource(row?.data_source)
   if (!row?.quote_time) return source
-  const time = String(row.quote_time).split(' ')[1] || row.quote_time
+  const time = formatLocalTime(row.quote_time)
   return `${source} ${time}`
 }
 
@@ -358,7 +359,7 @@ const positionsQuoteSummary = computed(() => {
     ? '当前持仓现价已切到盘中实时。'
     : '当前持仓现价为混合口径，部分股票已切到盘中实时。'
   if (!latest) return prefix
-  const time = String(latest).split(' ')[1] || latest
+  const time = formatLocalTime(latest)
   return `${prefix} 最新时间 ${time}。`
 })
 const newPosition = ref({

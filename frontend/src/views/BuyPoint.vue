@@ -563,6 +563,7 @@ import { authState } from '../auth'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
+import { formatLocalTime } from '../utils/datetime'
 
 const loading = ref(false)
 const activeTab = ref('available')
@@ -930,7 +931,7 @@ const quoteSourceLabel = (source) => {
 
 const quoteMetaLine = (source, quoteTime, fallbackDate) => {
   const label = quoteSourceLabel(source)
-  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
+  if (quoteTime) return `${label} ${formatLocalTime(quoteTime)}`
   if (fallbackDate) return `${label} ${fallbackDate}`
   return label
 }

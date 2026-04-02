@@ -263,13 +263,13 @@ export const sectorApi = {
 export const stockApi = {
   filter: (tradeDate, limit) => api.get('/stock/filter', { params: { trade_date: tradeDate, limit } }),
   pools: (tradeDate, limit, options = {}) => cachedGet(
-    scopedCacheKey('stock-pools', [tradeDate, String(limit)]),
+    scopedCacheKey('stock-pools', [tradeDate, String(limit), String(options.mode || 'stable')]),
     () => api.get('/stock/pools', {
-      params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh) },
+      params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh), mode: options.mode || 'stable' },
       timeout: options.timeout
     }),
     {
-      ttlMs: options.ttlMs ?? 30 * 1000,
+      ttlMs: options.ttlMs ?? ((options.mode || 'stable') === 'radar' ? 15 * 1000 : 30 * 1000),
       refresh: Boolean(options.refresh),
       shouldUseCachedValue: (value) => !value?.refresh_in_progress && !value?.stale_snapshot,
       shouldCacheValue: (value) => !value?.refresh_in_progress && !value?.stale_snapshot,

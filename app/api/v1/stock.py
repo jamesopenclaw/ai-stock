@@ -2,6 +2,7 @@
 个股筛选 API
 """
 import asyncio
+import time
 from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from datetime import datetime
@@ -23,6 +24,8 @@ from app.services.buy_point_sop import buy_point_sop_service
 from app.services.sell_point_sop import sell_point_sop_service
 from app.services.review_snapshot import review_snapshot_service
 from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date
+from app.services.market_env import market_env_service
+from app.services.sector_scan import sector_scan_service
 from app.data.tushare_client import tushare_client
 from app.core.config import settings
 from app.core.security import AuthenticatedAccount, get_current_account
@@ -31,6 +34,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 STOCK_POOLS_SNAPSHOT_VERSION = 3
 _stock_pools_refresh_tasks: dict[str, asyncio.Task] = {}
+RADAR_POOLS_CACHE_TTL_SECONDS = 20
+_radar_stock_pools_cache: dict[str, dict] = {}
 
 
 def _resolve_account_id(current_account: Optional[AuthenticatedAccount]) -> Optional[str]:
@@ -50,7 +55,35 @@ def _is_stock_pools_refresh_running(trade_date: str, candidate_limit: int, accou
     return bool(task and not task.done())
 
 
-def _serialize_stock_pools_result(result, *, refresh_in_progress: bool = False, refresh_requested: bool = False, stale_snapshot: bool = False):
+def _radar_cache_key(trade_date: str, candidate_limit: int, account_id: Optional[str] = None) -> str:
+    return f"{trade_date}:{candidate_limit}:{account_id or ''}"
+
+
+def _get_cached_radar_result(trade_date: str, candidate_limit: int, account_id: Optional[str] = None):
+    payload = _radar_stock_pools_cache.get(_radar_cache_key(trade_date, candidate_limit, account_id))
+    if not payload:
+        return None
+    if time.monotonic() - float(payload.get("fetched_at") or 0.0) > RADAR_POOLS_CACHE_TTL_SECONDS:
+        _radar_stock_pools_cache.pop(_radar_cache_key(trade_date, candidate_limit, account_id), None)
+        return None
+    return payload.get("result")
+
+
+def _cache_radar_result(trade_date: str, candidate_limit: int, result, account_id: Optional[str] = None) -> None:
+    _radar_stock_pools_cache[_radar_cache_key(trade_date, candidate_limit, account_id)] = {
+        "fetched_at": time.monotonic(),
+        "result": result,
+    }
+
+
+def _serialize_stock_pools_result(
+    result,
+    *,
+    refresh_in_progress: bool = False,
+    refresh_requested: bool = False,
+    stale_snapshot: bool = False,
+    mode: str = "stable",
+):
     return {
         "trade_date": result.trade_date,
         "resolved_trade_date": result.resolved_trade_date,
@@ -71,6 +104,9 @@ def _serialize_stock_pools_result(result, *, refresh_in_progress: bool = False, 
         "refresh_in_progress": refresh_in_progress,
         "refresh_requested": refresh_requested,
         "stale_snapshot": stale_snapshot,
+        "mode": mode,
+        "is_realtime": mode == "radar",
+        "radar_generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S") if mode == "radar" else None,
     }
 
 
@@ -99,6 +135,63 @@ async def _compute_stock_pools_result(
     )
     result = stock_filter_service.attach_sell_analysis(result, sell_analysis)
     return result
+
+
+async def _compute_radar_stock_pools_result(
+    trade_date: str,
+    candidate_limit: int,
+    *,
+    account_id: Optional[str] = None,
+):
+    account_context = await decision_context_service.build_account_context(
+        trade_date,
+        account_id=account_id,
+    )
+    market_env = market_env_service.get_current_env(trade_date)
+    sector_scan = sector_scan_service.scan(
+        trade_date,
+        limit_output=False,
+        market_env=market_env,
+    )
+    stocks, resolved_stock_trade_date = decision_context_service.get_candidate_stocks(
+        trade_date,
+        top_gainers=candidate_limit,
+        holdings_list=account_context.holdings_list,
+        include_holdings=True,
+    )
+    scored_stocks = stock_filter_service.filter_with_context(
+        trade_date,
+        stocks,
+        market_env=market_env,
+        sector_scan=sector_scan,
+        account=account_context.account,
+        holdings=account_context.holdings_list,
+    )
+    review_bias_profile = await review_snapshot_service.get_review_bias_profile_safe(
+        limit_days=10,
+        account_id=account_id,
+    )
+    result = stock_filter_service.classify_pools(
+        trade_date,
+        stocks,
+        account_context.holdings_list,
+        account_context.account,
+        market_env=market_env,
+        sector_scan=sector_scan,
+        scored_stocks=scored_stocks,
+        review_bias_profile=review_bias_profile,
+    )
+    result.resolved_trade_date = resolved_stock_trade_date or trade_date
+    result.sector_scan_trade_date = trade_date
+    result.sector_scan_resolved_trade_date = getattr(sector_scan, "resolved_trade_date", None) or trade_date
+    result.snapshot_version = STOCK_POOLS_SNAPSHOT_VERSION
+    sell_analysis = sell_point_service.analyze(
+        trade_date,
+        account_context.holdings,
+        market_env=market_env,
+        sector_scan=sector_scan,
+    )
+    return stock_filter_service.attach_sell_analysis(result, sell_analysis)
 
 
 async def _persist_stock_pools_result(
@@ -215,6 +308,7 @@ async def get_stock_pools(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
     limit: int = Query(100, description="候选股数量限制", ge=1, le=500),
     refresh: bool = Query(False, description="是否强制重新计算三池结果并覆盖快照"),
+    mode: str = Query("stable", description="三池模式：stable 稳定快照，radar 实时雷达"),
     force_llm_refresh: bool = Query(False, description="保留字段，三池页当前不再触发 LLM"),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
@@ -233,6 +327,40 @@ async def get_stock_pools(
     try:
         account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
         candidate_limit = max(100, min(limit, 300))
+        normalized_mode = str(mode or "stable").strip().lower()
+        if normalized_mode not in {"stable", "radar"}:
+            normalized_mode = "stable"
+
+        if normalized_mode == "radar":
+            if refresh:
+                _radar_stock_pools_cache.pop(_radar_cache_key(trade_date, candidate_limit, account_id), None)
+            cached_radar = None if refresh else _get_cached_radar_result(trade_date, candidate_limit, account_id)
+            if cached_radar:
+                return ApiResponse(
+                    data=_serialize_stock_pools_result(
+                        cached_radar,
+                        refresh_in_progress=False,
+                        refresh_requested=False,
+                        stale_snapshot=False,
+                        mode="radar",
+                    )
+                )
+            result = await _compute_radar_stock_pools_result(
+                trade_date,
+                candidate_limit,
+                account_id=account_id,
+            )
+            _cache_radar_result(trade_date, candidate_limit, result, account_id)
+            return ApiResponse(
+                data=_serialize_stock_pools_result(
+                    result,
+                    refresh_in_progress=False,
+                    refresh_requested=False,
+                    stale_snapshot=False,
+                    mode="radar",
+                )
+            )
+
         expected_sector_scan_trade_date = await resolve_snapshot_lookup_trade_date(trade_date)
         snapshot_kwargs = {"account_id": account_id} if account_id else {}
         cached = await review_snapshot_service.get_stock_pools_page_snapshot(
@@ -260,6 +388,7 @@ async def get_stock_pools(
                         refresh_in_progress=_is_stock_pools_refresh_running(trade_date, candidate_limit, account_id),
                         refresh_requested=started,
                         stale_snapshot=not cache_valid,
+                        mode="stable",
                     )
                 )
 
@@ -284,6 +413,9 @@ async def get_stock_pools(
                     "refresh_in_progress": True,
                     "refresh_requested": started,
                     "stale_snapshot": False,
+                    "mode": "stable",
+                    "is_realtime": False,
+                    "radar_generated_at": None,
                 },
                 message="已触发后台刷新，当前暂无可展示的三池快照",
             )
@@ -295,6 +427,7 @@ async def get_stock_pools(
                     refresh_in_progress=_is_stock_pools_refresh_running(trade_date, candidate_limit, account_id),
                     refresh_requested=False,
                     stale_snapshot=False,
+                    mode="stable",
                 )
             )
 
@@ -316,6 +449,7 @@ async def get_stock_pools(
                 refresh_in_progress=False,
                 refresh_requested=False,
                 stale_snapshot=False,
+                mode="stable",
             )
         )
     except Exception as e:

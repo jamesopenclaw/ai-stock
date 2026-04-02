@@ -176,6 +176,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { systemApi } from '../api'
+import { formatLocalDateTime } from '../utils/datetime'
 
 const loading = ref(false)
 const logs = ref([])
@@ -240,7 +241,7 @@ const statusTagType = (status, success) => {
 }
 
 const formatLatency = (value) => `${Number(value || 0).toFixed(0)} ms`
-const formatTime = (value) => String(value || '').replace('T', ' ').slice(0, 19)
+const formatTime = (value) => formatLocalDateTime(value)
 const formatRate = (value) => `${Number(value || 0).toFixed(2)}%`
 const formatToken = (value) => Number(value || 0).toLocaleString('zh-CN')
 const compactToken = (value) => {

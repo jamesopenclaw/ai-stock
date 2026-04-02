@@ -26,6 +26,10 @@
             </span>
           </div>
           <div class="header-actions">
+            <el-radio-group v-model="poolMode" size="small" class="mode-switch">
+              <el-radio-button label="stable">稳定模式</el-radio-button>
+              <el-radio-button label="radar">实时雷达</el-radio-button>
+            </el-radio-group>
             <el-button @click="handleRefresh" :loading="refreshButtonLoading">
               {{ poolsData.refresh_in_progress ? '刷新中...' : '刷新' }}
             </el-button>
@@ -39,6 +43,14 @@
           v-if="loadError"
           :title="loadError"
           type="error"
+          show-icon
+          :closable="false"
+          class="page-alert"
+        />
+        <el-alert
+          v-if="isRadarMode"
+          :title="radarModeBanner"
+          type="warning"
           show-icon
           :closable="false"
           class="page-alert"
@@ -1088,6 +1100,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { stockApi, decisionApi, marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
+import { formatLocalDateTime, formatLocalTime } from '../utils/datetime'
 
 const loading = ref(false)
 const activeTab = ref('holding')
@@ -1100,6 +1113,9 @@ const poolsData = ref({
   resolved_trade_date: '',
   sector_scan_trade_date: '',
   sector_scan_resolved_trade_date: '',
+  mode: 'stable',
+  is_realtime: false,
+  radar_generated_at: '',
 })
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
@@ -1109,15 +1125,19 @@ const loadError = ref('')
 const POOLS_TIMEOUT = 90000
 const REVIEW_STATS_TIMEOUT = 90000
 const POOLS_REFRESH_POLL_MS = 2500
+const RADAR_AUTO_REFRESH_MS = 30000
 const route = useRoute()
 const router = useRouter()
 const focusOnly = ref(false)
+const poolMode = ref(String(route.query.mode || 'stable').trim() === 'radar' ? 'radar' : 'stable')
 let refreshPollTimer = null
+let radarAutoRefreshTimer = null
 const waitingForRefreshResult = ref(false)
 
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
 const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
+const isRadarMode = computed(() => poolMode.value === 'radar')
 
 const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 0)
 const trendCount = computed(() => poolsData.value.trend_recognition_pool?.length || 0)
@@ -1130,11 +1150,23 @@ const todayMarketEnv = computed(() => marketEnvData.value || {
   risk_level: '中',
   market_comment: '',
 })
+const radarModeBanner = computed(() => {
+  const generatedAt = poolsData.value.radar_generated_at
+    ? `最新生成于 ${formatLocalDateTime(poolsData.value.radar_generated_at, { assumeUtc: true })}`
+    : '盘中结果会变化'
+  return `${generatedAt}。观察池和趋势池更偏实时雷达，账户池仍应以纪律和买点确认优先；页面每 30 秒自动更新一次。`
+})
 
 const stopRefreshPolling = () => {
   if (!refreshPollTimer) return
   window.clearTimeout(refreshPollTimer)
   refreshPollTimer = null
+}
+
+const stopRadarAutoRefresh = () => {
+  if (!radarAutoRefreshTimer) return
+  window.clearTimeout(radarAutoRefreshTimer)
+  radarAutoRefreshTimer = null
 }
 
 const scheduleRefreshPolling = () => {
@@ -1143,6 +1175,16 @@ const scheduleRefreshPolling = () => {
     refreshPollTimer = null
     await loadData({ polling: true })
   }, POOLS_REFRESH_POLL_MS)
+}
+
+const scheduleRadarAutoRefresh = () => {
+  if (!isRadarMode.value || document.hidden) return
+  if (radarAutoRefreshTimer) return
+  radarAutoRefreshTimer = window.setTimeout(async () => {
+    radarAutoRefreshTimer = null
+    if (!isRadarMode.value || document.hidden) return
+    await loadData({ polling: true, radarAuto: true })
+  }, RADAR_AUTO_REFRESH_MS)
 }
 
 const matchesFocusSector = (stock) => {
@@ -1703,7 +1745,7 @@ const quoteSourceLabel = (source) => {
 
 const quoteMetaLine = (source, quoteTime, fallbackDate) => {
   const label = quoteSourceLabel(source)
-  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
+  if (quoteTime) return `${label} ${formatLocalTime(quoteTime)}`
   if (fallbackDate) return `${label} ${fallbackDate}`
   return label
 }
@@ -1871,6 +1913,7 @@ const loadMarketEnv = async (options = {}) => {
 }
 
 const handleRefresh = async () => {
+  stopRadarAutoRefresh()
   await Promise.all([
     loadData({ refresh: true }),
     loadMarketEnv({ refresh: true }),
@@ -1893,7 +1936,7 @@ const loadData = async (options = {}) => {
     if (!options.polling) {
       loadError.value = ''
     }
-    const res = await stockApi.pools(tradeDate, 50, { ...options, timeout: POOLS_TIMEOUT })
+    const res = await stockApi.pools(tradeDate, 50, { ...options, mode: poolMode.value, timeout: POOLS_TIMEOUT })
     const payload = res.data.data || {
       market_watch_pool: [],
       trend_recognition_pool: [],
@@ -1905,6 +1948,9 @@ const loadData = async (options = {}) => {
       refresh_in_progress: false,
       refresh_requested: false,
       stale_snapshot: false,
+      mode: poolMode.value,
+      is_realtime: poolMode.value === 'radar',
+      radar_generated_at: '',
     }
     poolsData.value = payload
     activeTab.value = resolveDefaultTab()
@@ -1917,6 +1963,11 @@ const loadData = async (options = {}) => {
         waitingForRefreshResult.value = false
       }
     }
+    if (isRadarMode.value) {
+      scheduleRadarAutoRefresh()
+    } else {
+      stopRadarAutoRefresh()
+    }
     if (options.refresh) {
       if (payload.refresh_requested) {
         waitingForRefreshResult.value = true
@@ -1928,6 +1979,7 @@ const loadData = async (options = {}) => {
     }
   } catch (error) {
     stopRefreshPolling()
+    stopRadarAutoRefresh()
     loadError.value = error?.code === 'ECONNABORTED'
       ? '三池分类加载超时，后端仍在重算候选池，请稍后刷新。'
       : `三池分类加载失败：${error?.message || '未知错误'}`
@@ -1953,12 +2005,53 @@ onMounted(() => {
   loadMarketEnv()
 })
 
+watch(poolMode, async (nextMode) => {
+  stopRadarAutoRefresh()
+  const query = { ...route.query }
+  if (nextMode === 'radar') {
+    query.mode = 'radar'
+  } else {
+    delete query.mode
+  }
+  await router.replace({ query })
+  loadData({ refresh: true })
+})
+
 onUnmounted(() => {
   stopRefreshPolling()
+  stopRadarAutoRefresh()
 })
 
 watch(reviewSourceFilter, () => {
   activeTab.value = resolveDefaultTab()
+})
+
+watch(
+  () => route.query.mode,
+  (value) => {
+    const normalized = String(value || 'stable').trim() === 'radar' ? 'radar' : 'stable'
+    if (poolMode.value !== normalized) {
+      poolMode.value = normalized
+    }
+  }
+)
+
+const handleVisibilityChange = () => {
+  if (document.hidden) {
+    stopRadarAutoRefresh()
+    return
+  }
+  if (isRadarMode.value) {
+    loadData({ polling: true, radarAuto: true })
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
@@ -2440,8 +2533,13 @@ watch(reviewSourceFilter, () => {
 
 .header-actions {
   display: flex;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.mode-switch {
+  flex-shrink: 0;
 }
 
 .card-header-title {

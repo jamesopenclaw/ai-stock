@@ -184,6 +184,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { marketApi } from '../api'
 import { ElMessage } from 'element-plus'
+import { formatLocalTime } from '../utils/datetime'
 
 const loading = ref(false)
 const marketEnv = ref(null)
@@ -281,7 +282,7 @@ const formatCompactAmount = (value) => {
 const quoteMetaLine = (source, quoteTime, sourceTradeDate, requestedTradeDate = displayDate.value) => {
   const normalizedSourceDate = normalizeTradeDate(sourceTradeDate)
   const label = quoteSourceLabel(source, normalizedSourceDate, requestedTradeDate)
-  if (quoteTime) return `${label} ${quoteTime.slice(11, 19)}`
+  if (quoteTime) return `${label} ${formatLocalTime(quoteTime)}`
   if (normalizedSourceDate) return `${label} ${normalizedSourceDate}`
   return label
 }
@@ -495,7 +496,7 @@ const loadData = async () => {
     statsRealtimeStatus.value = statsRes.data.data?.realtime_status || ''
     marketStatsUnavailable.value = statsRes.data.data?.realtime_status === 'unavailable'
     staleFallbackSuffix.value = statsRes.data.data?.realtime_stale_from_quote_time
-      ? `，最近一次成功缓存时间 ${String(statsRes.data.data.realtime_stale_from_quote_time).slice(11, 19)}`
+      ? `，最近一次成功缓存时间 ${formatLocalTime(statsRes.data.data.realtime_stale_from_quote_time)}`
       : ''
     marketStats.value = marketStatsUnavailable.value ? null : statsRes.data.data
     resolvedDate.value = envRes.data.data?.resolved_trade_date || indexRes.data.data?.resolved_trade_date || statsRes.data.data?.resolved_trade_date || ''
@@ -544,7 +545,7 @@ const loadData = async () => {
     ].some(Boolean)
     if (statsRes.data.data?.realtime_status === 'stale') {
       const staleAt = statsRes.data.data?.realtime_stale_from_quote_time
-      statsNotice.value = `实时市场状态当前使用最近一次成功缓存${staleAt ? `（${String(staleAt).slice(11, 19)}）` : ''}。`
+      statsNotice.value = `实时市场状态当前使用最近一次成功缓存${staleAt ? `（${formatLocalTime(staleAt)}）` : ''}。`
     } else if (statsRes.data.data?.realtime_status === 'unavailable') {
       statsNotice.value = ''
     } else {

@@ -181,6 +181,45 @@ async def test_get_stock_pools_disables_llm_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_stock_pools_radar_mode_returns_realtime_payload(monkeypatch):
+    pools = StockPoolsOutput(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_scan_trade_date="2026-03-24",
+        sector_scan_resolved_trade_date="2026-03-24",
+        snapshot_version=3,
+        market_watch_pool=[],
+        trend_recognition_pool=[],
+        account_executable_pool=[],
+        holding_process_pool=[],
+        total_count=0,
+    )
+
+    compute_calls = []
+
+    async def fake_compute(*args, **kwargs):
+        compute_calls.append((args, kwargs))
+        return pools
+
+    monkeypatch.setattr(stock, "_compute_radar_stock_pools_result", fake_compute)
+
+    response = await stock.get_stock_pools(
+        trade_date="2026-03-24",
+        limit=50,
+        refresh=False,
+        mode="radar",
+        force_llm_refresh=False,
+    )
+
+    assert response.code == 200
+    assert response.data["mode"] == "radar"
+    assert response.data["is_realtime"] is True
+    assert response.data["resolved_trade_date"] == "2026-03-24"
+    assert response.data["radar_generated_at"]
+    assert len(compute_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_get_stock_pools_prefers_saved_snapshot(monkeypatch):
     cached_pools = StockPoolsOutput(
         trade_date="2026-03-24",

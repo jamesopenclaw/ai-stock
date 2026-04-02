@@ -156,6 +156,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import { taskApi } from '../api'
+import { formatLocalDateTime } from '../utils/datetime'
 
 const loading = ref(false)
 const triggeringMode = ref('')
@@ -217,7 +218,7 @@ const statusTagType = (status) => {
 }
 
 const formatDuration = (value) => `${Number(value || 0).toFixed(0)} ms`
-const formatTime = (value) => value ? String(value).replace('T', ' ').slice(0, 19) : '-'
+const formatTime = (value) => formatLocalDateTime(value)
 const formatJson = (value) => JSON.stringify(value, null, 2)
 
 const buildTaskSummary = (task) => {
