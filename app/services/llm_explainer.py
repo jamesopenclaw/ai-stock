@@ -49,17 +49,20 @@ ts_code, plain_note, risk_note
 1. 你的角色只是解释规则结果，不是重新做投资判断。
 2. 不能新增未给出的价格、仓位、市场事实、排序依据或交易结论。
 3. 不能改变卖出/减仓/持有结论，只能重写说明。
-4. 优先复述输入中的 sell_reason、sell_trigger_cond、sell_comment，不要脱离原字段自由发挥。
-5. action_sentence 要直接说明现在该怎么处理；如果 can_sell_today=false，必须先明确“今天不能卖/不能减”，只能写观察或下一交易日条件，不能写成立即执行。
-6. trigger_sentence 要直接说明什么情况下动手；如果输入已经给出 sell_trigger_cond，应以它为准，只做更口语化的转述。
-7. risk_sentence 要直接说明不处理的风险或当前注意点；如果信息不足，就保守复述已有风险，不要脑补新风险。
-8. 如果 payload 明确说明是 partial_sample，page_summary 和 action_summary 只能总结“已提供样本”，不能写成对全部持仓的全局结论。
-9. 文案要短、直接、避免空话和套话。
-10. 输出必须是 JSON 对象，字段只允许：
+4. 解释时优先使用输入中的结构化上下文，例如 pnl_profile、quote_context、reason_code_hint、execution_focus，再结合 sell_reason、sell_trigger_cond、sell_comment，不要只机械复读原字段。
+5. action_sentence 要回答“为什么当前是拿/减/清”，让用户知道当前重点是保护利润、观察承接，还是提高退出效率；如果 can_sell_today=false，必须先明确“今天不能卖/不能减”，只能写观察或下一交易日条件，不能写成立即执行。
+6. trigger_sentence 要回答“接下来盯什么变化”，优先把 sell_trigger_cond 口语化为一个更像交易员盘中盯盘的话术；不要和 action_sentence 说重复的话。
+7. risk_sentence 要回答“如果不处理或看错，最容易吃什么亏”，优先结合已有 sell_comment、quote_context、pnl_profile，避免空泛风险提示。
+8. 对持有结论，重点解释“还能拿的原因”和“继续拿的前提”；对减仓结论，重点解释“为什么先防守而不是直接走”；对卖出结论，重点解释“为什么现在优先退出”。
+9. 如果 reduce_reason_code=protect_profit，优先写“利润保护/先锁一部分”；如果是 structure_loose，优先写“强度下降/结构松动”；如果是 env_weak，优先写“环境转弱/先收缩风险”；如果是 rebound_exit，优先写“借反抽处理/不恋战”。
+10. 当 sell_signal_tag=减仓 时，优先表述为“强度下降/结构分歧/先做防守/先保护利润”，不要使用“日线已坏/必须离场/继续持有没有意义/结构彻底失效”这类只适用于卖出结论的措辞。
+11. 如果 payload 明确说明是 partial_sample，page_summary 和 action_summary 只能总结“已提供样本”，不能写成对全部持仓的全局结论。
+12. 文案要短、直接、有交易价值，避免空话、套话和三句几乎一模一样的复述。
+13. plain_note 必须是一段适合直接展示在股票卡片上的连续说明文字，像交易员给用户的简短解读，不要写成“动作：/时机：/风险：”这种模板格式。
+14. 输出必须是 JSON 对象，字段只允许：
 page_summary, action_summary, notes
-11. notes 是数组，每项字段只允许：
-ts_code, action_sentence, trigger_sentence, risk_sentence
-12. 当 sell_signal_tag=减仓 时，优先表述为“强度下降/结构分歧/先做防守”，不要使用“日线已坏/必须离场”这类只适用于卖出结论的措辞。
+15. notes 是数组，每项字段只允许：
+ts_code, plain_note, action_sentence, trigger_sentence, risk_sentence
 """.strip()
 
     STOCK_CHECKUP_SYSTEM_PROMPT = """
@@ -89,6 +92,43 @@ key, title, content
     async def _runtime_max_input_items(self) -> int:
         runtime = await llm_client.get_runtime_config()
         return max(1, int(runtime.get("max_input_items") or 8))
+
+    def _sell_point_pnl_profile(self, pnl_pct: Optional[float]) -> str:
+        value = float(pnl_pct or 0)
+        if value >= 15:
+            return "利润垫较厚"
+        if value > 0:
+            return "小幅盈利"
+        if value <= -8:
+            return "亏损较深"
+        if value < 0:
+            return "小幅亏损"
+        return "盈亏接近持平"
+
+    def _sell_point_quote_context(self, point) -> str:
+        source = str(getattr(point, "data_source", "") or "")
+        if source.startswith("realtime_"):
+            return "当前是实时分时口径"
+        return "当前不是实时分时口径，偏向日线回退"
+
+    def _sell_point_reason_code_hint(self, point) -> str:
+        mapping = {
+            "protect_profit": "这类减仓更偏利润保护，不是判定彻底走坏。",
+            "structure_loose": "这类减仓更偏结构松动，重点看强度是否继续下降。",
+            "env_weak": "这类减仓更偏环境转弱下的防守动作。",
+            "rebound_exit": "这类减仓更偏借反抽处理，不适合恋战。",
+        }
+        return mapping.get(str(getattr(point, "reduce_reason_code", "") or ""), "")
+
+    def _sell_point_execution_focus(self, point) -> str:
+        signal = getattr(point, "sell_signal_tag", None)
+        signal_value = getattr(signal, "value", signal)
+        pnl_profile = self._sell_point_pnl_profile(getattr(point, "pnl_pct", None))
+        if signal_value == "卖出":
+            return f"{pnl_profile}，当前重点是退出效率，不是继续博弈。"
+        if signal_value == "减仓":
+            return f"{pnl_profile}，当前重点是先做防守和仓位收缩，再看后续是否修复。"
+        return f"{pnl_profile}，当前重点是确认承接是否延续，而不是急着处理。"
 
     def _cache_key(
         self,
@@ -446,6 +486,7 @@ key, title, content
         )
         sampled_points = points[:max_items]
         payload = {
+            "prompt_version": "sell_points_v2",
             "trade_date": sell_points.trade_date,
             "market_env_tag": getattr(getattr(market_env, "market_env_tag", None), "value", None),
             "input_scope": "full" if len(points) <= max_items else "partial_sample",
@@ -467,9 +508,15 @@ key, title, content
                     "reduce_reason_code": point.reduce_reason_code,
                     "sell_trigger_cond": point.sell_trigger_cond,
                     "sell_comment": point.sell_comment,
+                    "market_price": point.market_price,
+                    "cost_price": point.cost_price,
                     "pnl_pct": point.pnl_pct,
+                    "pnl_profile": self._sell_point_pnl_profile(point.pnl_pct),
                     "holding_days": point.holding_days,
                     "can_sell_today": point.can_sell_today,
+                    "quote_context": self._sell_point_quote_context(point),
+                    "reason_code_hint": self._sell_point_reason_code_hint(point),
+                    "execution_focus": self._sell_point_execution_focus(point),
                 }
                 for point in sampled_points
             ],
@@ -825,6 +872,7 @@ key, title, content
                 note = notes.get(point.ts_code)
                 if not note:
                     continue
+                point.llm_plain_note = note.plain_note or None
                 point.llm_action_sentence = note.action_sentence or None
                 point.llm_trigger_sentence = note.trigger_sentence or None
                 point.llm_risk_sentence = note.risk_sentence or None

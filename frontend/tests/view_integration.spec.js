@@ -124,6 +124,7 @@ beforeEach(() => {
   marketApi.getEnv.mockReset()
   marketApi.getIndex.mockReset()
   marketApi.getStats.mockReset()
+  marketApi.getEnv.mockReset()
   sectorApi.hot.mockReset()
   sectorApi.leader.mockReset()
   sectorApi.scan.mockReset()
@@ -211,6 +212,12 @@ describe('关键页面联调', () => {
 
   it('Pools 页面会加载三池和复盘数据，并显示焦点方向文案', async () => {
     routeQuery = { focus_sector: '机器人' }
+    marketApi.getEnv.mockResolvedValue(makeResponse({
+      market_env_tag: '进攻',
+      breakout_allowed: true,
+      risk_level: '低',
+      market_comment: '市场偏进攻，允许做确认后的主动出手。',
+    }))
     stockApi.pools.mockResolvedValue(
       makeResponse({
         trade_date: '2026-03-28',
@@ -245,15 +252,24 @@ describe('关键页面联调', () => {
     const wrapper = await mountView(PoolsView)
 
     expect(stockApi.pools).toHaveBeenCalledOnce()
+    expect(marketApi.getEnv).toHaveBeenCalledOnce()
     expect(decisionApi.reviewStats).toHaveBeenCalled()
     expect(stockApi.pools).toHaveBeenCalledWith(expect.any(String), 50, expect.objectContaining({ timeout: 90000 }))
     expect(wrapper.text()).toContain('当前按')
     expect(wrapper.text()).toContain('机器人')
     expect(wrapper.text()).toContain('机器人一号')
+    expect(wrapper.text()).toContain('账户可参与池')
+    expect(wrapper.text()).toContain('市场环境')
   })
 
   it('Pools 页面点击刷新后会轮询直到拿到最新三池结果', async () => {
     vi.useFakeTimers()
+    marketApi.getEnv.mockResolvedValue(makeResponse({
+      market_env_tag: '中性',
+      breakout_allowed: false,
+      risk_level: '中',
+      market_comment: '先看确认，不要把观察票当执行票。',
+    }))
     stockApi.pools
       .mockResolvedValueOnce(
         makeResponse({
@@ -344,6 +360,129 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('新观察票')
     expect(messageSuccess).toHaveBeenCalledWith('三池结果已刷新完成。')
     vi.useRealTimers()
+  })
+
+  it('Pools 页面会把账户池拆成标准执行和进攻试错两栏', async () => {
+    marketApi.getEnv.mockResolvedValue(makeResponse({
+      market_env_tag: '进攻',
+      breakout_allowed: true,
+      risk_level: '低',
+      market_comment: '优先标准执行，强化方向允许小仓试错。',
+    }))
+    stockApi.pools.mockResolvedValue(makeResponse({
+      trade_date: '2026-03-28',
+      resolved_trade_date: '2026-03-28',
+      market_watch_pool: [],
+      trend_recognition_pool: [],
+      account_executable_pool: [
+        {
+          ts_code: '000001.SZ',
+          stock_name: '标准执行票',
+          sector_name: '机器人',
+          account_entry_mode: 'standard',
+          pool_entry_reason: '交易性为可交易，且存在回踩确认位，可纳入账户可参与池。',
+          next_tradeability_tag: '回踩确认',
+          stock_strength_tag: '强',
+          structure_state_tag: '修复',
+        },
+        {
+          ts_code: '000002.SZ',
+          stock_name: '试错票',
+          sector_name: '算力',
+          account_entry_mode: 'aggressive_trial',
+          pool_entry_reason: '方向强度足够，虽非标准舒服位，但保留小仓进攻试错资格。',
+          next_tradeability_tag: '突破确认',
+          stock_strength_tag: '强',
+          structure_state_tag: '启动',
+          direction_signal_tag: '强化中',
+        },
+      ],
+      holding_process_pool: [],
+    }))
+    decisionApi.reviewStats.mockResolvedValue(makeResponse({ bucket_stats: [] }))
+
+    const { default: PoolsView } = await import('../src/views/Pools.vue')
+    const wrapper = await mountView(PoolsView)
+
+    expect(wrapper.text()).toContain('标准执行')
+    expect(wrapper.text()).toContain('进攻试错')
+    expect(wrapper.text()).toContain('标准执行票')
+    expect(wrapper.text()).toContain('试错票')
+    expect(wrapper.text()).toContain('回踩确认')
+  })
+
+  it('Pools 页面优先按 account_entry_mode 区分标准执行和试错票', async () => {
+    marketApi.getEnv.mockResolvedValue(makeResponse({
+      market_env_tag: '进攻',
+      breakout_allowed: true,
+      risk_level: '低',
+      market_comment: '优先标准执行，强化方向允许小仓试错。',
+    }))
+    stockApi.pools.mockResolvedValue(makeResponse({
+      trade_date: '2026-03-28',
+      resolved_trade_date: '2026-03-28',
+      market_watch_pool: [],
+      trend_recognition_pool: [],
+      account_executable_pool: [
+        {
+          ts_code: '000003.SZ',
+          stock_name: '结构化试错票',
+          sector_name: '机器人',
+          account_entry_mode: 'aggressive_trial',
+          pool_entry_reason: '交易性为可交易，且存在回踩确认位，可纳入账户可参与池。',
+          next_tradeability_tag: '回踩确认',
+          stock_strength_tag: '强',
+          structure_state_tag: '修复',
+        },
+      ],
+      holding_process_pool: [],
+    }))
+    decisionApi.reviewStats.mockResolvedValue(makeResponse({ bucket_stats: [] }))
+
+    const { default: PoolsView } = await import('../src/views/Pools.vue')
+    const wrapper = await mountView(PoolsView)
+
+    expect(wrapper.text()).toContain('进攻试错')
+    expect(wrapper.text()).toContain('结构化试错票')
+    expect(wrapper.text()).toContain('试错仓 / 小仓')
+  })
+
+  it('Pools 页面会把防守试错和进攻试错分开统计', async () => {
+    marketApi.getEnv.mockResolvedValue(makeResponse({
+      market_env_tag: '防守',
+      breakout_allowed: false,
+      risk_level: '高',
+      market_comment: '防守环境只保留极少数轻仓试错。',
+    }))
+    stockApi.pools.mockResolvedValue(makeResponse({
+      trade_date: '2026-03-28',
+      resolved_trade_date: '2026-03-28',
+      market_watch_pool: [],
+      trend_recognition_pool: [],
+      account_executable_pool: [
+        {
+          ts_code: '000004.SZ',
+          stock_name: '防守试错票',
+          sector_name: '银行',
+          account_entry_mode: 'defense_trial',
+          pool_entry_reason: '防守日仅保留最强核心股试错',
+          next_tradeability_tag: '突破确认',
+          stock_strength_tag: '强',
+          structure_state_tag: '修复',
+        },
+      ],
+      holding_process_pool: [],
+    }))
+    decisionApi.reviewStats.mockResolvedValue(makeResponse({ bucket_stats: [] }))
+
+    const { default: PoolsView } = await import('../src/views/Pools.vue')
+    const wrapper = await mountView(PoolsView)
+
+    expect(wrapper.text()).toContain('进攻试错')
+    expect(wrapper.text()).toContain('防守试错')
+    expect(wrapper.text()).toContain('当前没有需要额外放宽的小仓试错票')
+    expect(wrapper.text()).toContain('防守试错票')
+    expect(wrapper.text()).toContain('防守仓 / 更小仓')
   })
 
   it('BuyPoint 页面会加载买点和复盘数据，并展示主执行名单', async () => {

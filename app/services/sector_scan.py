@@ -763,7 +763,11 @@ class SectorScanService:
         self,
         trade_date: Optional[str],
     ) -> Dict[tuple[str, str], Dict]:
-        """基于当日个股快照补充板块动态联动指标。"""
+        """基于当日个股快照补充板块动态联动指标。
+
+        当前仅稳定补齐 industry 口径，供方向切换/强化的代理版动态信号使用；
+        尚未完全覆盖 concept / limitup_industry 的同口径联动。
+        """
         if not trade_date:
             return {}
         try:

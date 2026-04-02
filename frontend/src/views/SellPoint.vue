@@ -128,20 +128,7 @@
 
                 <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
                   <div class="llm-copy-head">LLM 解读</div>
-                  <div class="llm-copy-list">
-                    <div v-if="point.llm_action_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">动作</span>
-                      <span class="llm-copy-text">{{ point.llm_action_sentence }}</span>
-                    </div>
-                    <div v-if="point.llm_trigger_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">时机</span>
-                      <span class="llm-copy-text">{{ point.llm_trigger_sentence }}</span>
-                    </div>
-                    <div v-if="point.llm_risk_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">风险</span>
-                      <span class="llm-copy-text">{{ point.llm_risk_sentence }}</span>
-                    </div>
-                  </div>
+                  <div class="llm-copy-paragraph">{{ point.llm_plain_note || point.llm_action_sentence || point.sell_reason }}</div>
                 </div>
 
                 <div class="condition-section">
@@ -240,20 +227,7 @@
 
                 <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
                   <div class="llm-copy-head">LLM 解读</div>
-                  <div class="llm-copy-list">
-                    <div v-if="point.llm_action_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">动作</span>
-                      <span class="llm-copy-text">{{ point.llm_action_sentence }}</span>
-                    </div>
-                    <div v-if="point.llm_trigger_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">时机</span>
-                      <span class="llm-copy-text">{{ point.llm_trigger_sentence }}</span>
-                    </div>
-                    <div v-if="point.llm_risk_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">风险</span>
-                      <span class="llm-copy-text">{{ point.llm_risk_sentence }}</span>
-                    </div>
-                  </div>
+                  <div class="llm-copy-paragraph">{{ point.llm_plain_note || point.llm_action_sentence || point.sell_reason }}</div>
                 </div>
 
                 <div class="condition-section">
@@ -363,20 +337,7 @@
 
                 <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
                   <div class="llm-copy-head">LLM 解读</div>
-                  <div class="llm-copy-list">
-                    <div v-if="point.llm_action_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">动作</span>
-                      <span class="llm-copy-text">{{ point.llm_action_sentence }}</span>
-                    </div>
-                    <div v-if="point.llm_trigger_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">时机</span>
-                      <span class="llm-copy-text">{{ point.llm_trigger_sentence }}</span>
-                    </div>
-                    <div v-if="point.llm_risk_sentence" class="llm-copy-item">
-                      <span class="llm-copy-label">风险</span>
-                      <span class="llm-copy-text">{{ point.llm_risk_sentence }}</span>
-                    </div>
-                  </div>
+                  <div class="llm-copy-paragraph">{{ point.llm_plain_note || point.llm_action_sentence || point.sell_comment || point.sell_reason }}</div>
                 </div>
 
                 <div class="condition-section">
@@ -606,16 +567,28 @@ const quoteMetaLine = (source, quoteTime, fallbackDate) => {
 }
 
 const hasLlmCopy = (point) => Boolean(
-  point?.llm_action_sentence || point?.llm_trigger_sentence || point?.llm_risk_sentence
+  point?.llm_plain_note || point?.llm_action_sentence || point?.llm_trigger_sentence || point?.llm_risk_sentence
 )
 
-const sellActionLine = (point) => point.llm_action_sentence || `优先处理：${point.sell_reason}。`
-const reduceActionLine = (point) => point.llm_action_sentence || `先降风险：${point.sell_reason}。`
+const sellActionLine = (point) => {
+  if (point?.can_sell_today === false) return '系统动作：今天先记录退出计划，下个可卖时点优先执行。'
+  return '系统动作：优先退出，按触发条件执行，不再拖延。'
+}
+
+const reduceActionLine = (point) => {
+  if (point?.can_sell_today === false) return '系统动作：今天先记减仓计划，下个可卖时点优先防守。'
+  if (point?.reduce_reason_code === 'protect_profit') return '系统动作：先锁一部分利润，再看后续强弱。'
+  if (point?.reduce_reason_code === 'structure_loose') return '系统动作：先减仓防守，观察结构是否继续松动。'
+  if (point?.reduce_reason_code === 'env_weak') return '系统动作：环境转弱，先把仓位收下来。'
+  if (point?.reduce_reason_code === 'rebound_exit') return '系统动作：借反抽处理，不宜恋战。'
+  return '系统动作：先减仓防守，不急着一把清。'
+}
+
 const holdActionLine = (point) => {
   if (point.add_signal_tag) {
     return `${point.add_signal_tag}：${point.add_signal_reason || point.sell_comment || point.sell_reason}。`
   }
-  return point.llm_action_sentence || `继续跟踪：${point.sell_comment || point.sell_reason}。`
+  return '系统动作：暂不处理，先盯承接和关键位。'
 }
 const topActionReason = (point) => point.llm_trigger_sentence || shortTriggerText(point.sell_trigger_cond || point.sell_reason || '-')
 
@@ -1205,26 +1178,10 @@ onMounted(() => {
   color: #9dc2ff;
 }
 
-.llm-copy-list {
-  display: grid;
-  gap: 8px;
-}
-
-.llm-copy-item {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-}
-
-.llm-copy-label {
-  color: var(--color-text-sec);
-  font-size: 12px;
-}
-
-.llm-copy-text {
+.llm-copy-paragraph {
   color: var(--color-text-main);
-  line-height: 1.7;
+  line-height: 1.8;
+  font-size: 15px;
   font-weight: 500;
 }
 

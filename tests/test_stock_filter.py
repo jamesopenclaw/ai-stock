@@ -541,6 +541,7 @@ class TestStockFilter:
 
         assert len(pools.market_watch_pool) == 1
         assert len(pools.account_executable_pool) == 1
+        assert pools.account_executable_pool[0].account_entry_mode in {"standard", "aggressive_trial"}
         assert any(
             text in (pools.account_executable_pool[0].pool_entry_reason or "")
             for text in ["突破确认机会", "试错资格", "位置不完美"]
@@ -601,6 +602,7 @@ class TestStockFilter:
 
         assert len(pools.account_executable_pool) == 1
         assert "回踩确认位" in (pools.account_executable_pool[0].pool_entry_reason or "")
+        assert pools.account_executable_pool[0].account_entry_mode == "standard"
 
     def test_same_sector_heavy_holding_blocks_account_pool(self, service, mock_market_env_attack):
         """
@@ -1968,6 +1970,7 @@ class TestStockFilter:
         account_stock = pools.account_executable_pool[0]
         assert account_stock.pool_entry_reason == "防守日仅保留最强核心股试错"
         assert "轻仓试错" in (account_stock.position_hint or "")
+        assert account_stock.account_entry_mode == "defense_trial"
 
     def test_defense_trial_allows_medium_position_and_three_holdings(self, service, mock_market_env_defense):
         """
@@ -2388,6 +2391,121 @@ class TestStockFilterThreePoolOptimization:
         assert pools.market_watch_pool[1].miss_risk_note
         assert "002302.SZ" in [stock.ts_code for stock in pools.account_executable_pool]
 
+    def test_attack_market_can_keep_two_strengthening_sub_mainline_slots(self, service, mock_market_env):
+        leader_stock = StockInput(
+            ts_code="002341.SZ",
+            stock_name="旧主线龙头",
+            sector_name="机器人",
+            close=21.8,
+            change_pct=7.9,
+            turnover_rate=10.2,
+            amount=250000,
+            vol_ratio=2.1,
+            high=22.0,
+            low=20.6,
+            open=20.9,
+            pre_close=20.2,
+            stage_tag="加速",
+            candidate_source_tag="涨停入选/涨幅前列",
+        )
+        strengthen_a = StockInput(
+            ts_code="002342.SZ",
+            stock_name="强化方向A",
+            sector_name="低空经济",
+            close=18.4,
+            change_pct=5.1,
+            turnover_rate=10.0,
+            amount=205000,
+            vol_ratio=2.3,
+            high=18.5,
+            low=17.0,
+            open=17.2,
+            pre_close=17.51,
+            stage_tag="修复",
+            candidate_source_tag="涨幅前列/量比异动",
+        )
+        strengthen_b = StockInput(
+            ts_code="002343.SZ",
+            stock_name="强化方向B",
+            sector_name="商业航天",
+            close=16.7,
+            change_pct=4.8,
+            turnover_rate=9.4,
+            amount=198000,
+            vol_ratio=2.1,
+            high=16.9,
+            low=15.8,
+            open=16.0,
+            pre_close=15.93,
+            stage_tag="修复",
+            candidate_source_tag="涨幅前列/量比异动",
+        )
+        sector_scan = MagicMock(
+            mainline_sectors=[
+                SectorOutput(
+                    sector_name="机器人",
+                    sector_source_type="concept",
+                    sector_change_pct=3.8,
+                    sector_score=93.0,
+                    sector_strength_rank=1,
+                    sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                    sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                    sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                    sector_continuity_days=5,
+                    sector_comment="旧主线",
+                )
+            ],
+            sub_mainline_sectors=[
+                SectorOutput(
+                    sector_name="低空经济",
+                    sector_source_type="concept",
+                    sector_change_pct=2.9,
+                    sector_score=84.0,
+                    sector_strength_rank=2,
+                    sector_mainline_tag=SectorMainlineTag.SUB_MAINLINE,
+                    sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                    sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                    sector_continuity_days=2,
+                    afternoon_rebound_strength=0.8,
+                    sector_comment="新强化A",
+                ),
+                SectorOutput(
+                    sector_name="商业航天",
+                    sector_source_type="concept",
+                    sector_change_pct=2.7,
+                    sector_score=82.0,
+                    sector_strength_rank=3,
+                    sector_mainline_tag=SectorMainlineTag.SUB_MAINLINE,
+                    sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                    sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                    sector_continuity_days=2,
+                    afternoon_rebound_strength=0.72,
+                    sector_comment="新强化B",
+                ),
+            ],
+            follow_sectors=[],
+            trash_sectors=[],
+        )
+
+        pools = service.classify_pools(
+            "2026-03-28",
+            [leader_stock, strengthen_a, strengthen_b],
+            holdings=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=85000,
+                total_position_ratio=0.1,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env,
+            sector_scan=sector_scan,
+        )
+
+        watch_codes = [stock.ts_code for stock in pools.market_watch_pool]
+        assert "002342.SZ" in watch_codes
+        assert "002343.SZ" in watch_codes
+
     def test_account_pool_can_keep_execution_ticket_not_only_representative(self, service, mock_market_env):
         leader_stock = StockInput(
             ts_code="002311.SZ",
@@ -2516,6 +2634,99 @@ class TestStockFilterThreePoolOptimization:
 
         assert [item.ts_code for item in pools.account_executable_pool] == ["002321.SZ"]
         assert "试错资格" in (pools.account_executable_pool[0].pool_entry_reason or "")
+        assert pools.account_executable_pool[0].account_entry_mode == "aggressive_trial"
+
+    def test_comfortable_breakthrough_keeps_standard_mode_even_if_stock_is_trial_eligible(self, service, mock_market_env):
+        stock = StockInput(
+            ts_code="002323.SZ",
+            stock_name="舒服突破票",
+            sector_name="AI应用",
+            close=27.0,
+            change_pct=6.1,
+            turnover_rate=13.4,
+            amount=255000,
+            vol_ratio=2.1,
+            high=27.2,
+            low=25.7,
+            open=25.9,
+            pre_close=25.45,
+            stage_tag="分歧",
+            candidate_source_tag="涨幅前列/量比异动",
+        )
+        sector_scan = MagicMock(
+            mainline_sectors=[
+                SectorOutput(
+                    sector_name="AI应用",
+                    sector_source_type="concept",
+                    sector_change_pct=4.0,
+                    sector_score=89.0,
+                    sector_strength_rank=1,
+                    sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                    sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                    sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                    sector_continuity_days=2,
+                    afternoon_rebound_strength=0.7,
+                    sector_comment="主线强化",
+                )
+            ],
+            sub_mainline_sectors=[],
+            follow_sectors=[],
+            trash_sectors=[],
+        )
+
+        pools = service.classify_pools(
+            "2026-03-28",
+            [stock],
+            holdings=[],
+            account=AccountInput(
+                total_asset=150000,
+                available_cash=100000,
+                total_position_ratio=0.08,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env,
+            sector_scan=sector_scan,
+        )
+
+        assert [item.ts_code for item in pools.account_executable_pool] == ["002323.SZ"]
+        account_stock = pools.account_executable_pool[0]
+        assert "突破确认机会" in (account_stock.pool_entry_reason or "")
+        assert service._is_aggressive_trial_candidate(account_stock) is True
+        assert account_stock.account_entry_mode == "standard"
+
+    def test_aggressive_trial_soft_score_keeps_near_threshold_stock(self, service, mock_market_env):
+        scored = StockOutput(
+            ts_code="002322.SZ",
+            stock_name="临界强票",
+            sector_name="AI应用",
+            change_pct=3.9,
+            amount=235000,
+            close=27.6,
+            open=26.4,
+            high=27.8,
+            low=25.9,
+            pre_close=26.56,
+            vol_ratio=1.9,
+            turnover_rate=16.9,
+            stock_score=86.0,
+            market_strength_score=81.0,
+            execution_opportunity_score=70.0,
+            account_entry_score=75.0,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            sector_profile_tag=SectorProfileTag.A_MAINLINE,
+            day_strength_tag=DayStrengthTag.REBOUND_STRONG,
+            structure_state_tag=StructureStateTag.START,
+            next_tradeability_tag=NextTradeabilityTag.BREAKTHROUGH,
+            direction_signal_tag="强化中",
+        )
+
+        assert service._aggressive_trial_score(scored) >= 60.0
+        assert service._is_aggressive_trial_candidate(scored) is True
 
     def test_watch_pool_explains_why_not_executable(self, service, mock_market_env):
         stock = StockInput(
@@ -2573,6 +2784,7 @@ class TestStockFilterThreePoolOptimization:
         watch_stock = pools.market_watch_pool[0]
         assert watch_stock.why_not_executable_but_should_watch
         assert watch_stock.miss_risk_note
+        assert "代理版动态" in (watch_stock.direction_signal_reason or watch_stock.why_not_executable_but_should_watch or "")
         assert "账户" in " ".join(watch_stock.not_other_pools)
 
 

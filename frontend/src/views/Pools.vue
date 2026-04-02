@@ -26,7 +26,7 @@
             </span>
           </div>
           <div class="header-actions">
-            <el-button @click="loadData({ refresh: true })" :loading="refreshButtonLoading">
+            <el-button @click="handleRefresh" :loading="refreshButtonLoading">
               {{ poolsData.refresh_in_progress ? '刷新中...' : '刷新' }}
             </el-button>
           </div>
@@ -43,6 +43,70 @@
           :closable="false"
           class="page-alert"
         />
+        <section class="command-center">
+          <article class="summary-card summary-card-market">
+            <div class="summary-kicker">市场环境</div>
+            <div class="summary-title-row">
+              <el-tag size="large" effect="dark" :type="getEnvTagType(todayMarketEnv.market_env_tag)">
+                {{ todayMarketEnv.market_env_tag }}
+              </el-tag>
+              <span class="summary-headline">{{ marketEnvironmentHeadline }}</span>
+            </div>
+            <div class="summary-copy">{{ marketEnvironmentCopy }}</div>
+            <div class="summary-chip-row">
+              <span class="summary-chip"><strong>突破</strong>{{ todayMarketEnv.breakout_allowed ? '可确认后做' : '先不追' }}</span>
+              <span class="summary-chip"><strong>风险</strong>{{ todayMarketEnv.risk_level }}</span>
+            </div>
+          </article>
+
+          <article class="summary-card summary-card-direction">
+            <div class="summary-kicker">今日主线</div>
+            <div class="direction-pills">
+              <span v-for="item in primaryDirectionItems" :key="`${item.name}-${item.state}`" class="direction-pill">
+                <strong>{{ item.name }}</strong>
+                <em>{{ item.state }}</em>
+              </span>
+            </div>
+            <div class="summary-copy">{{ directionOverviewCopy }}</div>
+          </article>
+
+          <article class="summary-card summary-card-action">
+            <div class="summary-kicker">今日执行建议</div>
+            <div class="summary-headline summary-headline-action">{{ executionGuidanceTitle }}</div>
+            <div class="summary-copy">{{ executionGuidanceCopy }}</div>
+          </article>
+
+          <article class="summary-card summary-card-account">
+            <div class="summary-kicker">账户执行概览</div>
+              <div class="overview-mini-stats overview-mini-stats-compact">
+                <div class="overview-mini-stat overview-mini-stat-account">
+                  <span class="overview-mini-label">标准执行</span>
+                  <strong class="overview-mini-value">{{ standardExecutionPool.length }}</strong>
+                  <span class="overview-mini-tip">优先看这里</span>
+                </div>
+                <div class="overview-mini-stat overview-mini-stat-market">
+                  <span class="overview-mini-label">进攻试错</span>
+                  <strong class="overview-mini-value">{{ aggressiveTrialPool.length }}</strong>
+                  <span class="overview-mini-tip">仅小仓试错</span>
+                </div>
+                <div class="overview-mini-stat overview-mini-stat-defense">
+                  <span class="overview-mini-label">防守试错</span>
+                  <strong class="overview-mini-value">{{ defenseTrialPool.length }}</strong>
+                  <span class="overview-mini-tip">防守日极少数</span>
+                </div>
+                <div class="overview-mini-stat overview-mini-stat-trend">
+                  <span class="overview-mini-label">观察票</span>
+                  <strong class="overview-mini-value">{{ marketCount + trendCount }}</strong>
+                  <span class="overview-mini-tip">先盯不先做</span>
+                </div>
+                <div class="overview-mini-stat overview-mini-stat-holding">
+                <span class="overview-mini-label">持仓处理</span>
+                <strong class="overview-mini-value">{{ holdingCount }}</strong>
+                <span class="overview-mini-tip">旧仓优先</span>
+              </div>
+            </div>
+          </article>
+        </section>
         <div class="decision-overview">
           <div v-if="reviewBucketFilter" class="focus-context focus-context-review">
             <div class="focus-context-copy">
@@ -189,6 +253,223 @@
             </section>
           </div>
         </div>
+
+        <section class="priority-stack">
+          <article class="priority-panel priority-panel-account">
+            <div class="priority-panel-head">
+              <div>
+                <div class="section-kicker">模块 A</div>
+                <div class="section-title">账户可参与池</div>
+                <div class="priority-panel-desc">先看今天真的能动的票，再决定要不要回买点页确认。</div>
+              </div>
+              <el-button text type="primary" @click="activeTab = 'account'">查看详细清单</el-button>
+            </div>
+            <div v-if="!accountPool.length" class="priority-empty">
+              {{ accountEmptyReason }}
+            </div>
+            <div v-else class="execution-lane-stack">
+              <div class="execution-dual-grid">
+              <section v-if="standardExecutionPool.length" class="execution-lane execution-lane-standard">
+                <div class="lane-head">
+                  <div class="lane-title-wrap">
+                    <div class="lane-title">标准执行</div>
+                    <div class="lane-caption">位置相对舒服，可按计划执行</div>
+                  </div>
+                  <span class="lane-badge">{{ standardExecutionPool.length }} 只</span>
+                </div>
+                <article v-for="stock in standardExecutionPool" :key="`std-${stock.ts_code}`" class="action-card action-card-standard">
+                  <div class="action-card-top">
+                    <div>
+                      <div class="action-stock">{{ stock.stock_name }}</div>
+                      <div class="action-meta">{{ stock.ts_code }} · {{ stock.sector_name || '无方向' }}</div>
+                    </div>
+                    <span class="action-type-badge action-type-badge-standard">标准执行</span>
+                  </div>
+                  <div class="action-state-row">
+                    <span class="action-state-chip">{{ stock.stock_strength_tag || '强弱待定' }}</span>
+                    <span class="action-state-chip">{{ stock.structure_state_tag || '结构待定' }}</span>
+                    <span class="action-state-chip">{{ stock.direction_signal_tag || '稳定主线' }}</span>
+                  </div>
+                  <div class="action-judgement">{{ executionJudgementLine(stock) }}</div>
+                  <div class="action-grid">
+                    <div class="action-block">
+                      <span class="action-block-label">执行方式</span>
+                      <strong>{{ executionMethodLabel(stock) }}</strong>
+                    </div>
+                    <div class="action-block">
+                      <span class="action-block-label">仓位提示</span>
+                      <strong>{{ executionPositionLabel(stock) }}</strong>
+                    </div>
+                  </div>
+                  <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || stock.stock_comment || '满足账户准入。' }}</div>
+                  <div class="action-risk">{{ executionRiskLine(stock) }}</div>
+                </article>
+              </section>
+
+              <section v-if="aggressiveTrialPool.length" class="execution-lane execution-lane-trial">
+                <div class="lane-head">
+                  <div class="lane-title-wrap">
+                    <div class="lane-title">进攻试错</div>
+                    <div class="lane-caption">不是标准舒服位，只适合小仓试错</div>
+                  </div>
+                  <span class="lane-badge lane-badge-trial">{{ aggressiveTrialPool.length }} 只</span>
+                </div>
+                <article v-for="stock in aggressiveTrialPool" :key="`trial-${stock.ts_code}`" class="action-card action-card-trial">
+                  <div class="action-card-top">
+                    <div>
+                      <div class="action-stock">{{ stock.stock_name }}</div>
+                      <div class="action-meta">{{ stock.ts_code }} · {{ stock.sector_name || '无方向' }}</div>
+                    </div>
+                    <span class="action-type-badge action-type-badge-trial">进攻试错</span>
+                  </div>
+                  <div class="action-state-row">
+                    <span class="action-state-chip">{{ stock.stock_strength_tag || '强弱待定' }}</span>
+                    <span class="action-state-chip">{{ stock.structure_state_tag || '结构待定' }}</span>
+                    <span class="action-state-chip">{{ stock.direction_signal_tag || '强化中' }}</span>
+                  </div>
+                  <div class="action-judgement">{{ executionJudgementLine(stock) }}</div>
+                  <div class="action-grid">
+                    <div class="action-block">
+                      <span class="action-block-label">执行方式</span>
+                      <strong>{{ executionMethodLabel(stock) }}</strong>
+                    </div>
+                    <div class="action-block">
+                      <span class="action-block-label">仓位提示</span>
+                      <strong>试错仓 / 小仓</strong>
+                    </div>
+                  </div>
+                  <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || '方向强，但位置不完美，只保留试错资格。' }}</div>
+                  <div class="action-risk">{{ trialRiskLine(stock) }}</div>
+                </article>
+              </section>
+
+              <section v-if="defenseTrialPool.length" class="execution-lane execution-lane-defense">
+                <div class="lane-head">
+                  <div class="lane-title-wrap">
+                    <div class="lane-title">防守试错</div>
+                    <div class="lane-caption">防守日仅保留极少数最强核心股轻仓试错</div>
+                  </div>
+                  <span class="lane-badge lane-badge-defense">{{ defenseTrialPool.length }} 只</span>
+                </div>
+                <article v-for="stock in defenseTrialPool" :key="`def-${stock.ts_code}`" class="action-card action-card-defense">
+                  <div class="action-card-top">
+                    <div>
+                      <div class="action-stock">{{ stock.stock_name }}</div>
+                      <div class="action-meta">{{ stock.ts_code }} · {{ stock.sector_name || '无方向' }}</div>
+                    </div>
+                    <span class="action-type-badge action-type-badge-defense">防守试错</span>
+                  </div>
+                  <div class="action-state-row">
+                    <span class="action-state-chip">{{ stock.stock_strength_tag || '强弱待定' }}</span>
+                    <span class="action-state-chip">{{ stock.structure_state_tag || '结构待定' }}</span>
+                    <span class="action-state-chip">{{ stock.direction_signal_tag || '防守保留' }}</span>
+                  </div>
+                  <div class="action-judgement">{{ executionJudgementLine(stock) }}</div>
+                  <div class="action-grid">
+                    <div class="action-block">
+                      <span class="action-block-label">执行方式</span>
+                      <strong>{{ executionMethodLabel(stock) }}</strong>
+                    </div>
+                    <div class="action-block">
+                      <span class="action-block-label">仓位提示</span>
+                      <strong>{{ executionPositionLabel(stock) }}</strong>
+                    </div>
+                  </div>
+                  <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || '防守环境下只保留极少数轻仓试错资格。' }}</div>
+                  <div class="action-risk">{{ trialRiskLine(stock) }}</div>
+                </article>
+              </section>
+              </div>
+              <div v-if="executionEmptyStates.length" class="execution-empty-strip">
+                <article
+                  v-for="state in executionEmptyStates"
+                  :key="state.key"
+                  class="execution-empty-card"
+                  :class="`execution-empty-card-${state.tone}`"
+                >
+                  <div class="execution-empty-head">
+                    <div>
+                      <div class="execution-empty-title">{{ state.title }}</div>
+                      <div class="execution-empty-caption">{{ state.caption }}</div>
+                    </div>
+                    <span class="execution-empty-badge">0 只</span>
+                  </div>
+                  <div class="execution-empty-reason">{{ state.reason }}</div>
+                </article>
+              </div>
+            </div>
+          </article>
+
+          <article class="priority-panel">
+            <div class="priority-panel-head">
+              <div>
+                <div class="section-kicker">模块 B</div>
+                <div class="section-title">市场最强观察池</div>
+                <div class="priority-panel-desc">先看市场在围绕哪些方向交易，再决定哪些票值得继续盯。</div>
+              </div>
+              <el-button text type="primary" @click="activeTab = 'market'">查看详细清单</el-button>
+            </div>
+            <div v-if="!marketDirectionGroups.length" class="priority-empty">当前没有需要重点盯的市场最强方向。</div>
+            <div v-else class="watch-group-grid">
+              <section v-for="group in marketDirectionGroups" :key="group.name" class="watch-group-card">
+                <div class="watch-group-head">
+                  <div>
+                    <div class="watch-group-title">{{ group.name }}</div>
+                    <div class="watch-group-state">{{ group.state }}</div>
+                  </div>
+                  <span class="watch-group-count">{{ group.items.length }} 只</span>
+                </div>
+                <div class="watch-group-insight">{{ group.summary }}</div>
+                <div class="watch-group-list">
+                  <div v-for="stock in group.items" :key="stock.ts_code" class="watch-group-item">
+                    <strong>{{ stock.stock_name }}</strong>
+                    <span>{{ watchRoleLabel(stock) }}</span>
+                    <em>{{ watchKeyLine(stock) }}</em>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </article>
+
+          <article class="priority-panel">
+            <div class="priority-panel-head">
+              <div>
+                <div class="section-kicker">模块 C</div>
+                <div class="section-title">趋势辨识度观察池</div>
+                <div class="priority-panel-desc">今天不一定最炸，但未来 1-3 天仍值得继续盯的结构票。</div>
+              </div>
+              <el-button text type="primary" @click="activeTab = 'trend'">查看详细清单</el-button>
+            </div>
+            <div v-if="!trendPool.length" class="priority-empty">当前没有明显更耐看的趋势锚。</div>
+            <div v-else class="trend-preview-grid">
+              <article v-for="stock in trendPreviewPool" :key="`trend-preview-${stock.ts_code}`" class="trend-preview-card">
+                <div class="trend-preview-top">
+                  <div>
+                    <div class="action-stock">{{ stock.stock_name }}</div>
+                    <div class="action-meta">{{ stock.ts_code }} · {{ stock.sector_name || '无方向' }}</div>
+                  </div>
+                  <span class="action-type-badge action-type-badge-watch">继续跟踪</span>
+                </div>
+                <div class="action-state-row">
+                  <span class="action-state-chip">{{ stock.structure_state_tag || '结构待定' }}</span>
+                  <span class="action-state-chip">{{ stock.next_tradeability_tag || '继续观察' }}</span>
+                </div>
+                <div class="action-judgement">{{ stock.why_this_pool || stock.stock_comment || '今天先跟踪，不急着抬手。' }}</div>
+                <div class="action-risk">{{ trendUpgradeLine(stock) }}</div>
+              </article>
+            </div>
+          </article>
+        </section>
+
+        <el-card class="detail-card">
+          <template #header>
+            <div class="priority-panel-head">
+              <div>
+                <div class="section-kicker">详细清单</div>
+                <div class="section-title">展开看每只票的完整判断和条件</div>
+              </div>
+            </div>
+          </template>
 
         <el-tabs v-model="activeTab">
           <el-tab-pane name="market">
@@ -788,6 +1069,7 @@
             </div>
           </el-tab-pane>
         </el-tabs>
+        </el-card>
       </template>
     </el-card>
     <StockCheckupDrawer
@@ -803,7 +1085,7 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { stockApi, decisionApi } from '../api'
+import { stockApi, decisionApi, marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 
@@ -822,6 +1104,7 @@ const poolsData = ref({
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
 const reviewStatsData = ref(null)
+const marketEnvData = ref(null)
 const loadError = ref('')
 const POOLS_TIMEOUT = 90000
 const REVIEW_STATS_TIMEOUT = 90000
@@ -841,6 +1124,12 @@ const trendCount = computed(() => poolsData.value.trend_recognition_pool?.length
 const accountCount = computed(() => poolsData.value.account_executable_pool?.length || 0)
 const holdingCount = computed(() => poolsData.value.holding_process_pool?.length || 0)
 const refreshButtonLoading = computed(() => loading.value || Boolean(poolsData.value.refresh_in_progress))
+const todayMarketEnv = computed(() => marketEnvData.value || {
+  market_env_tag: '中性',
+  breakout_allowed: false,
+  risk_level: '中',
+  market_comment: '',
+})
 
 const stopRefreshPolling = () => {
   if (!refreshPollTimer) return
@@ -916,38 +1205,184 @@ const accountEmptyReason = computed(() => {
   return `${prefix}当前没有满足账户准入的新标的，主要因为：${normalizedReasons.slice(0, 2).join('；')}`
 })
 
-const isComfortableAccountEntry = (stock) => ['回踩确认', '低吸预备'].includes(stock.next_tradeability_tag)
-const accountPoolGroups = computed(() => {
-  const comfortable = accountPool.value.filter((stock) => isComfortableAccountEntry(stock))
-  const breakthrough = accountPool.value.filter((stock) => stock.next_tradeability_tag === '突破确认')
-  const other = accountPool.value.filter(
-    (stock) => !isComfortableAccountEntry(stock) && stock.next_tradeability_tag !== '突破确认'
-  )
+const accountEntryMode = (stock) => {
+  const mode = String(stock?.account_entry_mode || '').trim().toLowerCase()
+  if (['standard', 'aggressive_trial', 'defense_trial'].includes(mode)) return mode
+  if (mode === 'trial') {
+    return String(stock?.pool_entry_reason || '').includes('防守') ? 'defense_trial' : 'aggressive_trial'
+  }
+  const reason = String(stock?.pool_entry_reason || '')
+  if (reason.includes('防守') && reason.includes('试错')) return 'defense_trial'
+  if (reason.includes('试错')) return 'aggressive_trial'
+  return 'standard'
+}
 
+const isAggressiveTrialExecution = (stock) => accountEntryMode(stock) === 'aggressive_trial'
+const isDefenseTrialExecution = (stock) => accountEntryMode(stock) === 'defense_trial'
+const standardExecutionPool = computed(() => accountPool.value.filter((stock) => accountEntryMode(stock) === 'standard'))
+const aggressiveTrialPool = computed(() => accountPool.value.filter((stock) => isAggressiveTrialExecution(stock)))
+const defenseTrialPool = computed(() => accountPool.value.filter((stock) => isDefenseTrialExecution(stock)))
+
+const getEnvTagType = (tag) => {
+  if (tag === '进攻') return 'success'
+  if (tag === '中性') return 'warning'
+  return 'danger'
+}
+
+const marketEnvironmentHeadline = computed(() => {
+  if (todayMarketEnv.value.market_env_tag === '进攻') return '市场允许更主动，但依旧先分清标准执行和试错票。'
+  if (todayMarketEnv.value.market_env_tag === '防守') return '今天先控仓和处理旧仓，新开仓只看极少数确认机会。'
+  return '市场处于中性切换期，优先看回踩确认，不要把观察票当执行票。'
+})
+
+const marketEnvironmentCopy = computed(() => (
+  todayMarketEnv.value.market_comment ||
+  (todayMarketEnv.value.breakout_allowed
+    ? '允许做确认后的主动出手，但更适合先做计划内执行。'
+    : '更适合等确认、看承接和控制仓位。')
+))
+
+const directionStateLabel = (stock) => {
+  if (stock?.direction_signal_tag) return stock.direction_signal_tag
+  if (stock?.sector_profile_tag === 'A类主线') return '稳定主线'
+  if (stock?.sector_profile_tag === 'B类次主线') return '次主线'
+  return '观察中'
+}
+
+const groupedDirections = computed(() => {
+  const groups = new Map()
+  ;[...marketPool.value, ...trendPool.value, ...accountPool.value].forEach((stock) => {
+    const name = String(stock.sector_name || '').trim()
+    if (!name) return
+    const current = groups.get(name) || { name, count: 0, items: [], top: null }
+    current.count += 1
+    current.items.push(stock)
+    if (!current.top || Number(stock.market_strength_score || 0) > Number(current.top.market_strength_score || 0)) {
+      current.top = stock
+    }
+    groups.set(name, current)
+  })
+  return [...groups.values()]
+    .sort((a, b) => (
+      Number(b.top?.market_strength_score || 0) - Number(a.top?.market_strength_score || 0) ||
+      b.count - a.count
+    ))
+})
+
+const primaryDirectionItems = computed(() => groupedDirections.value.slice(0, 3).map((group) => ({
+  name: group.name,
+  state: directionStateLabel(group.top),
+})))
+
+const directionOverviewCopy = computed(() => {
+  if (!primaryDirectionItems.value.length) return '当前没有足够清晰的主执行方向，优先看账户和持仓约束。'
+  const strengthening = primaryDirectionItems.value.filter((item) => ['强化中', '切换中', '盘中强化'].includes(item.state))
+  if (strengthening.length) {
+    return `优先看 ${primaryDirectionItems.value[0].name}，同时留意 ${strengthening.map((item) => item.name).join('、')} 的强化延续。`
+  }
+  return `今天先围绕 ${primaryDirectionItems.value.map((item) => item.name).join('、')} 这些方向做取舍。`
+})
+
+const executionGuidanceTitle = computed(() => {
+  if (holdingCount.value) return '先处理持仓，再看新机会'
+  if (standardExecutionPool.value.length) return '优先做标准执行票'
+  if (aggressiveTrialPool.value.length) return '允许小仓试错，但别当标准模式'
+  if (defenseTrialPool.value.length) return '防守环境仅保留轻仓试错'
+  return '今天以观察和跟踪为主'
+})
+
+const executionGuidanceCopy = computed(() => {
+  if (holdingCount.value) return '旧仓优先级最高；先把卖、减、持处理清楚，再决定是否看新票。'
+  if (standardExecutionPool.value.length && !aggressiveTrialPool.value.length) return '今天有计划内机会，先看标准执行区，不要被观察池分散注意力。'
+  if (standardExecutionPool.value.length && aggressiveTrialPool.value.length) return '先做标准执行；进攻试错只给强化方向前排的小仓资格。'
+  if (aggressiveTrialPool.value.length) return '今天没有太舒服的标准位，若要出手，只能在强化方向里做更快确认的试错仓。'
+  if (defenseTrialPool.value.length) return '当前环境偏防守，只保留极少数最强核心股的轻仓试错资格，不要把它当进攻信号。'
+  return '当前更适合先看观察池和趋势池，等更清晰的确认条件。'
+})
+
+const executionEmptyStates = computed(() => {
+  const states = []
+  if (!standardExecutionPool.value.length) {
+    states.push({
+      key: 'standard',
+      title: '标准执行',
+      caption: '今天没有明确的计划内舒服位',
+      reason: '当前账户可参与池更偏试错或防守保留，真正执行前更要依赖盘中确认。',
+      tone: 'standard',
+    })
+  }
+  if (!aggressiveTrialPool.value.length) {
+    states.push({
+      key: 'aggressive_trial',
+      title: '进攻试错',
+      caption: '当前没有需要额外放宽的小仓试错票',
+      reason: standardExecutionPool.value.length
+        ? '今天已有更舒服的标准执行票，系统没有再额外放出高风险进攻试错。'
+        : '今天没有命中“方向强但位置不完美”的试错分支，先别硬找强行出手点。',
+      tone: 'trial',
+    })
+  }
+  if (!defenseTrialPool.value.length) {
+    states.push({
+      key: 'defense_trial',
+      title: '防守试错',
+      caption: '防守保留模式今天没有触发',
+      reason: todayMarketEnv.value.market_env_tag === '防守'
+        ? '虽然是防守环境，但没有强到值得单列保留的最强核心股。'
+        : '当前不是防守环境，这一栏通常保持为空，不需要额外关注。',
+      tone: 'defense',
+    })
+  }
+  return states
+})
+
+const accountPoolGroups = computed(() => {
   return [
     {
-      key: 'comfortable',
-      title: '回踩 / 低吸可参与',
-      desc: '更偏舒服买点，优先看承接和确认，不急着追。',
-      items: comfortable,
+      key: 'standard',
+      title: '标准执行',
+      desc: '买点相对舒服，先按计划仓看回踩确认、低吸和标准突破。',
+      items: standardExecutionPool.value,
     },
     {
-      key: 'breakthrough',
-      title: '突破确认可参与',
-      desc: '更偏强势跟随，重点看放量过位和站稳，不做盲追。',
-      items: breakthrough,
+      key: 'aggressive_trial',
+      title: '进攻试错',
+      desc: '方向强但位置不完美，只给强化方向前排小仓试错资格。',
+      items: aggressiveTrialPool.value,
     },
     {
-      key: 'other',
-      title: '其他可参与',
-      desc: '账户允许参与，但需要你回到买点页结合盘中再细看。',
-      items: other,
+      key: 'defense_trial',
+      title: '防守试错',
+      desc: '防守日仅保留极少数最强核心股轻仓试错，不属于主动进攻模式。',
+      items: defenseTrialPool.value,
     },
   ].filter((group) => group.items.length)
 })
 const holdingPool = computed(() =>
   [...(poolsData.value.holding_process_pool || [])].sort(compareHoldingPriority)
 )
+const trendPreviewPool = computed(() => trendPool.value.slice(0, 6))
+const marketDirectionGroups = computed(() => {
+  const grouped = new Map()
+  marketPool.value.forEach((stock) => {
+    const name = String(stock.sector_name || '').trim() || '未标记方向'
+    const entry = grouped.get(name) || { name, items: [], top: null }
+    entry.items.push(stock)
+    if (!entry.top || Number(stock.market_strength_score || 0) > Number(entry.top.market_strength_score || 0)) {
+      entry.top = stock
+    }
+    grouped.set(name, entry)
+  })
+  return [...grouped.values()]
+    .sort((a, b) => Number(b.top?.market_strength_score || 0) - Number(a.top?.market_strength_score || 0))
+    .slice(0, 4)
+    .map((group) => ({
+      name: group.name,
+      state: directionStateLabel(group.top),
+      summary: group.top?.direction_signal_reason || group.top?.stock_comment || '方向还在观察期，重点看前排承接和一致性。',
+      items: group.items.slice(0, 4),
+    }))
+})
 
 const reviewSnapshotTypeLabel = (value) => {
   if (value === 'buy_available') return '买点-可买'
@@ -1287,14 +1722,14 @@ const priorityTagType = (value) => {
 }
 
 const accountEntryTag = (stock) => {
-  if ((stock.pool_entry_reason || '').includes('防守')) return '防守试错'
-  if ((stock.pool_entry_reason || '').includes('试错')) return '进攻试错'
+  if (accountEntryMode(stock) === 'defense_trial') return '防守试错'
+  if (accountEntryMode(stock) === 'aggressive_trial') return '进攻试错'
   return '满足准入'
 }
 
 const accountEntryTagType = (stock) => {
-  if ((stock.pool_entry_reason || '').includes('防守')) return 'warning'
-  if ((stock.pool_entry_reason || '').includes('试错')) return 'danger'
+  if (accountEntryMode(stock) === 'defense_trial') return 'warning'
+  if (accountEntryMode(stock) === 'aggressive_trial') return 'danger'
   return 'success'
 }
 
@@ -1335,7 +1770,11 @@ const marketFooterLine = (stock) => `${stock.stock_strength_tag || '中'}强度 
 const trendActionLine = (stock) => stock.direction_signal_reason || stock.why_this_pool || '这只票更适合盯结构和承接，不急着看日内最炸。'
 const trendFooterLine = (stock) => `${stock.structure_state_tag || '结构'} / ${stock.next_tradeability_tag || '待确认'} / 执行分${formatScore(stock.execution_opportunity_score)}`
 const accountActionLine = (stock) => stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但仍要等买点确认。'
-const accountFooterFlag = (stock) => ((stock.pool_entry_reason || '').includes('试错') ? '试错仓先行' : '等待买点页确认')
+const accountFooterFlag = (stock) => {
+  if (accountEntryMode(stock) === 'defense_trial') return '防守仓先行'
+  if (accountEntryMode(stock) === 'aggressive_trial') return '试错仓先行'
+  return '等待买点页确认'
+}
 const holdingActionLine = (stock) => `${stock.sell_signal_tag || '观察'}：${stock.sell_reason || stock.sell_comment || '继续跟踪。'}`
 const holdingFooterFlag = (stock) => (stock.can_sell_today ? '今日可卖' : 'T+1锁定')
 const hardFilterLine = (stock) => stock.hard_filter_summary || '硬过滤状态未返回'
@@ -1367,6 +1806,51 @@ const holdingOrderLabel = (index) => {
   return '最后处理 '
 }
 
+const executionMethodLabel = (stock) => {
+  if (['低吸预备', '有低吸点'].includes(stock.next_tradeability_tag)) return '低吸'
+  if (['回踩确认', '有回踩确认点'].includes(stock.next_tradeability_tag)) return '回踩确认'
+  if (['突破确认', '有突破点'].includes(stock.next_tradeability_tag)) return '突破确认'
+  if (accountEntryMode(stock) === 'defense_trial') return '轻仓确认 / 不追高'
+  if (accountEntryMode(stock) === 'aggressive_trial') return '分歧转强 / 放量确认'
+  return '观察'
+}
+
+const executionPositionLabel = (stock) => {
+  if (accountEntryMode(stock) === 'defense_trial') return '防守仓 / 更小仓'
+  if (accountEntryMode(stock) === 'aggressive_trial') return '试错仓 / 小仓'
+  return '计划仓 / 正常仓'
+}
+
+const executionJudgementLine = (stock) => {
+  if (accountEntryMode(stock) === 'defense_trial') {
+    return stock.why_not_executable_but_should_watch || '防守环境下只保留最强核心股的轻仓试错，不可当成主动进攻机会。'
+  }
+  if (accountEntryMode(stock) === 'aggressive_trial') {
+    return stock.why_not_executable_but_should_watch || '方向强度够，但位置不够舒服，只适合小仓试错。'
+  }
+  return stock.pool_entry_reason || stock.stock_comment || '位置相对舒服，可按计划执行。'
+}
+
+const executionRiskLine = (stock) => (
+  stock.stock_falsification_cond
+    ? `失效条件：${stock.stock_falsification_cond}`
+    : '风险提示：确认失败就不要硬扛。'
+)
+
+const trialRiskLine = (stock) => (
+  stock.miss_risk_note || (
+    accountEntryMode(stock) === 'defense_trial'
+      ? '风险提示：防守环境下只做轻仓确认，若承接转弱或环境继续恶化应更快撤退。'
+      : '风险提示：若次日不继续强化，容易直接回落；不可当成标准执行票重仓处理。'
+  )
+)
+
+const watchRoleLabel = (stock) => stock.representative_role_tag || stock.stock_role_tag || '代表票'
+const watchKeyLine = (stock) => stock.stock_comment || stock.direction_signal_reason || '先看方向一致性和承接。'
+const trendUpgradeLine = (stock) => (
+  stock.miss_risk_note || stock.why_not_executable_but_should_watch || '若后续出现更清晰的方向确认或买点确认，可升级为执行票。'
+)
+
 const openCheckup = (stock, defaultTarget = '观察型') => {
   checkupStock.value = {
     tsCode: stock.ts_code,
@@ -1374,6 +1858,23 @@ const openCheckup = (stock, defaultTarget = '观察型') => {
     defaultTarget
   }
   checkupVisible.value = true
+}
+
+const loadMarketEnv = async (options = {}) => {
+  try {
+    const tradeDate = getLocalDate()
+    const res = await marketApi.getEnv(tradeDate, { timeout: POOLS_TIMEOUT, refresh: Boolean(options.refresh) })
+    marketEnvData.value = res.data?.data || null
+  } catch (_error) {
+    marketEnvData.value = null
+  }
+}
+
+const handleRefresh = async () => {
+  await Promise.all([
+    loadData({ refresh: true }),
+    loadMarketEnv({ refresh: true }),
+  ])
 }
 
 const clearFocusSector = () => {
@@ -1449,6 +1950,7 @@ onMounted(() => {
   displayDate.value = getLocalDate()
   loadData()
   loadReviewInsight()
+  loadMarketEnv()
 })
 
 onUnmounted(() => {
@@ -1467,6 +1969,465 @@ watch(reviewSourceFilter, () => {
 
 .page-alert {
   margin-bottom: 16px;
+}
+
+.command-center {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.summary-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.08), transparent 38%),
+    linear-gradient(155deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+}
+
+.summary-card-market {
+  background:
+    radial-gradient(circle at top right, rgba(57, 181, 74, 0.16), transparent 36%),
+    linear-gradient(155deg, rgba(12, 61, 28, 0.85), rgba(12, 27, 19, 0.96));
+}
+
+.summary-card-direction {
+  background:
+    radial-gradient(circle at top right, rgba(80, 156, 255, 0.18), transparent 36%),
+    linear-gradient(155deg, rgba(14, 42, 77, 0.9), rgba(12, 24, 46, 0.97));
+}
+
+.summary-card-action {
+  background:
+    radial-gradient(circle at top right, rgba(255, 165, 0, 0.18), transparent 38%),
+    linear-gradient(155deg, rgba(87, 47, 10, 0.9), rgba(43, 24, 9, 0.98));
+}
+
+.summary-card-account {
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.08), transparent 40%),
+    linear-gradient(155deg, rgba(42, 44, 57, 0.92), rgba(23, 24, 31, 0.98));
+}
+
+.summary-kicker {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.summary-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.summary-headline {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #fff;
+}
+
+.summary-headline-action {
+  font-size: 20px;
+}
+
+.summary-copy {
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.summary-chip-row,
+.direction-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.summary-chip,
+.direction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+}
+
+.summary-chip strong,
+.direction-pill strong {
+  font-weight: 700;
+}
+
+.direction-pill em {
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.64);
+}
+
+.priority-stack {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.priority-panel,
+.detail-card {
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.priority-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.priority-panel-desc {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-sec);
+}
+
+.priority-empty,
+.lane-empty {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--color-text-sec);
+}
+
+.execution-lane-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.execution-dual-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.execution-lane {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.execution-lane-standard {
+  background: linear-gradient(180deg, rgba(18, 78, 48, 0.28), rgba(20, 29, 25, 0.45));
+}
+
+.execution-lane-trial {
+  background: linear-gradient(180deg, rgba(116, 58, 12, 0.3), rgba(39, 24, 13, 0.48));
+}
+
+.execution-lane-defense {
+  background: linear-gradient(180deg, rgba(107, 76, 17, 0.28), rgba(39, 33, 12, 0.46));
+}
+
+.execution-empty-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.execution-empty-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.execution-empty-card-standard {
+  box-shadow: inset 0 0 0 1px rgba(45, 197, 104, 0.08);
+}
+
+.execution-empty-card-trial {
+  box-shadow: inset 0 0 0 1px rgba(255, 161, 59, 0.08);
+}
+
+.execution-empty-card-defense {
+  box-shadow: inset 0 0 0 1px rgba(245, 204, 96, 0.08);
+}
+
+.execution-empty-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.execution-empty-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.execution-empty-caption {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-sec);
+}
+
+.execution-empty-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.execution-empty-reason {
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.lane-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.lane-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.lane-caption {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.lane-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(45, 197, 104, 0.18);
+  color: #aef2c8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lane-badge-trial {
+  background: rgba(255, 161, 59, 0.2);
+  color: #ffd6a2;
+}
+
+.lane-badge-defense {
+  background: rgba(245, 204, 96, 0.2);
+  color: #ffe39d;
+}
+
+.action-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(9, 10, 13, 0.28);
+}
+
+.action-card-standard {
+  box-shadow: inset 0 1px 0 rgba(132, 255, 184, 0.06);
+}
+
+.action-card-trial {
+  box-shadow: inset 0 1px 0 rgba(255, 189, 120, 0.08);
+}
+
+.action-card-defense {
+  box-shadow: inset 0 1px 0 rgba(255, 223, 120, 0.08);
+}
+
+.action-card-top,
+.trend-preview-top,
+.watch-group-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.action-stock,
+.watch-group-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.action-meta,
+.watch-group-state {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-sec);
+}
+
+.action-type-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.action-type-badge-standard {
+  background: rgba(57, 181, 74, 0.16);
+  color: #aef2c8;
+}
+
+.action-type-badge-trial {
+  background: rgba(255, 161, 59, 0.2);
+  color: #ffd6a2;
+}
+
+.action-type-badge-defense {
+  background: rgba(245, 204, 96, 0.2);
+  color: #ffe39d;
+}
+
+.action-type-badge-watch {
+  background: rgba(80, 156, 255, 0.18);
+  color: #b8d7ff;
+}
+
+.action-state-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.action-state-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.action-judgement,
+.watch-group-insight {
+  font-size: 14px;
+  line-height: 1.8;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.action-block {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.action-block-label {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.action-block strong {
+  color: #fff;
+  font-size: 14px;
+}
+
+.action-reason,
+.action-risk {
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.watch-group-grid,
+.trend-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.watch-group-card,
+.trend-preview-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.watch-group-count {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.watch-group-list {
+  display: grid;
+  gap: 10px;
+}
+
+.watch-group-item {
+  display: grid;
+  gap: 2px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.watch-group-item strong {
+  color: #fff;
+  font-size: 14px;
+}
+
+.watch-group-item span,
+.watch-group-item em {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-sec);
+  font-style: normal;
 }
 
 .card-header {
@@ -1575,6 +2536,10 @@ watch(reviewSourceFilter, () => {
 
 .overview-mini-stat-market {
   box-shadow: inset 0 0 0 1px rgba(103, 165, 255, 0.12);
+}
+
+.overview-mini-stat-defense {
+  box-shadow: inset 0 0 0 1px rgba(245, 204, 96, 0.12);
 }
 
 .overview-mini-label,
@@ -1927,6 +2892,12 @@ watch(reviewSourceFilter, () => {
 }
 
 @media (max-width: 1200px) {
+  .command-center,
+  .watch-group-grid,
+  .trend-preview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .overview-hero,
   .decision-support-grid,
   .decision-rail-grid,
@@ -1936,6 +2907,10 @@ watch(reviewSourceFilter, () => {
 }
 
 @media (max-width: 900px) {
+  .command-center,
+  .execution-dual-grid,
+  .watch-group-grid,
+  .trend-preview-grid,
   .overview-hero,
   .decision-support-grid,
   .overview-main,
@@ -2363,6 +3338,9 @@ watch(reviewSourceFilter, () => {
 }
 
 @media (max-width: 1024px) {
+  .action-card-top,
+  .watch-group-head,
+  .priority-panel-head,
   .overview-main,
   .signal-card-header,
   .signal-footer {
@@ -2370,6 +3348,7 @@ watch(reviewSourceFilter, () => {
     align-items: flex-start;
   }
 
+  .action-grid,
   .overview-stats,
   .price-strip,
   .condition-panel-grid,

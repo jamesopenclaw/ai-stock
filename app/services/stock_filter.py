@@ -264,6 +264,7 @@ class StockFilterService:
             scored_stocks,
             holding_codes,
             allowed_new_pool_profiles,
+            market_env=market_env,
         )
         representative_codes = self._select_representative_codes(
             scored_stocks,
@@ -336,7 +337,7 @@ class StockFilterService:
                 trend_ok = self._should_enter_trend_recognition(stock) and (
                     not representative_codes or normalized_code in representative_codes
                 )
-                account_ok, account_reason, account_position_hint = self._should_enter_account_pool(
+                account_ok, account_reason, account_position_hint, account_entry_mode = self._should_enter_account_pool(
                     stock,
                     account,
                     market_env,
@@ -445,6 +446,7 @@ class StockFilterService:
                         ),
                         review_bias_profile=review_bias_profile,
                     )
+                    account_clone.account_entry_mode = account_entry_mode
                     account_clone.pool_entry_reason = account_reason
                     account_clone.position_hint = account_position_hint
                     account_clone.account_entry_score = round(
@@ -553,6 +555,7 @@ class StockFilterService:
         scored_stocks: List[StockOutput],
         holding_codes: set[str],
         allowed_profiles: set[SectorProfileTag],
+        market_env=None,
     ) -> set[str]:
         """三池新开仓范围以当前前排主线为主，并保留一个新强化方向。"""
         if not sector_scan or not allowed_profiles:
@@ -574,6 +577,7 @@ class StockFilterService:
                 getattr(sector_scan, "sub_mainline_sectors", []),
                 scored_stocks,
                 holding_codes,
+                market_env=market_env,
             )
             for name in strengthening_names:
                 if name not in candidate_names:
@@ -604,14 +608,15 @@ class StockFilterService:
         sectors: List[object],
         scored_stocks: List[StockOutput],
         holding_codes: set[str],
+        market_env=None,
     ) -> List[str]:
-        """从次主线里挑一个正在强化/切换中的方向，作为观察候补席位。"""
+        """从次主线里挑强化方向；进攻环境允许保留两个竞争中的强化席位。"""
         sector_by_name = {
             str(getattr(sector, "sector_name", "") or "").strip(): sector
             for sector in sectors or []
             if str(getattr(sector, "sector_name", "") or "").strip()
         }
-        candidates: List[tuple[float, str]] = []
+        candidates: List[tuple[float, str, str]] = []
         for name, sector in sector_by_name.items():
             related = [
                 stock for stock in scored_stocks
@@ -643,10 +648,24 @@ class StockFilterService:
             )
             if self._is_strengthening_direction_candidate(best):
                 score += 12.0
-            candidates.append((score, name))
+            candidates.append((score, name, sector_signal))
 
         candidates.sort(reverse=True)
-        return [name for _, name in candidates[:1]]
+        if not candidates:
+            return []
+
+        slot_limit = 1
+        if (
+            getattr(market_env, "market_env_tag", None) == MarketEnvTag.ATTACK
+            and len(candidates) >= 2
+        ):
+            top_score = float(candidates[0][0] or 0.0)
+            second_score = float(candidates[1][0] or 0.0)
+            second_signal = candidates[1][2]
+            if second_signal in {"强化中", "切换中"} and second_score >= top_score - 8.0:
+                slot_limit = 2
+
+        return [name for _, name, _ in candidates[:slot_limit]]
 
     def _resolve_allowed_sector_name_for_stock(
         self,
@@ -1195,7 +1214,7 @@ class StockFilterService:
         return "中性"
 
     def _is_intraday_strengthening_stock(self, stock: StockOutput) -> bool:
-        """识别盘中刚强化、值得放入观察雷达的票。"""
+        """识别代理版盘中强化信号，用于观察池补充，并非真实过程事件识别。"""
         close_quality = self._calculate_close_quality(stock)
         vol_ratio = float(stock.vol_ratio or 0.0)
         return (
@@ -1230,18 +1249,22 @@ class StockFilterService:
         stock: StockInput,
         sector,
     ) -> tuple[Optional[str], Optional[str]]:
-        """生成方向切换/强化说明，用于三池解释和排序。"""
+        """生成方向切换/强化说明。当前仅基于收盘代理特征，不代表真实盘中过程识别。"""
         if not sector:
             return None, None
 
         sector_state = self._infer_sector_rotation_state(sector)
         if sector_state in {"强化中", "切换中"}:
-            return sector_state, f"{getattr(sector, 'sector_name', stock.sector_name)}处于{sector_state}，适合保留观察席位。"
+            return (
+                sector_state,
+                f"{getattr(sector, 'sector_name', stock.sector_name)}处于{sector_state}，当前按代理版动态信号保留观察席位。"
+            )
         if self._is_intraday_strengthening_raw(stock):
-            return "盘中强化", "个股盘中承接修复明显，属于需要盯盘确认的强化候选。"
+            return "盘中强化", "个股出现代理版动态强化信号，说明收盘特征偏强，仍需盯盘确认是否为真实盘中回流。"
         return None, None
 
     def _is_intraday_strengthening_raw(self, stock: StockInput) -> bool:
+        """代理版动态信号：用收盘位置、量比、涨幅近似盘中强化，不等同过程识别。"""
         close_quality = self._calculate_close_quality(stock)
         return (
             close_quality >= 0.65
@@ -1450,7 +1473,7 @@ class StockFilterService:
 
     def _build_watch_only_reason(self, stock: StockOutput, not_other_pools: List[str]) -> Optional[str]:
         if stock.direction_signal_tag in {"强化中", "切换中", "盘中强化"}:
-            return "方向正在强化，值得继续观察，但当前更适合等确认后再执行。"
+            return "方向出现代理版动态强化信号，值得继续观察，但当前更适合等确认后再执行。"
         joined = " ".join(not_other_pools or [])
         if "买点" in joined or "执行" in joined or "账户" in joined:
             return "方向可看，但当前账户节奏或买点不完全匹配。"
@@ -1462,7 +1485,7 @@ class StockFilterService:
         if not why_not_exec:
             return None
         if stock.direction_signal_tag in {"强化中", "切换中", "盘中强化"}:
-            return "若方向继续强化，后续可能从观察票升级为执行票。"
+            return "若后续代理版动态强化继续兑现为真实回流，可能从观察票升级为执行票。"
         if self._is_aggressive_trial_candidate(stock):
             return "若后续承接确认，这类强势票容易从观察阶段直接演化成进攻试错机会。"
         return "当前未入执行池不等于无价值，更多是节奏与账户适配问题。"
@@ -1760,55 +1783,57 @@ class StockFilterService:
         stock: StockOutput,
         account: Optional[AccountInput],
         market_env,
-    ) -> tuple[bool, Optional[str], Optional[str]]:
-        """判断是否进入账户可参与池，并返回原因与仓位提示。"""
+    ) -> tuple[bool, Optional[str], Optional[str], Optional[str]]:
+        """判断是否进入账户可参与池，并返回原因、仓位提示与实际入池模式。"""
         if stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE:
             if stock.next_tradeability_tag in {
                 NextTradeabilityTag.CHASE_ONLY,
                 NextTradeabilityTag.NO_GOOD_ENTRY,
             } and not self._is_aggressive_trial_candidate(stock):
-                return False, "方向虽强，但当前更偏情绪宣泄，先观察不直接执行。", None
+                return False, "方向虽强，但当前更偏情绪宣泄，先观察不直接执行。", None, None
             if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
                 entry_ok, entry_reason, position_hint = self._has_comfortable_account_entry(stock)
                 if not entry_ok:
                     if self._is_aggressive_trial_candidate(stock):
-                        return True, "方向强度足够，虽位置不完美，但保留小仓进攻试错资格。", "仅做试错仓，确认承接后再考虑加仓"
-                    return False, entry_reason, None
+                        return True, "方向强度足够，虽位置不完美，但保留小仓进攻试错资格。", "仅做试错仓，确认承接后再考虑加仓", "aggressive_trial"
+                    return False, entry_reason, None, None
             if self._is_account_executable(stock, account):
                 if stock.next_tradeability_tag in {
                     NextTradeabilityTag.CHASE_ONLY,
                     NextTradeabilityTag.NO_GOOD_ENTRY,
                 } and self._is_aggressive_trial_candidate(stock):
-                    return True, "方向强度足够，虽非标准舒服位，但保留小仓进攻试错资格。", "仅做小仓试错，等分歧后确认承接"
-                return True, self._tradable_account_entry_reason(stock), self._tradable_position_hint(stock)
-            return False, "账户条件未通过，先观察不直接执行。", None
+                    return True, "方向强度足够，虽非标准舒服位，但保留小仓进攻试错资格。", "仅做小仓试错，等分歧后确认承接", "aggressive_trial"
+                return True, self._tradable_account_entry_reason(stock), self._tradable_position_hint(stock), "standard"
+            return False, "账户条件未通过，先观察不直接执行。", None, None
 
         if stock.stock_tradeability_tag == StockTradeabilityTag.CAUTION:
             if stock.next_tradeability_tag in {
                 NextTradeabilityTag.CHASE_ONLY,
                 NextTradeabilityTag.NO_GOOD_ENTRY,
             } and not self._is_aggressive_trial_candidate(stock):
-                return False, "方向可看，但买点尚未清晰，先留在观察池。", None
+                return False, "方向可看，但买点尚未清晰，先留在观察池。", None, None
             if stock.next_tradeability_tag not in {
                 NextTradeabilityTag.RETRACE_CONFIRM,
                 NextTradeabilityTag.LOW_SUCK,
             } and not self._is_aggressive_trial_candidate(stock):
-                return False, "交易性仍偏谨慎，且没有明确回踩/低吸位，先观察。", None
+                return False, "交易性仍偏谨慎，且没有明确回踩/低吸位，先观察。", None, None
             if stock.sector_profile_tag not in {
                 SectorProfileTag.A_MAINLINE,
                 SectorProfileTag.B_SUB_MAINLINE,
             }:
-                return False, "回踩位虽在，但不属主线/次主线，不进账户可参与池。", None
+                return False, "回踩位虽在，但不属主线/次主线，不进账户可参与池。", None, None
             entry_ok, entry_reason, position_hint = self._has_comfortable_account_entry(stock)
+            entry_mode = "standard"
             if not entry_ok:
                 if self._is_aggressive_trial_candidate(stock):
                     entry_reason = "方向强度足够，虽位置不完美，但保留小仓进攻试错资格。"
                     position_hint = "仅做试错仓，确认承接后再考虑加仓"
+                    entry_mode = "aggressive_trial"
                 else:
-                    return False, entry_reason, None
+                    return False, entry_reason, None, None
             if self._is_account_executable(stock, account):
-                return True, entry_reason, position_hint
-            return False, "账户条件未通过，先观察不直接执行。", None
+                return True, entry_reason, position_hint, entry_mode
+            return False, "账户条件未通过，先观察不直接执行。", None, None
 
         defense_allowed, defense_reason, defense_position_hint = self._allow_defense_trial(
             stock,
@@ -1816,8 +1841,8 @@ class StockFilterService:
             market_env,
         )
         if defense_allowed:
-            return True, defense_reason, defense_position_hint
-        return False, "交易性或账户条件不足，暂不进入账户可参与池。", None
+            return True, defense_reason, defense_position_hint, "defense_trial"
+        return False, "交易性或账户条件不足，暂不进入账户可参与池。", None, None
 
     def _market_watch_vote_count(self, stock: StockOutput) -> int:
         votes = 0
@@ -1879,27 +1904,86 @@ class StockFilterService:
         return votes
 
     def _is_aggressive_trial_candidate(self, stock: StockOutput) -> bool:
-        """给真正强势但不够完美的票保留小仓试错资格。"""
-        return (
-            stock.sector_profile_tag in {SectorProfileTag.A_MAINLINE, SectorProfileTag.B_SUB_MAINLINE}
-            and float(stock.market_strength_score or 0) >= 82
-            and float(stock.execution_opportunity_score or 0) >= 72
-            and stock.stock_strength_tag == StockStrengthTag.STRONG
-            and stock.next_tradeability_tag in {
-                NextTradeabilityTag.BREAKTHROUGH,
-                NextTradeabilityTag.CHASE_ONLY,
-                NextTradeabilityTag.NO_GOOD_ENTRY,
-            }
-            and stock.day_strength_tag in {
-                DayStrengthTag.LIMIT_STRONG,
-                DayStrengthTag.TREND_STRONG,
-                DayStrengthTag.REBOUND_STRONG,
-            }
-            and 4.0 <= float(stock.change_pct or 0) <= 7.2
-            and float(stock.turnover_rate or 0) <= 16.5
-            and stock.structure_state_tag != StructureStateTag.LATE_STAGE
-            and not self._has_upper_shadow_risk(stock)
-        )
+        """给真正强势但不够完美的票保留小仓试错资格。采用硬风控+软打分，避免模板化卡边界。"""
+        if stock.sector_profile_tag not in {SectorProfileTag.A_MAINLINE, SectorProfileTag.B_SUB_MAINLINE}:
+            return False
+        if stock.stock_strength_tag != StockStrengthTag.STRONG:
+            return False
+        if stock.next_tradeability_tag not in {
+            NextTradeabilityTag.BREAKTHROUGH,
+            NextTradeabilityTag.CHASE_ONLY,
+            NextTradeabilityTag.NO_GOOD_ENTRY,
+        }:
+            return False
+        if stock.structure_state_tag == StructureStateTag.LATE_STAGE:
+            return False
+        if self._has_upper_shadow_risk(stock):
+            return False
+
+        change_pct = float(stock.change_pct or 0)
+        turnover_rate = float(stock.turnover_rate or 0)
+        if change_pct < 2.5 or change_pct > 8.2:
+            return False
+        if turnover_rate > 20.5:
+            return False
+
+        return self._aggressive_trial_score(stock) >= 60.0
+
+    def _aggressive_trial_score(self, stock: StockOutput) -> float:
+        """进攻试错软评分：看强度、执行性、日内状态和拥挤度，不再用一串硬阈值卡死。"""
+        score = 0.0
+        market_strength_score = float(stock.market_strength_score or 0.0)
+        execution_score = float(stock.execution_opportunity_score or 0.0)
+        change_pct = float(stock.change_pct or 0.0)
+        turnover_rate = float(stock.turnover_rate or 0.0)
+
+        if stock.sector_profile_tag == SectorProfileTag.A_MAINLINE:
+            score += 12.0
+        elif stock.sector_profile_tag == SectorProfileTag.B_SUB_MAINLINE:
+            score += 8.0
+
+        if market_strength_score >= 84:
+            score += 20.0
+        elif market_strength_score >= 80:
+            score += 16.0
+        elif market_strength_score >= 76:
+            score += 12.0
+
+        if execution_score >= 76:
+            score += 18.0
+        elif execution_score >= 72:
+            score += 14.0
+        elif execution_score >= 68:
+            score += 10.0
+
+        if stock.day_strength_tag in {
+            DayStrengthTag.LIMIT_STRONG,
+            DayStrengthTag.TREND_STRONG,
+            DayStrengthTag.REBOUND_STRONG,
+        }:
+            score += 10.0
+
+        if stock.direction_signal_tag in {"强化中", "切换中", "盘中强化"}:
+            score += 6.0
+        if self._is_intraday_strengthening_stock(stock):
+            score += 6.0
+
+        if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            score += 10.0
+        else:
+            score += 7.0
+
+        if 4.0 <= change_pct <= 7.2:
+            score += 10.0
+        elif 3.2 <= change_pct <= 8.2:
+            score += 6.0
+
+        if turnover_rate <= 16.5:
+            score += 8.0
+        elif turnover_rate <= 18.5:
+            score += 4.0
+
+        return round(score, 1)
 
     def _passes_account_participation_gate(
         self,

@@ -459,6 +459,7 @@ class StockOutput(BaseModel):
     sell_priority: Optional[str] = None
     sell_comment: Optional[str] = None
     # 账户可参与池补充说明
+    account_entry_mode: Optional[str] = None
     pool_entry_reason: Optional[str] = None
     position_hint: Optional[str] = None
     # LLM 辅助解释
@@ -733,6 +734,7 @@ class SellPointOutput(BaseModel):
     add_signal_tag: Optional[str] = Field(None, description="建议加仓/仅可小加/可关注加仓")
     add_signal_reason: Optional[str] = Field(None, description="加仓提示原因")
     # LLM 辅助解释
+    llm_plain_note: Optional[str] = None
     llm_action_sentence: Optional[str] = None
     llm_trigger_sentence: Optional[str] = None
     llm_risk_sentence: Optional[str] = None
@@ -934,6 +936,7 @@ class LlmPoolsSummary(BaseModel):
 class LlmSellNote(BaseModel):
     """卖点页 LLM 对单只持仓的辅助说明"""
     ts_code: str
+    plain_note: str = ""
     action_sentence: str = ""
     trigger_sentence: str = ""
     risk_sentence: str = ""
