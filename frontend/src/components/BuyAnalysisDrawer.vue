@@ -42,10 +42,8 @@
               {{ execution?.action || '等' }}
             </div>
             <div class="overview-copy">
-              <div class="overview-title">
-                {{ basic?.buy_signal_tag || '-' }} / {{ basic?.buy_point_type || '-' }}
-              </div>
-              <div class="overview-desc">{{ execution?.reason || '-' }}</div>
+              <div class="overview-title">{{ overviewTitle }}</div>
+              <div class="overview-desc">{{ overviewDesc }}</div>
               <div class="overview-conclusion">
                 {{ positionAdvice?.suggestion || '-' }}：{{ positionAdvice?.reason || '-' }}
               </div>
@@ -71,7 +69,7 @@
             <div class="summary-card">
               <span class="summary-label">分时结论</span>
               <strong class="summary-value">{{ intraday?.conclusion || '-' }}</strong>
-              <span class="summary-tip">{{ intraday?.intraday_structure || '-' }}</span>
+              <span class="summary-tip">{{ intradayStructureSummary }}</span>
             </div>
             <div class="summary-card">
               <span class="summary-label">仓位</span>
@@ -178,6 +176,9 @@
             <div class="order-plan-lead" :class="`order-plan-lead-${orderPlanLeadTone}`">
               <strong>{{ orderPlanLeadTitle }}</strong>
               <span>{{ orderPlanLeadCopy }}</span>
+            </div>
+            <div v-if="deepRetraceNotice" class="deep-retrace-notice">
+              {{ deepRetraceNotice }}
             </div>
             <div class="order-plan-grid">
               <article
@@ -321,6 +322,26 @@ const actionBadgeClass = computed(() => {
   if (execution.value?.action === '放弃') return 'badge-pass'
   return 'badge-wait'
 })
+const overviewTitle = computed(() => {
+  const signal = basic.value?.buy_signal_tag || '-'
+  const type = basic.value?.buy_point_type || '-'
+  return `${signal} / ${type}形态`
+})
+const overviewDesc = computed(() => {
+  const structure = intraday.value?.intraday_structure || basic.value?.buy_point_type || ''
+  if (execution.value?.action === '放弃' && daily.value?.buy_point_level === 'D' && structure) {
+    return `分时形态偏${structure}，但日线级别未通过，今天不给下单资格。`
+  }
+  return execution.value?.reason || '-'
+})
+const intradayStructureSummary = computed(() => {
+  const structure = intraday.value?.intraday_structure || '-'
+  if (structure === '-') return structure
+  if (intraday.value?.conclusion === '放弃') {
+    return `分时形态：${structure}（仅形态，不代表可买）`
+  }
+  return `分时形态：${structure}`
+})
 const showAddDecisionSection = computed(() => (
   accountContext.value?.current_use === '加仓' || Boolean(addDecision.value?.eligible)
 ))
@@ -382,20 +403,39 @@ const dailyReferenceRows = computed(() => (
 const intradayDecisionSummary = computed(() => {
   const conclusion = intraday.value?.conclusion || '-'
   if (conclusion === '买') return '分时确认到位，可以按主买入位执行'
-  if (conclusion === '放弃') return '分时破坏，不值得再等'
-  return '分时还没给确认，继续等触发'
+  if (conclusion === '放弃' && daily.value?.buy_point_level === 'D') {
+    return '分时虽有结构参考，但日线未通过，今天不执行'
+  }
+  if (conclusion === '放弃') return '分时承接质量不够，当前不值得执行'
+  return `还没到直接下单位，先等${waitingTriggerLabel.value}`
 })
 const intradayLeadTitle = computed(() => {
   const conclusion = intraday.value?.conclusion || '-'
   if (conclusion === '买') return '分时已经给到相对明确的进场信号'
-  if (conclusion === '放弃') return '分时没有配合，别把等待变成硬上'
-  return '当前最重要的是盯确认，不是抢先下单'
+  if (conclusion === '放弃' && daily.value?.buy_point_level === 'D') return '分时形态可以参考，但不能覆盖日线否决'
+  if (conclusion === '放弃') return '分时承接不够扎实，别把等待变成硬上'
+  if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price)) return '当前先等回踩确认，不是继续追高'
+  if (primaryOrderCardKey.value === 'breakout' && isActionableLevel(orderPlan.value?.breakout_price)) return '当前先等突破站稳，不要提前抢跑'
+  if (primaryOrderCardKey.value === 'low_absorb' && isActionableLevel(orderPlan.value?.low_absorb_price)) return '当前先等低吸区出现，不要在中间位硬接'
+  return '当前最重要的是等触发，不是抢先下单'
 })
 const intradayLeadCopy = computed(() => {
   const structure = intraday.value?.intraday_structure || '-'
   const keyLevel = intraday.value?.key_level_status || '-'
   if (intraday.value?.conclusion === '买') return `${structure} 已经比较清楚，下一步是确认成交后别马上跌回关键位下方。`
-  if (intraday.value?.conclusion === '放弃') return `${structure} 没有给到舒服承接，${keyLevel}`
+  if (intraday.value?.conclusion === '放弃' && daily.value?.buy_point_level === 'D') {
+    return `当前分时可见${structure}迹象，但日线级别未通过，今天只把这些关键位当观察边界，不当买点。${keyLevel}`
+  }
+  if (intraday.value?.conclusion === '放弃') return `${structure} 的承接质量还不够扎实，暂时不值得执行。${keyLevel}`
+  if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price)) {
+    return `现在更重要的是等价格回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带，并确认没有跌穿、承接能稳住；不是等它继续往上冲。`
+  }
+  if (primaryOrderCardKey.value === 'breakout' && isActionableLevel(orderPlan.value?.breakout_price)) {
+    return `现在更重要的是等价格放量站稳 ${normalizeLevelValue(orderPlan.value?.breakout_price)} 附近，再确认不是假突破；不要提前赌它能冲过去。`
+  }
+  if (primaryOrderCardKey.value === 'low_absorb' && isActionableLevel(orderPlan.value?.low_absorb_price)) {
+    return `现在更重要的是等价格回到低吸区 ${normalizeLevelValue(orderPlan.value?.low_absorb_price)} 附近，再看承接和量能是否配合；不是在中间位先伸手。`
+  }
   return `${structure} 还不够明确，先盯关键位和均价线是否继续改善。`
 })
 const intradayLeadTone = computed(() => {
@@ -424,6 +464,53 @@ const isActionableLevel = (value) => {
   return !text.includes('需确认')
 }
 const normalizeLevelValue = (value) => (isActionableLevel(value) ? String(value).trim() : '当前不设')
+const parseZoneCenter = (value) => {
+  const text = String(value || '').trim()
+  if (!text || text === '-' || text.includes('需确认')) return null
+  const parts = text.split('-').map((item) => Number(item))
+  if (parts.length === 2 && parts.every((item) => !Number.isNaN(item))) {
+    return (parts[0] + parts[1]) / 2
+  }
+  const single = Number(text)
+  return Number.isNaN(single) ? null : single
+}
+const referenceCurrentPrice = computed(() => {
+  if (props.currentPrice !== null && props.currentPrice !== undefined && !Number.isNaN(Number(props.currentPrice))) {
+    return Number(props.currentPrice)
+  }
+  return parseZoneCenter(orderPlan.value?.breakout_price)
+})
+const isDeepRetraceReference = computed(() => {
+  const current = referenceCurrentPrice.value
+  const retraceCenter = parseZoneCenter(orderPlan.value?.retrace_confirm_price)
+  if (current === null || retraceCenter === null) return false
+  return retraceCenter < current * 0.88
+})
+const deepRetraceNotice = computed(() => {
+  if (!isDeepRetraceReference.value || !isActionableLevel(orderPlan.value?.retrace_confirm_price)) return ''
+  return `回踩确认区 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 离现价较远，当前先不把它当执行位，只作为深回踩后的理想二次确认参考。`
+})
+const waitingTriggerLabel = computed(() => {
+  if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price)) {
+    return `回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住`
+  }
+  if (primaryOrderCardKey.value === 'breakout' && isActionableLevel(orderPlan.value?.breakout_price)) {
+    return `放量站稳 ${normalizeLevelValue(orderPlan.value?.breakout_price)} 附近`
+  }
+  if (primaryOrderCardKey.value === 'low_absorb' && isActionableLevel(orderPlan.value?.low_absorb_price)) {
+    return `回到低吸区 ${normalizeLevelValue(orderPlan.value?.low_absorb_price)} 附近`
+  }
+  if (isActionableLevel(orderPlan.value?.low_absorb_price)) {
+    return `回到低吸区 ${normalizeLevelValue(orderPlan.value?.low_absorb_price)} 附近`
+  }
+  if (isActionableLevel(orderPlan.value?.breakout_price)) {
+    return `放量站稳 ${normalizeLevelValue(orderPlan.value?.breakout_price)} 附近`
+  }
+  if (isActionableLevel(orderPlan.value?.retrace_confirm_price)) {
+    return `回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住`
+  }
+  return '主触发位出现并稳住'
+})
 const structureCueText = computed(() => (
   [
     basic.value?.buy_point_type,
@@ -439,9 +526,17 @@ const primaryOrderCardKey = computed(() => {
   }
   if (currentAction.value === '买') {
     if (prefersBreakoutEntry.value && isActionableLevel(orderPlan.value?.breakout_price)) return 'breakout'
-    if (prefersRetraceEntry.value && isActionableLevel(orderPlan.value?.retrace_confirm_price)) return 'retrace'
+    if (
+      prefersRetraceEntry.value
+      && isActionableLevel(orderPlan.value?.retrace_confirm_price)
+      && !isDeepRetraceReference.value
+    ) return 'retrace'
   }
-  if (prefersRetraceEntry.value && isActionableLevel(orderPlan.value?.retrace_confirm_price)) return 'retrace'
+  if (
+    prefersRetraceEntry.value
+    && isActionableLevel(orderPlan.value?.retrace_confirm_price)
+    && !isDeepRetraceReference.value
+  ) return 'retrace'
   if (isActionableLevel(orderPlan.value?.low_absorb_price)) return 'low_absorb'
   if (prefersBreakoutEntry.value && isActionableLevel(orderPlan.value?.breakout_price)) return 'breakout'
   if (isActionableLevel(orderPlan.value?.breakout_price)) return 'breakout'
@@ -467,7 +562,10 @@ const orderPlanSummary = computed(() => {
 })
 const orderPlanLeadTitle = computed(() => {
   if (currentAction.value === '买') return '进场条件基本到位，按主买入位执行'
-  if (currentAction.value === '放弃') return '这笔计划当前不做'
+  if (currentAction.value === '放弃') return '今天只给边界，不给机会'
+  if (isActionableLevel(orderPlan.value?.retrace_confirm_price)) return '当前先等回踩确认，不要把观察页当成下单页'
+  if (isActionableLevel(orderPlan.value?.breakout_price)) return '当前先等突破站稳，不要把观察页当成下单页'
+  if (isActionableLevel(orderPlan.value?.low_absorb_price)) return '当前先等低吸区出现，不要把观察页当成下单页'
   return '当前先等触发，不要把观察页当成下单页'
 })
 const orderPlanLeadCopy = computed(() => {
@@ -481,7 +579,16 @@ const orderPlanLeadCopy = computed(() => {
     return `优先按低吸区试错，但本质仍是试错单，不是可以随便抬价追进去的买点。`
   }
   if (currentAction.value === '放弃') {
-    return `上方超过 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 不追，下方失守 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 也不买；这些价格现在是边界，不是机会。`
+    return `上方 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 是放弃追价线，下方 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 是失效不买线；这些价格现在只负责告诉你哪里不能做，不代表中间就能做。`
+  }
+  if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price)) {
+    return `当前更重要的是等价格回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住承接；不是等它继续往上冲。高于 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 不追，跌破 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 不买。`
+  }
+  if (primaryOrderCardKey.value === 'breakout' && isActionableLevel(orderPlan.value?.breakout_price)) {
+    return `当前更重要的是等价格放量站稳 ${normalizeLevelValue(orderPlan.value?.breakout_price)} 附近；不是提前赌突破。高于 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 不追，跌破 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 不买。`
+  }
+  if (primaryOrderCardKey.value === 'low_absorb' && isActionableLevel(orderPlan.value?.low_absorb_price)) {
+    return `当前更重要的是等价格回到低吸区 ${normalizeLevelValue(orderPlan.value?.low_absorb_price)} 附近，再看是否有承接；不是在中间价位先试错。高于 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 不追，跌破 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 不买。`
   }
   return `当前更重要的是等主触发位出现并稳住。高于 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 不追，跌破 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 不买。`
 })
@@ -499,7 +606,7 @@ const orderPlanCards = computed(() => {
       scene: '靠支撑先接，不追价',
       value: normalizeLevelValue(orderPlan.value?.low_absorb_price),
       note: primaryKey === 'low_absorb'
-        ? (orderPlan.value?.trigger_condition || '优先看低吸区是否出现承接。')
+        ? `优先等价格回到 ${normalizeLevelValue(orderPlan.value?.low_absorb_price)} 一带，再看缩量承接是否站稳；这是靠近支撑的试错区，不是拉高后的追价区。`
         : '更适合靠近支撑时试错，不适合拉高后再追。',
       tone: 'entry',
       badge: isActionableLevel(orderPlan.value?.low_absorb_price) ? (primaryKey === 'low_absorb' ? '主路径' : '备选') : '当前不设',
@@ -512,7 +619,7 @@ const orderPlanCards = computed(() => {
       scene: '放量站稳后跟随',
       value: normalizeLevelValue(orderPlan.value?.breakout_price),
       note: primaryKey === 'breakout'
-        ? (orderPlan.value?.trigger_condition || '只有真正突破并站稳，才按这条执行。')
+        ? `只有放量站稳 ${normalizeLevelValue(orderPlan.value?.breakout_price)} 附近，才按突破路径处理；先冲上去但站不稳，不算有效确认。`
         : '适合强势直上时跟随，不适合弱市或冲高回落时硬追。',
       tone: 'breakout',
       badge: isActionableLevel(orderPlan.value?.breakout_price) ? (primaryKey === 'breakout' ? '主路径' : '备选') : '当前不设',
@@ -521,14 +628,24 @@ const orderPlanCards = computed(() => {
     },
     {
       key: 'retrace',
-      label: '回踩确认区',
-      scene: '确认承接后再进',
+      label: isDeepRetraceReference.value ? '深回踩参考位' : '回踩确认区',
+      scene: isDeepRetraceReference.value ? '深回踩后二次确认' : '确认承接后再进',
       value: normalizeLevelValue(orderPlan.value?.retrace_confirm_price),
       note: primaryKey === 'retrace'
-        ? (orderPlan.value?.trigger_condition || '只有回踩稳住，才按确认买点处理。')
-        : '这条更偏保守确认，用来过滤“看着强、实际站不稳”的位置。',
+        ? `只有回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带后重新稳住，才按确认买点处理；没回到这里前，不把它当现价附近的执行位。`
+        : (
+          isDeepRetraceReference.value
+            ? '这条离现价较远，更像深回踩理想位，先作为二次回撤参考，不作为当前主路径。'
+            : '这条更偏保守确认，用来过滤“看着强、实际站不稳”的位置。'
+        ),
       tone: 'confirm',
-      badge: isActionableLevel(orderPlan.value?.retrace_confirm_price) ? (primaryKey === 'retrace' ? '主路径' : '备选') : '当前不设',
+      badge: isActionableLevel(orderPlan.value?.retrace_confirm_price)
+        ? (
+          primaryKey === 'retrace'
+            ? '主路径'
+            : (isDeepRetraceReference.value ? '深回踩' : '备选')
+        )
+        : '当前不设',
       active: isActionableLevel(orderPlan.value?.retrace_confirm_price),
       primary: primaryKey === 'retrace',
     },
@@ -934,6 +1051,17 @@ const loadData = async () => {
 .order-plan-lead-danger {
   background: rgba(255, 122, 127, 0.08);
   border-color: rgba(255, 122, 127, 0.24);
+}
+
+.deep-retrace-notice {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 196, 107, 0.22);
+  background: rgba(255, 196, 107, 0.08);
+  color: #ffe3b3;
+  line-height: 1.7;
+  font-size: 13px;
 }
 
 .data-list {

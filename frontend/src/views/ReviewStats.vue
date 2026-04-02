@@ -1,6 +1,6 @@
 <template>
   <div class="review-view">
-    <el-card>
+    <el-card class="review-shell">
       <template #header>
         <div class="card-header">
           <div class="card-header-title">
@@ -13,6 +13,15 @@
               <el-option :value="10" label="最近10日" />
               <el-option :value="20" label="最近20日" />
             </el-select>
+            <el-button
+              type="warning"
+              plain
+              @click="loadData({ refresh: true, refreshOutcomes: true, actionLabel: '补算收益' })"
+              :loading="outcomeRefreshing"
+              :disabled="loading || !hasPendingOutcomes"
+            >
+              补算收益
+            </el-button>
             <el-button @click="loadData({ refresh: true })" :loading="loading">刷新</el-button>
           </div>
         </div>
@@ -22,267 +31,178 @@
       <template v-else>
         <el-empty v-if="!reviewData?.bucket_stats?.length" description="暂无复盘快照" />
         <template v-else>
-          <div v-if="reviewData?.stats_mode === 'pool'" class="mode-tip">
-            当前展示的是三池快照统计；打开买点页或跑完整决策分析后，会逐步补齐买点复盘数据。
-          </div>
-          <div v-if="reviewPendingTip" class="mode-tip">
-            {{ reviewPendingTip }}
+          <div class="status-row">
+            <div v-if="reviewData?.stats_mode === 'pool'" class="status-pill status-pill-warn">
+              当前先展示三池统计，买点样本会在后续分析后补齐。
+            </div>
+            <div v-if="reviewPendingTip" class="status-pill status-pill-neutral">
+              {{ reviewPendingTip }}
+            </div>
           </div>
 
-          <section class="review-hero">
-            <div class="hero-main">
-              <div class="hero-copy">
-                <div class="hero-kicker">过去 {{ limitDays }} 个交易日的复盘结论</div>
-                <div class="hero-title">先记住最有效和最弱的结构，再决定明天把注意力放在哪。</div>
-                <div class="hero-desc">这页不是告诉你“哪只股票要买”，而是告诉你“哪类结构最近更值得信、哪类结构该降权”。</div>
-              </div>
-              <div class="conclusion-grid">
-                <section class="conclusion-card conclusion-card-strong">
-                  <div class="conclusion-kicker">最近最有效</div>
-                  <div class="conclusion-title">{{ bestSignal?.shortLabel || '暂无结论' }}</div>
-                  <div class="conclusion-copy">{{ bestSignalSummary }}</div>
-                  <div v-if="bestSignal" class="conclusion-metrics">
-                    <span>5日均值 {{ formatPctValue(bestSignal.avg_return_5d) }}</span>
-                    <span>5日胜率 {{ formatPctValue(bestSignal.win_rate_5d, true) }}</span>
-                    <span>样本 {{ bestSignal.count }}</span>
-                  </div>
-                </section>
-
-                <section class="conclusion-card conclusion-card-weak">
-                  <div class="conclusion-kicker">最近最弱</div>
-                  <div class="conclusion-title">{{ weakSignal?.shortLabel || '暂无结论' }}</div>
-                  <div class="conclusion-copy">{{ weakSignalSummary }}</div>
-                  <div v-if="weakSignal" class="conclusion-metrics">
-                    <span>5日均值 {{ formatPctValue(weakSignal.avg_return_5d) }}</span>
-                    <span>5日胜率 {{ formatPctValue(weakSignal.win_rate_5d, true) }}</span>
-                    <span>样本 {{ weakSignal.count }}</span>
-                  </div>
-                </section>
-              </div>
+          <section class="overview-panel">
+            <div class="overview-copy">
+              <div class="overview-kicker">复盘结论</div>
+              <div class="overview-title">{{ headlineTitle }}</div>
+              <div class="overview-desc">{{ headlineDesc }}</div>
+              <div class="overview-legend">类型 = 来源，分层 = 结构。先看动作，再看证据。</div>
             </div>
 
-            <aside class="hero-side">
-              <div class="summary-grid">
-                <div class="summary-item">
-                  <div class="label">覆盖交易日</div>
-                  <div class="value">{{ reviewData.trade_dates?.length || 0 }}</div>
-                </div>
-                <div class="summary-item">
-                  <div class="label">快照总数</div>
-                  <div class="value">{{ reviewData.snapshot_count || 0 }}</div>
-                </div>
-                <div class="summary-item">
-                  <div class="label">当前最强</div>
-                  <div class="value value-compact">{{ bestSignal ? bestSignal.shortLabel : '-' }}</div>
-                </div>
-                <div class="summary-item">
-                  <div class="label">当前最弱</div>
-                  <div class="value value-compact">{{ weakSignal ? weakSignal.shortLabel : '-' }}</div>
-                </div>
-              </div>
-
-              <div class="action-board">
-                <div class="action-board-title">明天怎么用这份复盘</div>
-                <div class="action-board-grid">
-                  <div class="action-card action-card-do">
-                    <div class="action-label">优先看</div>
-                    <div class="action-text">{{ nextActionDo }}</div>
-                  </div>
-                  <div class="action-card action-card-watch">
-                    <div class="action-label">先观察</div>
-                    <div class="action-text">{{ nextActionWatch }}</div>
-                  </div>
-                  <div class="action-card action-card-avoid">
-                    <div class="action-label">暂时少做</div>
-                    <div class="action-text">{{ nextActionAvoid }}</div>
-                  </div>
-                </div>
-              </div>
-            </aside>
-          </section>
-
-          <section class="radar-board">
-            <div class="radar-board-title">这轮结构优先级</div>
-            <div class="radar-grid">
-              <div class="radar-panel radar-panel-do">
-                <div class="radar-label">优先样本</div>
-                <div class="radar-list">
-                  <article v-for="row in priorityRows" :key="`best-${row.shortLabel}`" class="radar-item">
-                    <strong>{{ row.shortLabel }}</strong>
-                    <span>5日均值 {{ formatPctValue(row.avg_return_5d) }} · 胜率 {{ formatPctValue(row.win_rate_5d, true) }}</span>
-                  </article>
-                </div>
-              </div>
-              <div class="radar-panel radar-panel-avoid">
-                <div class="radar-label">降权样本</div>
-                <div class="radar-list">
-                  <article v-for="row in cautionRows" :key="`weak-${row.shortLabel}`" class="radar-item">
-                    <strong>{{ row.shortLabel }}</strong>
-                    <span>5日均值 {{ formatPctValue(row.avg_return_5d) }} · 胜率 {{ formatPctValue(row.win_rate_5d, true) }}</span>
-                  </article>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section v-if="strategySummaries.length" class="strategy-board">
-            <div class="strategy-board-title">双口径结论</div>
-            <div class="strategy-board-desc">开仓看第一次出手的结构质量；加仓看已有底仓后的扩仓质量。这两件事不要混着读。</div>
-            <div class="strategy-grid">
-              <article
-                v-for="item in strategySummaries"
-                :key="item.key"
-                :class="['strategy-card', `strategy-card-${item.tone}`]"
-              >
-                <div class="strategy-kicker">{{ item.kicker }}</div>
-                <div class="strategy-title">{{ item.title }}</div>
-                <div class="strategy-copy">{{ item.copy }}</div>
-                <div class="strategy-row">
-                  <span>最强：{{ item.bestLabel }}</span>
-                  <span>最弱：{{ item.weakLabel }}</span>
-                </div>
-                <div class="strategy-row">
-                  <span>{{ item.doText }}</span>
-                </div>
+            <div class="overview-stats">
+              <article v-for="item in overviewStats" :key="item.label" class="stat-card">
+                <div class="stat-label">{{ item.label }}</div>
+                <div class="stat-value">{{ item.value }}</div>
               </article>
             </div>
           </section>
 
-          <div class="source-guide">
-            <div class="source-guide-head">
-              <div>
-                <div class="source-guide-title">这些类型到底来自哪里</div>
-                <div class="source-guide-desc">先看来源，再看分层。三池负责缩小范围，买点负责判断能不能下手。</div>
+          <section class="focus-grid">
+            <article class="focus-card focus-card-good">
+              <div class="focus-kicker">当前优先</div>
+              <div class="focus-title">{{ bestSignal?.shortLabel || '暂无明确优先组' }}</div>
+              <div class="focus-copy">{{ bestSignalSummary }}</div>
+              <div v-if="bestSignal" class="focus-metrics">
+                <span>5日均值 {{ formatPctValue(bestSignal.avg_return_5d) }}</span>
+                <span>5日胜率 {{ formatPctValue(bestSignal.win_rate_5d, true) }}</span>
+                <span>样本 {{ bestSignal.count }}</span>
               </div>
-            </div>
-            <div class="source-guide-grid">
-              <article
-                v-for="item in sourceGuideCards"
-                :key="item.key"
-                :class="['source-guide-card', `source-guide-card-${item.tone}`]"
-              >
-                <div class="source-guide-kicker">{{ item.kicker }}</div>
-                <div class="source-guide-name">{{ item.name }}</div>
-                <div class="source-guide-copy">{{ item.copy }}</div>
-                <div class="source-guide-chip-row">
-                  <span class="source-guide-chip">{{ item.useFor }}</span>
-                  <span class="source-guide-chip">{{ item.hint }}</span>
-                </div>
-                <div class="source-guide-actions">
-                  <el-button size="small" @click="openSourceGroup(item.snapshotType)">{{ item.actionText }}</el-button>
-                </div>
-              </article>
-            </div>
-          </div>
+            </article>
 
-          <div class="evidence-head">
-            <div>
-              <div class="evidence-title">统计证据</div>
-              <div class="evidence-desc">每一行都表示“某个来源里的某种结构”，再看它后续 1/3/5 日的表现。</div>
-            </div>
-            <div class="evidence-tip">类型看来源，分层看结构。先有三池/买点，后有复盘统计。</div>
-          </div>
+            <article class="focus-card focus-card-bad">
+              <div class="focus-kicker">当前降权</div>
+              <div class="focus-title">{{ weakSignal?.shortLabel || '暂无明确降权组' }}</div>
+              <div class="focus-copy">{{ weakSignalSummary }}</div>
+              <div v-if="weakSignal" class="focus-metrics">
+                <span>5日均值 {{ formatPctValue(weakSignal.avg_return_5d) }}</span>
+                <span>5日胜率 {{ formatPctValue(weakSignal.win_rate_5d, true) }}</span>
+                <span>样本 {{ weakSignal.count }}</span>
+              </div>
+            </article>
 
-          <section class="sample-board">
-            <article
-              v-for="group in sampleGroups"
-              :key="group.key"
-              :class="['sample-card', `sample-card-${group.tone}`]"
-            >
-              <div class="sample-kicker">{{ group.kicker }}</div>
-              <div class="sample-name">{{ group.name }}</div>
-              <div class="sample-copy">{{ group.copy }}</div>
-              <div class="sample-metrics">
-                <span>样本 {{ group.count }}</span>
-                <span>{{ group.bestLabel }}</span>
+            <article class="focus-card focus-card-playbook">
+              <div class="focus-kicker">明日动作</div>
+              <div class="playbook-list">
+                <div v-for="item in actionItems" :key="item.label" class="playbook-item">
+                  <span class="playbook-label">{{ item.label }}</span>
+                  <span class="playbook-text">{{ item.text }}</span>
+                </div>
               </div>
             </article>
           </section>
 
-          <section
-            v-for="group in evidenceGroups"
-            :key="group.key"
-            class="evidence-group"
-          >
-            <div class="evidence-group-head">
+          <section class="shortcut-panel">
+            <div class="section-head">
               <div>
-                <div class="evidence-group-title">{{ group.title }}</div>
-                <div class="evidence-group-desc">{{ group.desc }}</div>
-              </div>
-              <div class="evidence-group-meta">
-                <span>{{ group.count }} 条结构</span>
-                <span>{{ group.bestLabel }}</span>
+                <div class="section-title">来源捷径</div>
+                <div class="section-desc">先确认这条结论来自三池、买点还是加仓，再回到源页面处理。</div>
               </div>
             </div>
 
-            <el-table :data="group.rows" style="width: 100%">
-              <el-table-column label="建议" width="96">
-                <template #default="{ row }">
-                  <span :class="['table-judgement', `table-judgement-${rowRecommendation(row).tone}`]">
-                    {{ rowRecommendation(row).label }}
-                  </span>
-                </template>
-              </el-table-column>
-              <el-table-column label="类型" width="150">
-                <template #default="{ row }">
-                  {{ row.snapshot_type_label }}
-                </template>
-              </el-table-column>
-              <el-table-column label="分层" min-width="220">
-                <template #default="{ row }">
-                  <div class="bucket-cell">
-                    <div class="bucket-name">{{ row.candidate_bucket_tag || '未分层' }}</div>
-                    <div class="bucket-copy">{{ bucketHint(row.candidate_bucket_tag) }}</div>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column v-if="group.key === 'add'" label="加仓结论" width="110">
-                <template #default="{ row }">
-                  {{ row.add_position_decision || '-' }}
-                </template>
-              </el-table-column>
-              <el-table-column v-if="group.key === 'add'" label="场景" width="110">
-                <template #default="{ row }">
-                  {{ row.add_position_scene || '-' }}
-                </template>
-              </el-table-column>
-              <el-table-column prop="count" label="出现次数" width="90" />
-              <el-table-column label="1日均值" width="90">
-                <template #default="{ row }">
-                  {{ formatPctValue(row.avg_return_1d) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="1日胜率" width="90">
-                <template #default="{ row }">
-                  {{ formatPctValue(row.win_rate_1d, true) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="3日均值" width="90">
-                <template #default="{ row }">
-                  {{ formatPctValue(row.avg_return_3d) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="3日胜率" width="90">
-                <template #default="{ row }">
-                  {{ formatPctValue(row.win_rate_3d, true) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="5日均值" width="90">
-                <template #default="{ row }">
-                  {{ formatPctValue(row.avg_return_5d) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="5日胜率" width="90">
-                <template #default="{ row }">
-                  {{ formatPctValue(row.win_rate_5d, true) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="查看来源" width="120" fixed="right">
-                <template #default="{ row }">
-                  <el-button link type="primary" size="small" @click="openSourcePage(row)">去源页面</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
+            <div class="shortcut-grid">
+              <article
+                v-for="item in sourceGuideCards"
+                :key="item.key"
+                :class="['shortcut-card', `shortcut-card-${item.tone}`]"
+              >
+                <div class="shortcut-name">{{ item.name }}</div>
+                <div class="shortcut-copy">{{ item.copy }}</div>
+                <div class="shortcut-chip-row">
+                  <span class="shortcut-chip">{{ item.useFor }}</span>
+                  <span class="shortcut-chip">{{ item.hint }}</span>
+                </div>
+                <el-button size="small" @click="openSourceGroup(item.snapshotType)">
+                  {{ item.actionText }}
+                </el-button>
+              </article>
+            </div>
+          </section>
+
+          <section class="evidence-panel">
+            <div class="section-head">
+              <div>
+                <div class="section-title">结构证据</div>
+                <div class="section-desc">一次只看一组来源，避免把开仓、加仓和三池样本混着读。</div>
+              </div>
+              <div class="evidence-tip">先看建议，再看样本和 1/3/5 日表现。</div>
+            </div>
+
+            <el-tabs v-model="activeEvidenceGroup" class="evidence-tabs">
+              <el-tab-pane
+                v-for="group in evidenceGroups"
+                :key="group.key"
+                :label="`${group.tabLabel} · ${group.count}`"
+                :name="group.key"
+              >
+                <div class="group-summary">
+                  <span class="group-summary-badge">{{ group.bestLabel }}</span>
+                  <span class="group-summary-desc">{{ group.desc }}</span>
+                </div>
+
+                <el-table :data="group.rows" style="width: 100%">
+                  <el-table-column label="建议" width="92">
+                    <template #default="{ row }">
+                      <span :class="['table-judgement', `table-judgement-${rowRecommendation(row).tone}`]">
+                        {{ rowRecommendation(row).label }}
+                      </span>
+                    </template>
+                  </el-table-column>
+
+                  <el-table-column label="结构" min-width="280">
+                    <template #default="{ row }">
+                      <div class="structure-cell">
+                        <div class="structure-main">
+                          <strong>{{ row.snapshot_type_label }}</strong>
+                          <span class="structure-divider">/</span>
+                          <span>{{ row.candidate_bucket_tag || '未分层' }}</span>
+                        </div>
+                        <div class="structure-hint">{{ bucketHint(row.candidate_bucket_tag) }}</div>
+                        <div v-if="row.add_position_decision || row.add_position_scene" class="structure-tags">
+                          <span v-if="row.add_position_decision" class="structure-tag">{{ row.add_position_decision }}</span>
+                          <span v-if="row.add_position_scene" class="structure-tag">{{ row.add_position_scene }}</span>
+                        </div>
+                      </div>
+                    </template>
+                  </el-table-column>
+
+                  <el-table-column label="样本" width="120">
+                    <template #default="{ row }">
+                      <div class="sample-cell">
+                        <strong>{{ row.count }}</strong>
+                        <span>已结算 {{ resolvedCount(row) }}</span>
+                      </div>
+                    </template>
+                  </el-table-column>
+
+                  <el-table-column label="收益" min-width="190">
+                    <template #default="{ row }">
+                      <div class="metric-stack">
+                        <div v-for="item in metricItems(row, 'return')" :key="`${row.shortLabel}-${item.label}-return`" class="metric-line">
+                          <span>{{ item.label }}</span>
+                          <strong>{{ item.value }}</strong>
+                        </div>
+                      </div>
+                    </template>
+                  </el-table-column>
+
+                  <el-table-column label="胜率" min-width="190">
+                    <template #default="{ row }">
+                      <div class="metric-stack">
+                        <div v-for="item in metricItems(row, 'win')" :key="`${row.shortLabel}-${item.label}-win`" class="metric-line">
+                          <span>{{ item.label }}</span>
+                          <strong>{{ item.value }}</strong>
+                        </div>
+                      </div>
+                    </template>
+                  </el-table-column>
+
+                  <el-table-column label="查看来源" width="110" fixed="right">
+                    <template #default="{ row }">
+                      <el-button link type="primary" size="small" @click="openSourcePage(row)">去源页面</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+            </el-tabs>
           </section>
         </template>
       </template>
@@ -291,14 +211,16 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRouter } from 'vue-router'
-import { decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
+import { decisionApi } from '../api'
 
 const loading = ref(false)
+const outcomeRefreshing = ref(false)
 const limitDays = ref(10)
 const reviewData = ref(null)
+const activeEvidenceGroup = ref('open')
 const REVIEW_STATS_TIMEOUT = 90000
 const router = useRouter()
 
@@ -310,86 +232,96 @@ const SNAPSHOT_TYPE_LABELS = {
   pool_market: '三池-观察池'
 }
 
+const sourceGuideCards = [
+  {
+    key: 'pool_market',
+    snapshotType: 'pool_market',
+    name: '三池观察池',
+    copy: '先缩小范围，不直接执行。',
+    useFor: '先盯方向',
+    hint: '不替代买点',
+    actionText: '查看三池',
+    tone: 'market'
+  },
+  {
+    key: 'pool_account',
+    snapshotType: 'pool_account',
+    name: '三池可参与池',
+    copy: '账户允许参与，但还没到执行结论。',
+    useFor: '看账户准入',
+    hint: '不等于立刻买',
+    actionText: '查看三池',
+    tone: 'account'
+  },
+  {
+    key: 'buy_observe',
+    snapshotType: 'buy_observe',
+    name: '买点观察',
+    copy: '结构可跟踪，确认条件还不够。',
+    useFor: '继续盯盘',
+    hint: '先等确认',
+    actionText: '查看买点',
+    tone: 'watch'
+  },
+  {
+    key: 'buy_available',
+    snapshotType: 'buy_available',
+    name: '买点可买',
+    copy: '已经接近执行区，适合比较优先级。',
+    useFor: '决定先做谁',
+    hint: '仍看触发价',
+    actionText: '查看买点',
+    tone: 'buy'
+  },
+  {
+    key: 'buy_add',
+    snapshotType: 'buy_add',
+    name: '加仓候选',
+    copy: '只回答已有底仓后值不值得继续扩。',
+    useFor: '单看加仓质量',
+    hint: '不和开仓混读',
+    actionText: '查看持仓',
+    tone: 'account'
+  }
+]
+
+const BUCKET_HINTS = {
+  强势确认: '偏强结构，优先看确认质量。',
+  趋势回踩: '更适合等回踩承接后再做。',
+  异动预备: '先列入预备名单，继续等放量。',
+  观察补充: '辅助观察，优先级通常更低。',
+  未分层: '暂无稳定结构标签。'
+}
+
 const snapshotTypeLabel = (value, addDecision = '') => {
   if (value === 'buy_add') {
     return addDecision ? `加仓-${addDecision}` : SNAPSHOT_TYPE_LABELS.buy_add
   }
   return SNAPSHOT_TYPE_LABELS[value] || value || '-'
 }
+
 const rowLabel = (row) => `${snapshotTypeLabel(row.snapshot_type, row.add_position_decision)} / ${row.candidate_bucket_tag || '未分层'}`
-
-const BUCKET_HINTS = {
-  强势确认: '已经偏强，重点看放量确认和站稳，不适合无脑追高。',
-  趋势回踩: '结构还在，重点看回踩承接和再次转强，适合等舒服位置。',
-  异动预备: '刚开始异动，先当预备名单，等量价继续确认再升级。',
-  观察补充: '只是补充观察样本，优先级通常低于主分层。',
-  未分层: '暂时没有稳定结构标签，更多作为辅助样本参考。'
-}
-
-const bucketHint = (value) => BUCKET_HINTS[value || '未分层'] || '这是一类候选结构标签，复盘用它来比较同类信号最近的表现。'
-
-const sourceGuideCards = computed(() => ([
-  {
-    key: 'pool_market',
-    snapshotType: 'pool_market',
-    kicker: '三池来源',
-    name: '三池-观察池',
-    copy: '代表当天最强但还不能直接执行的观察名单，任务是先缩小盯盘范围。',
-    useFor: '用来看方向和样本',
-    hint: '不替代买点确认',
-    actionText: '查看三池观察池',
-    tone: 'market'
-  },
-  {
-    key: 'pool_account',
-    snapshotType: 'pool_account',
-    kicker: '三池来源',
-    name: '三池-可参与池',
-    copy: '代表已经通过账户准入的候选，但是否出手还要回到买点页看触发和失效。',
-    useFor: '用来看账户是否允许',
-    hint: '能参与不等于立刻买',
-    actionText: '查看三池可参与池',
-    tone: 'account'
-  },
-  {
-    key: 'buy_observe',
-    snapshotType: 'buy_observe',
-    kicker: '买点来源',
-    name: '买点-观察',
-    copy: '代表结构值得继续盯，但确认条件还没到齐，适合等盘中验证后再升级。',
-    useFor: '用来看需要继续跟踪的结构',
-    hint: '先等确认，不抢先手',
-    actionText: '查看买点观察区',
-    tone: 'watch'
-  },
-  {
-    key: 'buy_available',
-    snapshotType: 'buy_available',
-    kicker: '买点来源',
-    name: '买点-可买',
-    copy: '代表已经接近执行区，复盘统计最适合用来比较这类结构最近究竟值不值得优先做。',
-    useFor: '用来看哪些结构更值得先做',
-    hint: '仍需触发价和失效位',
-    actionText: '查看买点可买区',
-    tone: 'buy'
-  },
-  {
-    key: 'buy_add',
-    snapshotType: 'buy_add',
-    kicker: '加仓来源',
-    name: '加仓候选',
-    copy: '代表已有底仓后，结构和账户条件都允许继续扩仓的样本，适合单独复盘加仓质量。',
-    useFor: '用来看加仓样本是否真的值',
-    hint: '只统计可加和仅可小加',
-    actionText: '查看持仓加仓位',
-    tone: 'account'
-  }
-]))
+const bucketHint = (value) => BUCKET_HINTS[value || '未分层'] || '同类结构对比用的标签。'
 
 const formatPctValue = (value, appendPercent = false) => {
   const num = Number(value || 0)
   return `${num.toFixed(2)}${appendPercent ? '%' : ''}`
 }
+
+const metricItems = (row, type) => {
+  const fields = [
+    { label: '1日', resolved: 'resolved_1d_count', value: type === 'win' ? 'win_rate_1d' : 'avg_return_1d', suffix: type === 'win' },
+    { label: '3日', resolved: 'resolved_3d_count', value: type === 'win' ? 'win_rate_3d' : 'avg_return_3d', suffix: type === 'win' },
+    { label: '5日', resolved: 'resolved_5d_count', value: type === 'win' ? 'win_rate_5d' : 'avg_return_5d', suffix: type === 'win' }
+  ]
+
+  return fields.map((item) => ({
+    label: item.label,
+    value: Number(row[item.resolved] || 0) > 0 ? formatPctValue(row[item.value], item.suffix) : '--'
+  }))
+}
+
+const resolvedCount = (row) => Number(row.resolved_5d_count || row.resolved_3d_count || row.resolved_1d_count || 0)
 
 const rankedRows = (rows) => (
   rows
@@ -397,7 +329,7 @@ const rankedRows = (rows) => (
       ...row,
       snapshot_type_label: snapshotTypeLabel(row.snapshot_type, row.add_position_decision),
       shortLabel: rowLabel(row),
-      resolved_weight: Number(row.resolved_5d_count || row.resolved_3d_count || row.resolved_1d_count || 0),
+      resolved_weight: resolvedCount(row),
       qualityScore:
         Number(row.avg_return_5d || 0) * 0.6 +
         Number(row.win_rate_5d || 0) * 0.04 +
@@ -408,169 +340,116 @@ const rankedRows = (rows) => (
     .sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0))
 )
 
-const displayRows = computed(() => (
-  rankedRows(reviewData.value?.bucket_stats || [])
-))
+const displayRows = computed(() => rankedRows(reviewData.value?.bucket_stats || []))
 
 const actionableRows = computed(() => (
-  displayRows.value
-    .filter((row) => row.resolved_weight > 0 && Number(row.count || 0) >= 2)
-    .sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0))
+  displayRows.value.filter((row) => row.resolved_weight > 0 && Number(row.count || 0) >= 2)
 ))
 
 const openRows = computed(() => displayRows.value.filter((row) => row.snapshot_type === 'buy_available' || row.snapshot_type === 'buy_observe'))
 const addRows = computed(() => displayRows.value.filter((row) => row.snapshot_type === 'buy_add'))
 const poolRows = computed(() => displayRows.value.filter((row) => String(row.snapshot_type || '').startsWith('pool_')))
-const openActionableRows = computed(() => openRows.value.filter((row) => row.resolved_weight > 0 && Number(row.count || 0) >= 2))
-const addActionableRows = computed(() => addRows.value.filter((row) => row.resolved_weight > 0 && Number(row.count || 0) >= 2))
 
-const summarizeGroupBest = (rows, fallback) => {
-  if (!rows.length) return fallback
-  return rows[0].shortLabel
-}
-
-const summarizeGroupWeak = (rows, fallback) => {
-  if (!rows.length) return fallback
-  return [...rows].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))[0].shortLabel
-}
-
-const sampleGroups = computed(() => {
-  const groups = []
-  if (openRows.value.length) {
-    groups.push({
-      key: 'open',
-      kicker: '开仓样本',
-      name: '新开仓结构',
-      copy: '看哪些买点结构最近更适合第一次出手，重点是触发质量和确认效率。',
-      count: openRows.value.length,
-      bestLabel: `当前最强：${summarizeGroupBest(openRows.value, '-')}`,
-      tone: 'buy',
-    })
-  }
-  if (addRows.value.length) {
-    groups.push({
-      key: 'add',
-      kicker: '加仓样本',
-      name: '持仓扩仓结构',
-      copy: '看已有利润垫后的扩仓质量，重点不是能不能买，而是值不值得继续放大正确头寸。',
-      count: addRows.value.length,
-      bestLabel: `当前最强：${summarizeGroupBest(addRows.value, '-')}`,
-      tone: 'account',
-    })
-  }
-  if (poolRows.value.length) {
-    groups.push({
-      key: 'pool',
-      kicker: '三池样本',
-      name: '观察与准入结构',
-      copy: '看三池缩小范围的质量，用来判断哪些结构值得继续盯，哪些只是名单噪音。',
-      count: poolRows.value.length,
-      bestLabel: `当前最强：${summarizeGroupBest(poolRows.value, '-')}`,
-      tone: 'market',
-    })
-  }
-  return groups
-})
+const summarizeGroupBest = (rows, fallback) => (rows.length ? rows[0].shortLabel : fallback)
 
 const evidenceGroups = computed(() => {
   const groups = []
   if (openRows.value.length) {
     groups.push({
       key: 'open',
-      title: '开仓样本',
-      desc: '只看买点页里的可买和观察结构，用来判断第一次建仓最近更偏向哪类信号。',
+      tabLabel: '开仓',
+      title: '开仓证据',
+      desc: '只看买点里的可买和观察，判断第一次出手该优先谁。',
       count: openRows.value.length,
-      bestLabel: `最强：${summarizeGroupBest(openRows.value, '暂无')}`,
-      rows: openRows.value,
+      bestLabel: `当前最强：${summarizeGroupBest(openRows.value, '暂无')}`,
+      rows: openRows.value
     })
   }
   if (addRows.value.length) {
     groups.push({
       key: 'add',
-      title: '加仓样本',
-      desc: '只看已有底仓后的扩仓信号，单独评估加仓的胜率和均值，不和新开仓混排。',
+      tabLabel: '加仓',
+      title: '加仓证据',
+      desc: '只看已有底仓后的扩仓质量，不和开仓信号混排。',
       count: addRows.value.length,
-      bestLabel: `最强：${summarizeGroupBest(addRows.value, '暂无')}`,
-      rows: addRows.value,
+      bestLabel: `当前最强：${summarizeGroupBest(addRows.value, '暂无')}`,
+      rows: addRows.value
     })
   }
   if (poolRows.value.length) {
     groups.push({
       key: 'pool',
-      title: '三池样本',
-      desc: '只看观察池和可参与池的来源质量，用来评估缩小范围这一步是否有效。',
+      tabLabel: '三池',
+      title: '三池证据',
+      desc: '只看观察池和可参与池，判断缩小范围这一步有没有价值。',
       count: poolRows.value.length,
-      bestLabel: `最强：${summarizeGroupBest(poolRows.value, '暂无')}`,
-      rows: poolRows.value,
+      bestLabel: `当前最强：${summarizeGroupBest(poolRows.value, '暂无')}`,
+      rows: poolRows.value
     })
   }
   return groups
 })
 
-const strategySummaries = computed(() => {
-  const groups = []
-  if (openActionableRows.value.length) {
-    groups.push({
-      key: 'open',
-      kicker: '开仓结论',
-      title: '第一次出手看什么',
-      copy: '这组样本只回答“最近哪类买点更适合第一次建仓”，核心是触发后的延续效率。',
-      bestLabel: summarizeGroupBest(openActionableRows.value, '暂无'),
-      weakLabel: summarizeGroupWeak(openActionableRows.value, '暂无'),
-      doText: `同等条件下，先看 ${summarizeGroupBest(openActionableRows.value, '暂无')}，弱于 ${summarizeGroupWeak(openActionableRows.value, '暂无')} 的结构先降优先级。`,
-      tone: 'buy',
-    })
+watchEffect(() => {
+  if (!evidenceGroups.value.length) return
+  if (!evidenceGroups.value.some((group) => group.key === activeEvidenceGroup.value)) {
+    activeEvidenceGroup.value = evidenceGroups.value[0].key
   }
-  if (addActionableRows.value.length) {
-    groups.push({
-      key: 'add',
-      kicker: '加仓结论',
-      title: '已有底仓后怎么扩',
-      copy: '这组样本只回答“最近哪类加仓更值”，核心不是能不能买，而是扩大正确头寸后收益和胜率是否仍然健康。',
-      bestLabel: summarizeGroupBest(addActionableRows.value, '暂无'),
-      weakLabel: summarizeGroupWeak(addActionableRows.value, '暂无'),
-      doText: `已有利润垫时，优先等 ${summarizeGroupBest(addActionableRows.value, '暂无')} 这类确认；${summarizeGroupWeak(addActionableRows.value, '暂无')} 先别主动放大仓位。`,
-      tone: 'account',
-    })
-  }
-  return groups
 })
 
 const bestSignal = computed(() => actionableRows.value[0] || null)
 const weakSignal = computed(() => {
-  const candidates = [...actionableRows.value]
-    .sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))
+  const candidates = [...actionableRows.value].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))
   return candidates[0] || null
 })
+const watchSignal = computed(() => actionableRows.value.find((row) => row.snapshot_type === 'buy_observe' || row.snapshot_type === 'pool_market') || null)
+
+const headlineTitle = computed(() => {
+  if (bestSignal.value && weakSignal.value) {
+    return `${bestSignal.value.shortLabel} 优先，${weakSignal.value.shortLabel} 降权`
+  }
+  if (bestSignal.value) return `当前优先看 ${bestSignal.value.shortLabel}`
+  return '当前样本还在积累，先按原规则执行'
+})
+
+const headlineDesc = computed(() => {
+  if (!actionableRows.value.length) {
+    return '先积累更多已结算样本，再用这页去调结构优先级。'
+  }
+  return '这页只回答哪类结构最近更值得信，不直接替代盘中的触发确认。'
+})
+
+const overviewStats = computed(() => ([
+  { label: '覆盖交易日', value: reviewData.value?.trade_dates?.length || 0 },
+  { label: '快照总数', value: reviewData.value?.snapshot_count || 0 },
+  { label: '有效结构', value: actionableRows.value.length },
+  { label: '待补 5 日', value: reviewData.value?.pending_5d_count || 0 }
+]))
 
 const bestSignalSummary = computed(() => {
-  if (!bestSignal.value) return '当前样本还不够，暂时无法得出稳定结论。'
-  return `${bestSignal.value.shortLabel} 最近表现最好，说明这类信号在最近 ${reviewData.value?.trade_dates?.length || 0} 个交易日里更值得优先信任。`
+  if (!bestSignal.value) return '当前没有形成足够稳定的优先组。'
+  return '同等条件下先给这类结构更高关注度，再回到触发价和失效位做确认。'
 })
 
 const weakSignalSummary = computed(() => {
-  if (!weakSignal.value) return '当前样本还不够，暂时无法得出稳定结论。'
-  return `${weakSignal.value.shortLabel} 最近性价比较弱，说明这类信号短期内更容易跑输预期，应该降权处理。`
+  if (!weakSignal.value) return '当前没有形成明确需要降权的结构。'
+  return '这类结构短期性价比偏弱，除非盘中特别强，否则不要主动提优先级。'
 })
 
-const nextActionDo = computed(() => {
-  if (!bestSignal.value) return '先按原有规则做，不额外放大任何一类信号。'
-  return `优先看 ${bestSignal.value.shortLabel}，同等条件下先给这类信号更高关注度。`
-})
-
-const nextActionWatch = computed(() => {
-  const watchRow = actionableRows.value.find((row) => row.snapshot_type === 'buy_observe' || row.snapshot_type === 'pool_market')
-  if (!watchRow) return '观察池和趋势池继续只当候选名单，不直接当执行票。'
-  return `${watchRow.shortLabel} 更适合先盯盘和等确认，不要把“能观察”直接当成“能下手”。`
-})
-
-const nextActionAvoid = computed(() => {
-  if (!weakSignal.value) return '没有明显需要全面回避的类型，但仍要控制节奏。'
-  return `${weakSignal.value.shortLabel} 暂时少做，除非盘中确认特别强，否则不要主动提高仓位和优先级。`
-})
-
-const priorityRows = computed(() => actionableRows.value.slice(0, 3))
-const cautionRows = computed(() => [...actionableRows.value].slice(-2).reverse())
+const actionItems = computed(() => ([
+  {
+    label: '优先看',
+    text: bestSignal.value ? bestSignal.value.shortLabel : '维持原规则'
+  },
+  {
+    label: '先观察',
+    text: watchSignal.value ? watchSignal.value.shortLabel : '观察池继续只做候选'
+  },
+  {
+    label: '暂少做',
+    text: weakSignal.value ? weakSignal.value.shortLabel : '没有明显全面回避组'
+  }
+]))
 
 const rowRecommendation = (row) => {
   if (bestSignal.value?.shortLabel === row.shortLabel) return { label: '优先看', tone: 'do' }
@@ -586,22 +465,42 @@ const reviewPendingTip = computed(() => {
   const pending3d = Number(reviewData.value?.pending_3d_count || 0)
   const pending5d = Number(reviewData.value?.pending_5d_count || 0)
   if (!pending1d && !pending3d && !pending5d) return ''
-  const breakdown = `当前待补：1日 ${pending1d} 条，3日 ${pending3d} 条，5日 ${pending5d} 条`
-  if (reviewData.value?.refresh_in_progress) {
-    return `历史收益正在后台补齐中，${breakdown}。刷新后会逐步显示真实均值和胜率。`
-  }
-  return `${breakdown}，因此部分均值和胜率暂时不完整。`
+  return `待补收益：1日 ${pending1d} 条，3日 ${pending3d} 条，5日 ${pending5d} 条。`
 })
 
-const loadData = async ({ refresh = false } = {}) => {
+const hasPendingOutcomes = computed(() => {
+  return Number(reviewData.value?.pending_1d_count || 0) > 0
+    || Number(reviewData.value?.pending_3d_count || 0) > 0
+    || Number(reviewData.value?.pending_5d_count || 0) > 0
+})
+
+const loadData = async ({ refresh = false, refreshOutcomes = false, actionLabel = '' } = {}) => {
   loading.value = true
+  if (refreshOutcomes) {
+    outcomeRefreshing.value = true
+  }
   try {
-    const res = await decisionApi.reviewStats(limitDays.value, { timeout: REVIEW_STATS_TIMEOUT, refresh })
+    const res = await decisionApi.reviewStats(limitDays.value, {
+      timeout: REVIEW_STATS_TIMEOUT,
+      refresh,
+      refreshOutcomes
+    })
     reviewData.value = res.data.data
+    if (refreshOutcomes) {
+      const refreshedCount = Number(reviewData.value?.refreshed_outcome_count || 0)
+      if (refreshedCount > 0) {
+        ElMessage.success(`${actionLabel || '补算收益'}完成，本次更新 ${refreshedCount} 条快照`)
+      } else if (hasPendingOutcomes.value) {
+        ElMessage.info(`${actionLabel || '补算收益'}已执行，当前暂无新增可补结果`)
+      } else {
+        ElMessage.success(`${actionLabel || '补算收益'}完成，当前历史收益已补齐`)
+      }
+    }
   } catch (error) {
-    ElMessage.error('加载复盘统计失败')
+    ElMessage.error(refreshOutcomes ? '补算收益失败' : '加载复盘统计失败')
   } finally {
     loading.value = false
+    outcomeRefreshing.value = false
   }
 }
 
@@ -628,6 +527,10 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.review-shell {
+  overflow: hidden;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -647,6 +550,7 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .header-date {
@@ -654,460 +558,155 @@ onMounted(() => {
   color: var(--color-text-sec);
 }
 
-.mode-tip {
+.status-row {
+  display: grid;
+  gap: 10px;
   margin-bottom: 16px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(255, 196, 64, 0.08);
-  border: 1px solid rgba(255, 196, 64, 0.16);
-  color: var(--color-text-main);
-  font-size: 13px;
 }
 
-.review-hero {
+.status-pill {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.status-pill-warn {
+  background: rgba(255, 196, 64, 0.10);
+  border: 1px solid rgba(255, 196, 64, 0.20);
+  color: var(--color-text-main);
+}
+
+.status-pill-neutral {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--color-text-sec);
+}
+
+.overview-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
   gap: 18px;
   margin-bottom: 18px;
 }
 
-.hero-main,
-.hero-side {
+.overview-copy {
   display: grid;
-  gap: 16px;
-}
-
-.hero-copy {
-  display: grid;
-  gap: 8px;
-  padding: 22px;
-  border-radius: 18px;
+  gap: 10px;
+  padding: 24px;
+  border-radius: 20px;
   background:
-    radial-gradient(circle at top right, rgba(84, 210, 164, 0.10), transparent 36%),
-    linear-gradient(135deg, rgba(255,255,255,0.025), rgba(255,255,255,0.04));
-  border: 1px solid rgba(255,255,255,0.06);
+    radial-gradient(circle at top right, rgba(255, 208, 107, 0.18), transparent 34%),
+    radial-gradient(circle at bottom left, rgba(255, 129, 88, 0.12), transparent 30%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.06));
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.hero-kicker {
+.overview-kicker {
   font-size: 12px;
-  color: var(--color-text-sec);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.hero-title {
-  font-size: 28px;
-  line-height: 1.3;
-  font-weight: 800;
-  color: var(--color-text-pri);
-}
-
-.hero-desc {
-  color: var(--color-text-main);
-  line-height: 1.7;
-  max-width: 72ch;
-}
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.summary-item {
-  background: var(--color-hover);
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
-  padding: 14px 16px;
-  min-width: 0;
-}
-
-.summary-item .label {
-  color: var(--color-text-sec);
-  font-size: 13px;
-}
-
-.summary-item .value {
-  color: var(--color-text-pri);
-  font-size: 22px;
-  font-weight: 700;
-  margin-top: 6px;
-}
-
-.value-compact {
-  font-size: 16px;
-  line-height: 1.35;
-}
-
-.conclusion-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.conclusion-card {
-  padding: 18px;
-  border-radius: 14px;
-  border: 1px solid var(--color-border);
-  background: var(--color-hover);
-}
-
-.conclusion-card-strong {
-  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.08);
-}
-
-.conclusion-card-weak {
-  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
-}
-
-.conclusion-kicker {
-  color: var(--color-text-sec);
-  font-size: 12px;
-  margin-bottom: 10px;
-}
-
-.conclusion-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--color-text-pri);
-  margin-bottom: 10px;
-}
-
-.conclusion-copy {
-  color: var(--color-text-main);
-  line-height: 1.7;
-}
-
-.conclusion-metrics {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 12px;
-  color: var(--color-text-sec);
-  font-size: 13px;
-}
-
-.action-board {
-  padding: 18px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.04));
-  border: 1px solid rgba(255,255,255,0.06);
-}
-
-.action-board-title {
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 12px;
-}
-
-.action-board-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.action-card {
-  padding: 14px;
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  background: rgba(255,255,255,0.02);
-}
-
-.action-card-do {
-  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.08);
-}
-
-.action-card-watch {
-  box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.08);
-}
-
-.action-card-avoid {
-  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
-}
-
-.action-label {
-  font-size: 12px;
-  color: var(--color-text-sec);
-  margin-bottom: 8px;
-}
-
-.action-text {
-  color: var(--color-text-main);
-  line-height: 1.7;
-}
-
-.radar-board {
-  margin-bottom: 20px;
-  padding: 18px;
-  border-radius: 16px;
-  border: 1px solid rgba(255,255,255,0.06);
-  background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.035));
-}
-
-.radar-board-title {
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 12px;
-}
-
-.radar-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.radar-panel {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.05);
-  background: rgba(255,255,255,0.02);
-}
-
-.radar-panel-do {
-  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.08);
-}
-
-.radar-panel-avoid {
-  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
-}
-
-.radar-label {
-  font-size: 12px;
-  color: var(--color-text-sec);
-  letter-spacing: 0.06em;
-}
-
-.radar-list {
-  display: grid;
-  gap: 10px;
-}
-
-.radar-item {
-  display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.05);
-}
-
-.radar-item strong {
-  color: var(--color-text-pri);
-}
-
-.radar-item span {
-  color: var(--color-text-sec);
-  font-size: 13px;
-}
-
-.strategy-board {
-  margin-bottom: 20px;
-  padding: 18px;
-  border-radius: 16px;
-  border: 1px solid rgba(255,255,255,0.06);
-  background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.035));
-}
-
-.strategy-board-title {
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.strategy-board-desc {
-  margin-top: 6px;
-  color: var(--color-text-sec);
-  font-size: 13px;
-}
-
-.strategy-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.strategy-card {
-  display: grid;
-  gap: 10px;
-  padding: 16px;
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.05);
-  background: rgba(255,255,255,0.02);
-}
-
-.strategy-card-buy {
-  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
-}
-
-.strategy-card-account {
-  box-shadow: inset 0 0 0 1px rgba(88, 176, 255, 0.10);
-}
-
-.strategy-kicker {
-  font-size: 12px;
-  color: var(--color-text-sec);
-  letter-spacing: 0.06em;
-}
-
-.strategy-title {
-  font-size: 20px;
-  font-weight: 800;
-  color: var(--color-text-pri);
-}
-
-.strategy-copy {
-  color: var(--color-text-main);
-  line-height: 1.7;
-}
-
-.strategy-row {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  color: var(--color-text-sec);
-  font-size: 12px;
-}
-
-.source-guide {
-  margin-bottom: 20px;
-}
-
-.source-guide-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: end;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.source-guide-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--color-text-pri);
-}
-
-.source-guide-desc {
-  margin-top: 6px;
-  font-size: 13px;
   color: var(--color-text-sec);
 }
 
-.source-guide-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.source-guide-card {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 14px;
-  border: 1px solid var(--color-border);
-  background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.04));
-}
-
-.source-guide-card-market {
-  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.08);
-}
-
-.source-guide-card-account {
-  box-shadow: inset 0 0 0 1px rgba(88, 176, 255, 0.10);
-}
-
-.source-guide-card-watch {
-  box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.08);
-}
-
-.source-guide-card-buy {
-  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
-}
-
-.source-guide-kicker {
-  font-size: 12px;
-  color: var(--color-text-sec);
-  letter-spacing: 0.06em;
-}
-
-.source-guide-name {
-  font-size: 20px;
-  font-weight: 800;
-  color: var(--color-text-pri);
+.overview-title {
+  font-size: 30px;
   line-height: 1.25;
+  font-weight: 800;
+  color: var(--color-text-pri);
 }
 
-.source-guide-copy {
+.overview-desc {
   color: var(--color-text-main);
-  line-height: 1.7;
+  line-height: 1.65;
+  max-width: 48ch;
 }
 
-.source-guide-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.source-guide-chip {
-  padding: 6px 10px;
+.overview-legend {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 8px 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(17, 24, 39, 0.26);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--color-text-sec);
   font-size: 12px;
 }
 
-.source-guide-actions {
-  display: flex;
+.overview-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
-.sample-board {
+.stat-card {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--color-border);
+  background: var(--color-hover);
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.stat-value {
+  margin-top: 8px;
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 800;
+  color: var(--color-text-pri);
+}
+
+.focus-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
 
-.sample-card {
+.focus-card {
   display: grid;
   gap: 10px;
-  padding: 16px;
-  border-radius: 14px;
+  padding: 18px;
+  border-radius: 16px;
   border: 1px solid var(--color-border);
-  background: linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.04));
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.05));
 }
 
-.sample-card-market {
-  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.08);
+.focus-card-good {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.12);
 }
 
-.sample-card-account {
-  box-shadow: inset 0 0 0 1px rgba(88, 176, 255, 0.10);
+.focus-card-bad {
+  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.12);
 }
 
-.sample-card-buy {
-  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
+.focus-card-playbook {
+  box-shadow: inset 0 0 0 1px rgba(255, 208, 107, 0.16);
 }
 
-.sample-kicker {
+.focus-kicker {
   font-size: 12px;
-  color: var(--color-text-sec);
   letter-spacing: 0.06em;
+  color: var(--color-text-sec);
 }
 
-.sample-name {
-  font-size: 18px;
+.focus-title {
+  font-size: 20px;
+  line-height: 1.35;
   font-weight: 800;
   color: var(--color-text-pri);
 }
 
-.sample-copy {
+.focus-copy {
   color: var(--color-text-main);
-  line-height: 1.7;
+  line-height: 1.6;
 }
 
-.sample-metrics {
+.focus-metrics {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -1115,23 +714,152 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.evidence-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
+.playbook-list {
+  display: grid;
+  gap: 10px;
 }
 
-.evidence-title {
-  font-size: 16px;
+.playbook-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.playbook-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
+}
+
+.playbook-text {
+  color: var(--color-text-pri);
+  line-height: 1.45;
   font-weight: 700;
 }
 
-.evidence-desc {
-  font-size: 13px;
+.shortcut-panel,
+.evidence-panel {
+  margin-bottom: 18px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.04));
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--color-text-pri);
+}
+
+.section-desc {
+  margin-top: 4px;
   color: var(--color-text-sec);
+  font-size: 13px;
+}
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.shortcut-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.shortcut-card-market {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.10);
+}
+
+.shortcut-card-account {
+  box-shadow: inset 0 0 0 1px rgba(88, 176, 255, 0.12);
+}
+
+.shortcut-card-watch {
+  box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.10);
+}
+
+.shortcut-card-buy {
+  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.10);
+}
+
+.shortcut-name {
+  font-size: 17px;
+  line-height: 1.35;
+  font-weight: 800;
+  color: var(--color-text-pri);
+}
+
+.shortcut-copy {
+  color: var(--color-text-main);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.shortcut-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shortcut-chip {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-sec);
+  font-size: 11px;
+}
+
+.evidence-tip {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.evidence-tabs :deep(.el-tabs__header) {
+  margin-bottom: 12px;
+}
+
+.group-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.group-summary-badge {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 208, 107, 0.14);
+  color: var(--color-text-pri);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.group-summary-desc {
+  color: var(--color-text-sec);
+  font-size: 13px;
 }
 
 .table-judgement {
@@ -1162,93 +890,108 @@ onMounted(() => {
 
 .table-judgement-neutral {
   color: var(--color-text-sec);
-  background: rgba(255,255,255,0.06);
+  background: rgba(255, 255, 255, 0.06);
 }
 
-@media (max-width: 1200px) {
-  .review-hero,
-  .conclusion-grid,
-  .action-board-grid,
-  .radar-grid,
-  .strategy-grid,
-  .source-guide-grid,
-  .summary-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .hero-title {
-    font-size: 24px;
-  }
-}
-
-.evidence-tip {
-  padding: 8px 12px;
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--color-text-sec);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.bucket-cell {
+.structure-cell {
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
-.bucket-name {
+.structure-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   color: var(--color-text-pri);
-  font-weight: 700;
 }
 
-.bucket-copy {
+.structure-divider {
+  color: var(--color-text-sec);
+}
+
+.structure-hint {
   color: var(--color-text-sec);
   font-size: 12px;
   line-height: 1.5;
 }
 
-.evidence-group {
-  margin-bottom: 20px;
-}
-
-.evidence-group-head {
+.structure-tags {
   display: flex;
-  justify-content: space-between;
-  align-items: end;
-  gap: 12px;
-  margin-bottom: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
-.evidence-group-title {
-  font-size: 15px;
-  font-weight: 700;
+.structure-tag {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-sec);
+  font-size: 11px;
+}
+
+.sample-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.sample-cell strong {
   color: var(--color-text-pri);
 }
 
-.evidence-group-desc {
-  margin-top: 4px;
-  font-size: 13px;
-  color: var(--color-text-sec);
-}
-
-.evidence-group-meta {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+.sample-cell span {
   color: var(--color-text-sec);
   font-size: 12px;
 }
 
-@media (max-width: 960px) {
-  .conclusion-grid,
-  .source-guide-grid,
-  .action-board-grid,
-  .sample-board {
+.metric-stack {
+  display: grid;
+  gap: 6px;
+}
+
+.metric-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+}
+
+.metric-line span {
+  color: var(--color-text-sec);
+}
+
+.metric-line strong {
+  color: var(--color-text-pri);
+}
+
+@media (max-width: 1280px) {
+  .overview-panel,
+  .focus-grid,
+  .shortcut-grid {
     grid-template-columns: 1fr;
   }
 
-  .summary-strip {
-    flex-wrap: wrap;
+  .overview-title {
+    font-size: 26px;
+  }
+}
+
+@media (max-width: 768px) {
+  .overview-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .card-header,
+  .card-header-title,
+  .header-actions {
+    align-items: stretch;
+  }
+
+  .header-actions {
+    width: 100%;
   }
 }
 </style>

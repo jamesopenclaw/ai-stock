@@ -630,6 +630,12 @@ class BuyPointSopService:
             structure_type,
             breakout_ref,
         )
+        retrace_confirm_ref = self._normalize_retrace_confirm_ref(
+            price,
+            structure_type,
+            retrace_confirm_ref,
+            low_absorb_ref,
+        )
         invalid_price = self._round_price(getattr(buy_point, "buy_invalid_price", None))
         if invalid_price is None:
             invalid_price = self._select_invalid_ref(
@@ -1287,6 +1293,27 @@ class BuyPointSopService:
         if structure_type == "趋势中继":
             return self._nearest_reference(price, levels.ma5, levels.prev_high, levels.ma10)
         return self._nearest_reference(price, breakout_ref, levels.ma5, target_input.low)
+
+    def _normalize_retrace_confirm_ref(
+        self,
+        price: float,
+        structure_type: str,
+        retrace_confirm_ref: Optional[float],
+        low_absorb_ref: Optional[float],
+    ) -> Optional[float]:
+        """
+        深回踩确认位离现价过远时，不把它当成当前主计划价位。
+        这种深回撤更适合作为理想二次回踩参考，而不是盘中主执行位。
+        """
+        if retrace_confirm_ref is None or price <= 0:
+            return retrace_confirm_ref
+        if structure_type in {"突破前高", "突破后回踩"}:
+            return retrace_confirm_ref
+        if retrace_confirm_ref >= price * 0.88:
+            return retrace_confirm_ref
+        if low_absorb_ref is not None and low_absorb_ref > retrace_confirm_ref:
+            return low_absorb_ref
+        return retrace_confirm_ref
 
     def _select_invalid_ref(
         self,

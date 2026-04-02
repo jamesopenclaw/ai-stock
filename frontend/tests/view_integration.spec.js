@@ -822,6 +822,101 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('先撤新增仓')
   })
 
+  it('BuyAnalysisDrawer 在深回踩价位离现价过远时，不会把回踩确认区当成主路径', async () => {
+    stockApi.buyAnalysis.mockResolvedValue({
+      data: {
+        code: 200,
+        data: {
+          trade_date: '2026-04-02',
+          resolved_trade_date: '2026-04-02',
+          stock_found_in_candidates: true,
+          basic_info: {
+            ts_code: '300436.SZ',
+            stock_name: '广生堂',
+            sector_name: '化学制药',
+            market_env_tag: '防守',
+            stable_market_env_tag: '进攻',
+            realtime_market_env_tag: '防守',
+            buy_signal_tag: '观察',
+            buy_point_type: '回踩承接',
+            candidate_bucket_tag: '强势确认',
+            quote_time: '2026-04-02 11:30:00',
+            data_source: 'realtime_sina',
+          },
+          account_context: {
+            position_status: '轻仓（仓位 9%）',
+            same_direction_exposure: '暂无明显同方向重复暴露。',
+            current_use: '新开仓',
+            market_suitability: '市场偏防守，只能低吸或回踩确认，不能追高。',
+            account_conclusion: '轻仓新开仓，可试错',
+          },
+          daily_judgement: {
+            current_stage: '加速',
+            buy_signal: '回踩承接，观察',
+            buy_point_level: 'C',
+            reason: '日线更多是观察位，不适合直接下单',
+            risk_items: ['接近前高/20日区间压力，不适合无脑追。'],
+            reference_levels: [],
+          },
+          intraday_judgement: {
+            price_vs_avg_line: '站均价线上',
+            intraday_structure: '回踩承接',
+            volume_quality: '实时放量跟随（相对放量 3.9）',
+            key_level_status: '已到突破关键位 119.60 一带。',
+            conclusion: '等确认',
+            note: '承接仍需观察。',
+          },
+          order_plan: {
+            low_absorb_price: '121.05-122.02',
+            breakout_price: '130.79-131.83',
+            retrace_confirm_price: '104.06-104.89',
+            give_up_price: '131.18',
+            trigger_condition: '优先看回踩 121.05-122.02 一带是否缩量承接；若直接走强，则放量过 130.79-131.83 并站稳再考虑。',
+            invalid_condition: '跌破 98.01 且无法快速收回，就视为买点失效。',
+            above_no_chase: '131.18',
+            below_no_buy: '98.01',
+          },
+          add_position_decision: {
+            eligible: false,
+            decision: '不加',
+            reason: '当前不是加仓语境，这里仍按新开仓逻辑处理。',
+          },
+          position_advice: {
+            suggestion: '轻仓试错',
+            reason: '买点还需要盘中确认或账户已有约束，只适合试错仓位。',
+            invalidation_level: '98.01',
+            invalidation_action: '跌破失效位后放弃。',
+          },
+          execution: {
+            action: '等',
+            reason: '日线可以继续看，但分时确认还没到位，先按计划等触发。',
+          },
+        },
+      },
+    })
+
+    const { default: BuyAnalysisDrawer } = await import('../src/components/BuyAnalysisDrawer.vue')
+    const wrapper = mount(BuyAnalysisDrawer, {
+      props: {
+        modelValue: false,
+        tsCode: '300436.SZ',
+        stockName: '广生堂',
+        tradeDate: '2026-04-02',
+        currentPrice: 127,
+        currentChangePct: 6.7,
+      },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('深回踩参考位')
+    expect(wrapper.text()).toContain('当前先不把它当执行位')
+    expect(wrapper.text()).toContain('当前先等低吸区出现，不要在中间位硬接')
+    expect(wrapper.text()).toContain('这条离现价较远，更像深回踩理想位')
+    expect(wrapper.text()).not.toContain('当前更重要的是等价格回踩到 104.06-104.89 一带')
+  })
+
   it('Dashboard 页面会串起摘要、市场、板块、账户和买卖信号接口', async () => {
     marketApi.getEnv.mockResolvedValue(makeResponse({
       market_env_tag: '进攻',
@@ -1089,8 +1184,127 @@ describe('关键页面联调', () => {
     expect(decisionApi.sellPoint).toHaveBeenNthCalledWith(
       2,
       expect.any(String),
-      expect.objectContaining({ refresh: true, forceLlmRefresh: false }),
+      expect.objectContaining({ refresh: true, forceLlmRefresh: false, includeLlm: true }),
     )
+  })
+
+  it('SellPoint 页面首次加载会请求 LLM 解读', async () => {
+    decisionApi.sellPoint.mockResolvedValue(makeResponse({
+      sell_positions: [],
+      reduce_positions: [],
+      hold_positions: [],
+      llm_status: { enabled: true, success: true, status: 'success', message: 'LLM 解释增强已生效' },
+    }))
+
+    const { default: SellPointView } = await import('../src/views/SellPoint.vue')
+    await mountView(SellPointView)
+
+    expect(decisionApi.sellPoint).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ includeLlm: true, forceLlmRefresh: false }),
+    )
+  })
+
+  it('SellPoint 页面不会被 Dashboard 的无 LLM 缓存污染，且会保留已有 LLM 解读', async () => {
+    authState.account = {
+      id: 'acct-1',
+      account_code: 'DEFAULT-001',
+      account_name: '默认账户',
+      status: 'active',
+    }
+    const today = new Date()
+    const tradeDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    window.sessionStorage.setItem(
+      `sell_point_snapshot_v2:acct-1:${tradeDate}`,
+      JSON.stringify({
+        displayDate: tradeDate,
+        activeTab: 'sell',
+        updatedAt: Date.now(),
+        sellData: {
+          sell_positions: [
+            {
+              ts_code: '600089.SH',
+              stock_name: '特变电工',
+              sell_signal_tag: '卖出',
+              sell_point_type: '止损',
+              sell_priority: '高',
+              sell_reason: '结构走弱',
+              sell_comment: '优先处理',
+              sell_trigger_cond: '跌破关键位卖出',
+              pnl_pct: -16.01,
+              holding_qty: 200,
+              holding_days: 31,
+              market_price: 26.17,
+              cost_price: 31.16,
+              can_sell_today: true,
+              llm_plain_note: '缓存里的正确解读。',
+            },
+          ],
+          reduce_positions: [],
+          hold_positions: [],
+          llm_summary: { page_summary: '缓存摘要', action_summary: '缓存动作摘要' },
+          llm_status: { enabled: true, success: true, status: 'cached', message: 'LLM 解读已命中缓存' },
+        },
+      }),
+    )
+    window.sessionStorage.setItem(
+      'dashboard_snapshot_v2:acct-1',
+      JSON.stringify({
+        updatedAt: Date.now(),
+        sellPoints: {
+          sell_positions: [
+            {
+              ts_code: '600089.SH',
+              stock_name: '特变电工',
+              sell_signal_tag: '卖出',
+              sell_point_type: '止损',
+              sell_priority: '高',
+              sell_reason: 'Dashboard 无 LLM 数据',
+              sell_comment: '优先处理',
+              sell_trigger_cond: '跌破关键位卖出',
+              pnl_pct: -16.01,
+              holding_qty: 200,
+              holding_days: 31,
+              market_price: 26.17,
+              cost_price: 31.16,
+              can_sell_today: true,
+            },
+          ],
+          reduce_positions: [],
+          hold_positions: [],
+          llm_status: null,
+        },
+      }),
+    )
+    decisionApi.sellPoint.mockResolvedValue(makeResponse({
+      sell_positions: [
+        {
+          ts_code: '600089.SH',
+          stock_name: '特变电工',
+          sell_signal_tag: '卖出',
+          sell_point_type: '止损',
+          sell_priority: '高',
+          sell_reason: '接口返回但未带 LLM',
+          sell_comment: '优先处理',
+          sell_trigger_cond: '跌破关键位卖出',
+          pnl_pct: -16.01,
+          holding_qty: 200,
+          holding_days: 31,
+          market_price: 26.17,
+          cost_price: 31.16,
+          can_sell_today: true,
+        },
+      ],
+      reduce_positions: [],
+      hold_positions: [],
+      llm_status: { enabled: true, success: false, status: 'timeout', message: '模型请求超时' },
+    }))
+
+    const { default: SellPointView } = await import('../src/views/SellPoint.vue')
+    const wrapper = await mountView(SellPointView)
+
+    expect(wrapper.text()).toContain('缓存里的正确解读。')
+    expect(wrapper.text()).not.toContain('Dashboard 无 LLM 数据')
   })
 
   it('SellPoint 卡片点击刷新价格会更新当前价格', async () => {

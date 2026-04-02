@@ -681,9 +681,22 @@ class StockFilterService:
         return None
 
     def _is_new_pool_code_allowed(self, ts_code: str) -> bool:
-        """新开仓三池默认排除科创板 688 票。"""
-        code = normalize_ts_code(str(ts_code or "").strip())
-        return not code.startswith("688")
+        """新开仓三池默认排除科创板和北交所股票。"""
+        normalized = normalize_ts_code(str(ts_code or "").strip())
+        if not normalized:
+            return False
+
+        code, _, market = normalized.partition(".")
+        market = market.upper()
+
+        if market == "BJ":
+            return False
+        if code.startswith("688"):
+            return False
+        # 兼容未带后缀的北交所原始代码。
+        if code.startswith(("4", "8", "92")):
+            return False
+        return True
 
     def _select_representative_codes(
         self,

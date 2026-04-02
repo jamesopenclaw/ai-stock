@@ -1246,9 +1246,9 @@ class TestStockFilter:
         assert [stock.ts_code for stock in pools.trend_recognition_pool] == ["002210.SZ"]
         assert len(pools.account_executable_pool) == 0
 
-    def test_new_pools_exclude_688_codes(self, service, mock_market_env_attack):
+    def test_new_pools_exclude_star_and_bj_codes(self, service, mock_market_env_attack):
         """
-        测试：三池新开仓应排除 688 开头的科创板股票。
+        测试：三池新开仓应排除科创板和北交所股票。
         """
         star_stock = StockInput(
             ts_code="688143.SH",
@@ -1263,6 +1263,22 @@ class TestStockFilter:
             low=55.0,
             open=56.0,
             pre_close=53.48,
+            stage_tag="修复",
+            candidate_source_tag="涨幅前列",
+        )
+        bj_stock = StockInput(
+            ts_code="920982.BJ",
+            stock_name="北交所主线票",
+            sector_name="创新药",
+            close=27.9,
+            change_pct=8.4,
+            turnover_rate=12.5,
+            amount=160000,
+            vol_ratio=1.8,
+            high=28.3,
+            low=26.9,
+            open=27.0,
+            pre_close=25.74,
             stage_tag="修复",
             candidate_source_tag="涨幅前列",
         )
@@ -1297,11 +1313,24 @@ class TestStockFilter:
                 sector_tier=SectorTierTag.A,
             ),
             SectorOutput(
+                sector_name="创新药",
+                sector_source_type="concept",
+                sector_change_pct=4.4,
+                sector_score=97.0,
+                sector_strength_rank=2,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                sector_continuity_days=3,
+                sector_comment="主线",
+                sector_tier=SectorTierTag.A,
+            ),
+            SectorOutput(
                 sector_name="F5G概念",
                 sector_source_type="concept",
                 sector_change_pct=4.2,
                 sector_score=96.0,
-                sector_strength_rank=2,
+                sector_strength_rank=3,
                 sector_mainline_tag=SectorMainlineTag.MAINLINE,
                 sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
                 sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
@@ -1313,7 +1342,7 @@ class TestStockFilter:
 
         pools = service.classify_pools(
             "2026-03-25",
-            [star_stock, main_board_stock],
+            [star_stock, bj_stock, main_board_stock],
             holdings=[],
             account=AccountInput(
                 total_asset=100000,
@@ -1335,6 +1364,9 @@ class TestStockFilter:
         assert all(not stock.ts_code.startswith("688") for stock in pools.market_watch_pool)
         assert all(not stock.ts_code.startswith("688") for stock in pools.trend_recognition_pool)
         assert all(not stock.ts_code.startswith("688") for stock in pools.account_executable_pool)
+        assert all(not stock.ts_code.endswith(".BJ") for stock in pools.market_watch_pool)
+        assert all(not stock.ts_code.endswith(".BJ") for stock in pools.trend_recognition_pool)
+        assert all(not stock.ts_code.endswith(".BJ") for stock in pools.account_executable_pool)
 
     def test_new_pools_ignore_688_when_choosing_a_or_b_profiles(self, service, mock_market_env_attack):
         """

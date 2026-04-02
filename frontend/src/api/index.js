@@ -317,10 +317,16 @@ export const decisionApi = {
   reviewStats: (limitDays = 10, options = {}) => cachedGet(
     scopedCacheKey('review-stats', [String(limitDays)]),
     () => api.get('/decision/review-stats', {
-      params: { limit_days: limitDays },
+      params: {
+        limit_days: limitDays,
+        refresh_outcomes: Boolean(options.refreshOutcomes)
+      },
       timeout: options.timeout
     }),
-    { ttlMs: options.ttlMs ?? DEFAULT_CACHE_TTL_MS, refresh: Boolean(options.refresh) }
+    {
+      ttlMs: options.ttlMs ?? DEFAULT_CACHE_TTL_MS,
+      refresh: Boolean(options.refresh || options.refreshOutcomes)
+    }
   )
 }
 

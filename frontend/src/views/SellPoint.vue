@@ -571,6 +571,18 @@ const hasLlmCopy = (point) => Boolean(
   point?.llm_plain_note || point?.llm_action_sentence || point?.llm_trigger_sentence || point?.llm_risk_sentence
 )
 
+const hasAnyLlmContent = (data) => {
+  if (data?.llm_summary?.page_summary || data?.llm_summary?.action_summary) return true
+  const groups = [
+    ...(data?.sell_positions || []),
+    ...(data?.reduce_positions || []),
+    ...(data?.hold_positions || []),
+  ]
+  return groups.some((point) => hasLlmCopy(point))
+}
+
+const shouldPreserveCurrentLlm = (nextData) => hasAnyLlmContent(sellData.value) && !hasAnyLlmContent(nextData)
+
 const sellActionLine = (point) => {
   if (point?.can_sell_today === false) return '系统动作：今天先记录退出计划，下个可卖时点优先执行。'
   return '系统动作：优先退出，按触发条件执行，不再拖延。'
@@ -721,7 +733,7 @@ const hydrateDashboardSellPointCache = (tradeDate) => {
   try {
     const payload = JSON.parse(raw)
     const dashboardSellData = payload.sellPoints || null
-    if (!dashboardSellData) return false
+    if (!dashboardSellData || !hasAnyLlmContent(dashboardSellData)) return false
     displayDate.value = tradeDate
     sellData.value = dashboardSellData
     if (dashboardSellData.sell_positions?.length) activeTab.value = 'sell'
@@ -737,7 +749,7 @@ const hydrateDashboardSellPointCache = (tradeDate) => {
 const loadData = async (options = {}) => {
   const refresh = Boolean(options.refresh)
   const forceLlmRefresh = Boolean(options.forceLlmRefresh)
-  const includeLlm = forceLlmRefresh
+  const includeLlm = true
   const silent = Boolean(options.silent)
   const hasRenderableData = Boolean(
     sellData.value?.sell_positions?.length
@@ -756,7 +768,52 @@ const loadData = async (options = {}) => {
       includeLlm,
       timeout: 90000
     })
-    sellData.value = res.data.data
+    const nextData = res.data.data
+    if (shouldPreserveCurrentLlm(nextData)) {
+      sellData.value = {
+        ...nextData,
+        llm_summary: sellData.value?.llm_summary || nextData?.llm_summary || null,
+        llm_status: sellData.value?.llm_status || nextData?.llm_status || null,
+        sell_positions: (nextData?.sell_positions || []).map((point) => {
+          const current = (sellData.value?.sell_positions || []).find((item) => item.ts_code === point.ts_code)
+          return current && hasLlmCopy(current)
+            ? {
+                ...point,
+                llm_plain_note: current.llm_plain_note ?? point.llm_plain_note,
+                llm_action_sentence: current.llm_action_sentence ?? point.llm_action_sentence,
+                llm_trigger_sentence: current.llm_trigger_sentence ?? point.llm_trigger_sentence,
+                llm_risk_sentence: current.llm_risk_sentence ?? point.llm_risk_sentence,
+              }
+            : point
+        }),
+        reduce_positions: (nextData?.reduce_positions || []).map((point) => {
+          const current = (sellData.value?.reduce_positions || []).find((item) => item.ts_code === point.ts_code)
+          return current && hasLlmCopy(current)
+            ? {
+                ...point,
+                llm_plain_note: current.llm_plain_note ?? point.llm_plain_note,
+                llm_action_sentence: current.llm_action_sentence ?? point.llm_action_sentence,
+                llm_trigger_sentence: current.llm_trigger_sentence ?? point.llm_trigger_sentence,
+                llm_risk_sentence: current.llm_risk_sentence ?? point.llm_risk_sentence,
+              }
+            : point
+        }),
+        hold_positions: (nextData?.hold_positions || []).map((point) => {
+          const current = (sellData.value?.hold_positions || []).find((item) => item.ts_code === point.ts_code)
+          return current && hasLlmCopy(current)
+            ? {
+                ...point,
+                llm_plain_note: current.llm_plain_note ?? point.llm_plain_note,
+                llm_action_sentence: current.llm_action_sentence ?? point.llm_action_sentence,
+                llm_trigger_sentence: current.llm_trigger_sentence ?? point.llm_trigger_sentence,
+                llm_risk_sentence: current.llm_risk_sentence ?? point.llm_risk_sentence,
+              }
+            : point
+        }),
+      }
+    } else {
+      sellData.value = nextData
+    }
     if (sellData.value.sell_positions?.length) activeTab.value = 'sell'
     else if (sellData.value.reduce_positions?.length) activeTab.value = 'reduce'
     else activeTab.value = 'hold'

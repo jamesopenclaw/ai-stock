@@ -82,6 +82,10 @@ def _zone_low(zone: str) -> float:
     return float(zone.split("-")[0])
 
 
+def _zone_high(zone: str) -> float:
+    return float(zone.split("-")[1])
+
+
 @pytest.mark.asyncio
 async def test_buy_point_sop_service_returns_structured_buy_plan(monkeypatch):
     market_env = MarketEnvOutput(
@@ -682,6 +686,52 @@ def test_buy_point_sop_breakout_price_stays_above_low_absorb():
     )
 
     assert _zone_low(plan.breakout_price) > _zone_low(plan.low_absorb_price)
+
+
+def test_buy_point_sop_retrace_confirm_ref_does_not_use_far_below_spot_anchor():
+    target_input = SimpleNamespace(
+        close=127.0,
+        high=127.8,
+        low=121.5,
+        vol_ratio=3.9,
+    )
+    stock = _sample_scored_stock()
+    stock.close = 127.0
+    stock.high = 127.8
+    stock.low = 121.5
+    stock.change_pct = 6.7
+    plan = buy_point_sop_service._build_order_plan(
+        target_input,
+        stock,
+        SimpleNamespace(
+            buy_point_type=BuyPointType.RETRACE_SUPPORT,
+            buy_trigger_cond="回踩承接再看",
+            buy_invalid_cond="跌破支撑放弃",
+            buy_invalid_price=98.01,
+        ),
+        SimpleNamespace(market_env_tag=MarketEnvTag.DEFENSE),
+        SimpleNamespace(
+            position_status="轻仓（仓位 9%）",
+            same_direction_exposure="暂无明显同方向重复暴露。",
+            current_use="新开仓",
+            account_conclusion="轻仓新开仓，可试错",
+        ),
+        SimpleNamespace(buy_point_level="C"),
+        SimpleNamespace(intraday_structure="回踩承接"),
+        SimpleNamespace(
+            ma5=121.2,
+            ma10=118.4,
+            ma20=110.6,
+            prev_high=104.5,
+            prev_low=101.3,
+            range_high_20d=104.5,
+            range_low_20d=86.2,
+        ),
+    )
+
+    assert _zone_low(plan.low_absorb_price) > 120
+    assert _zone_low(plan.retrace_confirm_price) > 120
+    assert _zone_high(plan.retrace_confirm_price) < 123
 
 
 @pytest.mark.asyncio

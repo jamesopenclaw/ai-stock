@@ -315,6 +315,9 @@
                   </div>
                   <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || stock.stock_comment || '满足账户准入。' }}</div>
                   <div class="action-risk">{{ executionRiskLine(stock) }}</div>
+                  <div class="stock-inline-actions">
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                  </div>
                 </article>
               </section>
 
@@ -352,6 +355,9 @@
                   </div>
                   <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || '方向强，但位置不完美，只保留试错资格。' }}</div>
                   <div class="action-risk">{{ trialRiskLine(stock) }}</div>
+                  <div class="stock-inline-actions">
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                  </div>
                 </article>
               </section>
 
@@ -389,6 +395,9 @@
                   </div>
                   <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || '防守环境下只保留极少数轻仓试错资格。' }}</div>
                   <div class="action-risk">{{ trialRiskLine(stock) }}</div>
+                  <div class="stock-inline-actions">
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                  </div>
                 </article>
               </section>
               </div>
@@ -437,6 +446,9 @@
                     <strong>{{ stock.stock_name }}</strong>
                     <span>{{ watchRoleLabel(stock) }}</span>
                     <em>{{ watchKeyLine(stock) }}</em>
+                    <div class="stock-inline-actions">
+                      <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -468,6 +480,9 @@
                 </div>
                 <div class="action-judgement">{{ stock.why_this_pool || stock.stock_comment || '今天先跟踪，不急着抬手。' }}</div>
                 <div class="action-risk">{{ trendUpgradeLine(stock) }}</div>
+                <div class="stock-inline-actions">
+                  <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                </div>
               </article>
             </div>
           </article>
@@ -632,6 +647,7 @@
                   <span>{{ marketFooterLine(stock) }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">只观察，不直接执行</span>
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
                   </div>
                 </div>
@@ -783,6 +799,7 @@
                   <span>{{ trendFooterLine(stock) }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">看结构，不急着追</span>
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
                   </div>
                 </div>
@@ -948,6 +965,7 @@
                       <span>{{ stock.stock_comment || '可参与不代表立刻追价，仍要等买点页确认。' }}</span>
                       <div class="footer-actions">
                         <span class="footer-flag">{{ accountFooterFlag(stock) }}</span>
+                        <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                         <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
                       </div>
                     </div>
@@ -1074,6 +1092,7 @@
                   <span>{{ stock.llm_risk_note || stock.sell_comment || stock.stock_comment || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">{{ holdingFooterFlag(stock) }}</span>
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '持仓型')">全面体检</el-button>
                   </div>
                 </div>
@@ -1091,6 +1110,14 @@
       :default-target="checkupStock.defaultTarget"
       :trade-date="displayDate"
     />
+    <BuyAnalysisDrawer
+      v-model="buyAnalysisVisible"
+      :ts-code="buyAnalysisStock.tsCode"
+      :stock-name="buyAnalysisStock.stockName"
+      :trade-date="buyAnalysisTradeDate"
+      :current-price="buyAnalysisStock.currentPrice"
+      :current-change-pct="buyAnalysisStock.currentChangePct"
+    />
   </div>
 </template>
 
@@ -1100,6 +1127,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { stockApi, decisionApi, marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
+import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
 import { formatLocalDateTime, formatLocalTime } from '../utils/datetime'
 
 const loading = ref(false)
@@ -1119,6 +1147,8 @@ const poolsData = ref({
 })
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
+const buyAnalysisVisible = ref(false)
+const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentChangePct: null })
 const reviewStatsData = ref(null)
 const marketEnvData = ref(null)
 const loadError = ref('')
@@ -1138,6 +1168,11 @@ const focusSector = computed(() => String(route.query.focus_sector || '').trim()
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
 const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
 const isRadarMode = computed(() => poolMode.value === 'radar')
+const buyAnalysisTradeDate = computed(() => (
+  isRadarMode.value
+    ? displayDate.value
+    : (poolsData.value.resolved_trade_date || displayDate.value)
+))
 
 const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 0)
 const trendCount = computed(() => poolsData.value.trend_recognition_pool?.length || 0)
@@ -1902,6 +1937,16 @@ const openCheckup = (stock, defaultTarget = '观察型') => {
   checkupVisible.value = true
 }
 
+const openBuyAnalysis = (stock) => {
+  buyAnalysisStock.value = {
+    tsCode: stock.ts_code,
+    stockName: stock.stock_name || stock.ts_code,
+    currentPrice: stock.close ?? null,
+    currentChangePct: stock.change_pct ?? null,
+  }
+  buyAnalysisVisible.value = true
+}
+
 const loadMarketEnv = async (options = {}) => {
   try {
     const tradeDate = getLocalDate()
@@ -2521,6 +2566,37 @@ onUnmounted(() => {
   line-height: 1.6;
   color: var(--color-text-sec);
   font-style: normal;
+}
+
+.stock-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.buy-analysis-btn.el-button {
+  --el-button-bg-color: rgba(58, 173, 255, 0.18);
+  --el-button-border-color: rgba(88, 189, 255, 0.5);
+  --el-button-text-color: #d8f1ff;
+  --el-button-hover-bg-color: rgba(76, 188, 255, 0.28);
+  --el-button-hover-border-color: rgba(120, 208, 255, 0.7);
+  --el-button-hover-text-color: #f4fbff;
+  --el-button-active-bg-color: rgba(48, 153, 226, 0.32);
+  --el-button-active-border-color: rgba(110, 203, 255, 0.74);
+  --el-button-active-text-color: #ffffff;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(132, 217, 255, 0.12), 0 6px 16px rgba(31, 111, 176, 0.18);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.buy-analysis-btn.el-button:hover,
+.buy-analysis-btn.el-button:focus-visible {
+  transform: translateY(-1px);
 }
 
 .card-header {

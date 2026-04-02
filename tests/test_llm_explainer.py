@@ -456,11 +456,14 @@ class TestLlmExplainer:
     def test_sell_system_prompt_requires_sample_scope_and_t1_guardrails(self, service):
         prompt = service.SELL_SYSTEM_PROMPT
 
+        assert "不是做简单翻译" in prompt
         assert "不是重新做投资判断" in prompt
         assert "can_sell_today=false" in prompt
         assert "今天不能卖/不能减" in prompt
         assert "partial_sample" in prompt
         assert "已提供样本" in prompt
+        assert "不是 action_sentence/trigger_sentence/risk_sentence 的简单拼接" in prompt
+        assert "避免多只股票只替换名称和价格" in prompt
 
     def test_rewrite_sell_points_payload_marks_partial_sample_and_includes_t1_flag(
         self,
@@ -565,6 +568,7 @@ class TestLlmExplainer:
         assert summary is not None
         assert status.success is True
         assert captured["system_prompt"] == service.SELL_SYSTEM_PROMPT
+        assert captured["payload"]["prompt_version"] == "sell_points_v3"
         assert captured["payload"]["input_scope"] == "partial_sample"
         assert captured["payload"]["positions_total_count"] == 4
         assert captured["payload"]["positions_sampled_count"] == 3
