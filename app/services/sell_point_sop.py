@@ -420,6 +420,12 @@ class SellPointSopService:
             sell_style,
             daily_judgement.sell_point_level,
         )
+        priority_exit_ref = self._select_priority_exit_ref(
+            price,
+            target_input,
+            sell_style,
+            intraday_judgement.conclusion,
+        )
         observe_ref = self._select_observe_ref(
             price,
             target_input,
@@ -436,6 +442,11 @@ class SellPointSopService:
             )
         )
 
+        priority_exit_zone = (
+            self._format_zone(priority_exit_ref, self._priority_exit_buffer_pct(target_input))
+            if priority_exit_ref is not None and intraday_judgement.conclusion == "清"
+            else "[当前不适用]"
+        )
         proactive_zone = (
             self._format_zone(proactive_ref, self._proactive_buffer_pct(sell_style, target_input))
             if allow_proactive_take_profit
@@ -453,10 +464,15 @@ class SellPointSopService:
             else "[当前不适用]"
         )
 
+        priority_exit_condition = "当前不是优先现价退出阶段。"
         take_profit_condition = "当前以防守或退出为主，不设置主动兑现位。"
         rebound_condition = "当前不以弱反抽退出为主。"
         hold_condition = "当前不是继续观察阶段。"
 
+        if intraday_judgement.conclusion == "清" and priority_exit_ref is not None:
+            priority_exit_condition = (
+                f"能直接在 {priority_exit_zone} 一带处理，就优先直接退出；不要把最后失效线当成第一卖点。"
+            )
         if sell_style == "strong_profit":
             take_profit_condition = (
                 f"冲到 {proactive_zone} 一带，若量能放缓或冲高后不能继续站稳，先兑现 1/3~1/2。"
@@ -483,10 +499,12 @@ class SellPointSopService:
             )
 
         return SellPointSopOrderPlan(
+            priority_exit_price=priority_exit_zone,
             proactive_take_profit_price=proactive_zone,
             rebound_sell_price=rebound_zone,
             break_stop_price=stop_price,
             observe_level=observe_price,
+            priority_exit_condition=priority_exit_condition,
             take_profit_condition=take_profit_condition,
             rebound_condition=rebound_condition,
             stop_condition=f"跌破 {stop_price} 且 3-5 分钟无法收回，就按结构失效处理。",
@@ -513,7 +531,11 @@ class SellPointSopService:
             return SellPointSopExecution(
                 action="清",
                 partial_plan="不分批或只给一次弱反抽机会，核心是退出效率。",
-                key_level=order_plan.break_stop_price,
+                key_level=(
+                    order_plan.priority_exit_price
+                    if order_plan.priority_exit_price != "[当前不适用]"
+                    else order_plan.break_stop_price
+                ),
                 reason="当前更像结构失效或分时明显转弱，优先退出，避免后续更被动。",
             )
 
@@ -817,6 +839,24 @@ class SellPointSopService:
             return self._nearest_reference(price, levels.prev_low, levels.ma5, target_input.low)
         return self._nearest_reference(price, levels.prev_low, target_input.low)
 
+    def _select_priority_exit_ref(
+        self,
+        price: float,
+        target_input,
+        sell_style: str,
+        intraday_conclusion: str,
+    ) -> Optional[float]:
+        if intraday_conclusion != "清" or sell_style != "weak_exit":
+            return None
+        candidates = self._positive_prices(
+            price,
+            target_input.close,
+            target_input.open if float(getattr(target_input, "open", 0) or 0) <= price * 1.02 else None,
+        )
+        if not candidates:
+            return None
+        return self._round_price(max(candidates))
+
     def _proactive_buffer_pct(self, sell_style: str, target_input) -> float:
         if sell_style != "strong_profit":
             return 0.003
@@ -825,6 +865,12 @@ class SellPointSopService:
             return 0.008
         if ratio >= 1.3:
             return 0.005
+        return 0.003
+
+    def _priority_exit_buffer_pct(self, target_input) -> float:
+        ratio = float(getattr(target_input, "intraday_volume_ratio", None) or getattr(target_input, "vol_ratio", None) or 0)
+        if ratio >= 1.5:
+            return 0.004
         return 0.003
 
     def _rebound_buffer_pct(self, sell_style: str, target_input) -> float:

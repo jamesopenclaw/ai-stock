@@ -632,6 +632,7 @@ class BuyPointSopService:
         )
         retrace_confirm_ref = self._normalize_retrace_confirm_ref(
             price,
+            getattr(target_input, "ts_code", ""),
             structure_type,
             retrace_confirm_ref,
             low_absorb_ref,
@@ -1297,6 +1298,7 @@ class BuyPointSopService:
     def _normalize_retrace_confirm_ref(
         self,
         price: float,
+        ts_code: str,
         structure_type: str,
         retrace_confirm_ref: Optional[float],
         low_absorb_ref: Optional[float],
@@ -1309,11 +1311,25 @@ class BuyPointSopService:
             return retrace_confirm_ref
         if structure_type in {"突破前高", "突破后回踩"}:
             return retrace_confirm_ref
-        if retrace_confirm_ref >= price * 0.88:
+        if retrace_confirm_ref >= price * self._retrace_reference_floor_ratio(ts_code):
             return retrace_confirm_ref
         if low_absorb_ref is not None and low_absorb_ref > retrace_confirm_ref:
             return low_absorb_ref
         return retrace_confirm_ref
+
+    def _retrace_reference_floor_ratio(self, ts_code: str) -> float:
+        """
+        回踩确认位距离现价的容忍度按板块放宽：
+        - 主板 10cm：默认不超过约 8%
+        - 创业板/科创板 20cm：默认不超过约 12%
+        - 北交所 30cm：默认不超过约 18%
+        """
+        code = str(ts_code or "").upper()
+        if code.endswith(".BJ"):
+            return 0.82
+        if code.startswith(("300", "301", "688")):
+            return 0.88
+        return 0.92
 
     def _select_invalid_ref(
         self,

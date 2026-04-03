@@ -790,10 +790,12 @@ class SellPointSopIntradayJudgement(BaseModel):
 
 class SellPointSopOrderPlan(BaseModel):
     """卖点挂单计划"""
+    priority_exit_price: str = ""
     proactive_take_profit_price: str = ""
     rebound_sell_price: str = ""
     break_stop_price: str = ""
     observe_level: str = ""
+    priority_exit_condition: str = ""
     take_profit_condition: str = ""
     rebound_condition: str = ""
     stop_condition: str = ""

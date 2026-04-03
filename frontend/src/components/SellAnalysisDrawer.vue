@@ -278,6 +278,7 @@ const currentPriceAboveReboundZone = computed(() => {
 })
 const primaryOrderCardKey = computed(() => {
   const action = currentAction.value
+  if (action === '清' && isActionableLevel(orderPlan.value?.priority_exit_price)) return 'priority_exit'
   if (action === '清' && isActionableLevel(orderPlan.value?.rebound_sell_price)) return 'rebound'
   if (action === '清' && isActionableLevel(orderPlan.value?.break_stop_price)) return 'stop'
   if (action === '减' && isActionableLevel(orderPlan.value?.proactive_take_profit_price)) return 'take_profit'
@@ -291,6 +292,9 @@ const primaryOrderCardKey = computed(() => {
 })
 const orderPlanSummary = computed(() => {
   const action = currentAction.value
+  if (action === '清' && isActionableLevel(orderPlan.value?.priority_exit_price)) {
+    return `先看清仓区 ${normalizeLevelValue(orderPlan.value?.priority_exit_price)}`
+  }
   if (action === '清' && isActionableLevel(orderPlan.value?.rebound_sell_price)) {
     return `先看反抽区 ${normalizeLevelValue(orderPlan.value?.rebound_sell_price)}`
   }
@@ -313,6 +317,9 @@ const orderPlanLeadTitle = computed(() => {
 })
 const orderPlanLeadCopy = computed(() => {
   if (currentAction.value === '清') {
+    if (isActionableLevel(orderPlan.value?.priority_exit_price)) {
+      return `优先按清仓区处理；如果盘中只能给一次弱反抽机会，再参考反抽退出区。${normalizeLevelValue(orderPlan.value?.break_stop_price)} 只是最后底线。`
+    }
     if (isActionableLevel(orderPlan.value?.rebound_sell_price)) {
       return `优先按反抽卖出区处理；${normalizeLevelValue(orderPlan.value?.break_stop_price)} 只是最后底线，不是建议继续死等到那个位置。`
     }
@@ -340,6 +347,19 @@ const orderPlanLeadTone = computed(() => {
 const orderPlanCards = computed(() => {
   const primaryKey = primaryOrderCardKey.value
   return [
+    {
+      key: 'priority_exit',
+      label: '优先清仓价',
+      scene: '能直接处理就先走',
+      value: normalizeLevelValue(orderPlan.value?.priority_exit_price),
+      note: orderPlan.value?.priority_exit_condition || '当前没有明确的优先清仓区。',
+      tone: 'danger',
+      badge: isActionableLevel(orderPlan.value?.priority_exit_price)
+        ? (primaryKey === 'priority_exit' ? '先处理' : '优先位')
+        : '当前不设',
+      active: isActionableLevel(orderPlan.value?.priority_exit_price),
+      primary: primaryKey === 'priority_exit',
+    },
     {
       key: 'take_profit',
       label: '主动兑现价',
@@ -393,7 +413,10 @@ const orderPlanCards = computed(() => {
   ]
 })
 const primaryOrderPlanCards = computed(() => {
-  if (currentAction.value !== '拿') return orderPlanCards.value
+  if (currentAction.value === '清') {
+    return orderPlanCards.value.filter((card) => ['priority_exit', 'rebound', 'stop'].includes(card.key))
+  }
+  if (currentAction.value !== '拿') return orderPlanCards.value.filter((card) => card.key !== 'priority_exit')
   return orderPlanCards.value.filter((card) => ['observe', 'stop'].includes(card.key))
 })
 const backupOrderPlanCards = computed(() => {
@@ -403,7 +426,7 @@ const backupOrderPlanCards = computed(() => {
 const orderExecutionSteps = computed(() => (
   [
     primaryOrderCardKey.value,
-    ...(['rebound', 'take_profit', 'stop', 'observe'].filter((key) => key !== primaryOrderCardKey.value)),
+    ...(['priority_exit', 'rebound', 'take_profit', 'stop', 'observe'].filter((key) => key !== primaryOrderCardKey.value)),
   ]
     .map((key) => primaryOrderPlanCards.value.find((card) => card.key === key))
     .filter(Boolean)

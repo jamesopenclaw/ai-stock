@@ -191,6 +191,7 @@ export const adminApi = {
   listUsers: () => api.get('/admin/users'),
   createUser: (payload) => api.post('/admin/users', payload),
   updateUser: (userId, payload) => api.put(`/admin/users/${encodeURIComponent(userId)}`, payload),
+  resetUserPassword: (userId, payload) => api.post(`/admin/users/${encodeURIComponent(userId)}/reset-password`, payload),
   listAccounts: () => api.get('/admin/accounts'),
   createAccount: (payload) => api.post('/admin/accounts', payload),
   updateAccount: (accountId, payload) => api.put(`/admin/accounts/${encodeURIComponent(accountId)}`, payload),

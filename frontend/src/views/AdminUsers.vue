@@ -37,9 +37,10 @@
             {{ row.last_login_at || '-' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link @click="openEditDialog(row)">编辑</el-button>
+            <el-button type="warning" link @click="openResetPasswordDialog(row)">重置密码</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -84,6 +85,24 @@
         <el-button type="primary" :loading="saving" @click="submitForm">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="passwordDialogVisible" title="重置登录密码" width="420px">
+      <el-form :model="passwordForm" label-width="100px">
+        <el-form-item label="用户">
+          <el-input :model-value="passwordTargetName" disabled />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="passwordForm.password" type="password" show-password />
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input v-model="passwordForm.confirm_password" type="password" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="passwordSaving" @click="submitResetPassword">确认重置</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -96,8 +115,11 @@ import { adminApi } from '../api'
 const loading = ref(false)
 const saving = ref(false)
 const dialogVisible = ref(false)
+const passwordDialogVisible = ref(false)
 const isEdit = ref(false)
 const editingId = ref('')
+const passwordTargetId = ref('')
+const passwordTargetName = ref('')
 const users = ref([])
 const accounts = ref([])
 const form = reactive({
@@ -108,6 +130,11 @@ const form = reactive({
   status: 'active',
   default_account_id: '',
 })
+const passwordSaving = ref(false)
+const passwordForm = reactive({
+  password: '',
+  confirm_password: '',
+})
 
 const resetForm = () => {
   editingId.value = ''
@@ -117,6 +144,13 @@ const resetForm = () => {
   form.role = 'user'
   form.status = 'active'
   form.default_account_id = ''
+}
+
+const resetPasswordForm = () => {
+  passwordTargetId.value = ''
+  passwordTargetName.value = ''
+  passwordForm.password = ''
+  passwordForm.confirm_password = ''
 }
 
 const loadAccountOptions = async () => {
@@ -169,6 +203,13 @@ const openEditDialog = async (row) => {
   dialogVisible.value = true
 }
 
+const openResetPasswordDialog = (row) => {
+  resetPasswordForm()
+  passwordTargetId.value = row.id
+  passwordTargetName.value = row.display_name || row.username
+  passwordDialogVisible.value = true
+}
+
 const submitForm = async () => {
   saving.value = true
   try {
@@ -197,6 +238,35 @@ const submitForm = async () => {
     ElMessage.error(error.response?.data?.message || '保存用户失败')
   } finally {
     saving.value = false
+  }
+}
+
+const submitResetPassword = async () => {
+  if (!passwordForm.password) {
+    ElMessage.error('请输入新密码')
+    return
+  }
+  if (passwordForm.password.length < 6) {
+    ElMessage.error('新密码至少 6 位')
+    return
+  }
+  if (passwordForm.password !== passwordForm.confirm_password) {
+    ElMessage.error('两次输入的密码不一致')
+    return
+  }
+
+  passwordSaving.value = true
+  try {
+    await adminApi.resetUserPassword(passwordTargetId.value, {
+      password: passwordForm.password,
+    })
+    ElMessage.success('登录密码已重置，用户需使用新密码重新登录')
+    passwordDialogVisible.value = false
+    resetPasswordForm()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '重置密码失败')
+  } finally {
+    passwordSaving.value = false
   }
 }
 

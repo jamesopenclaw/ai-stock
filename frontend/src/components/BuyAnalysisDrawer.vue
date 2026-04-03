@@ -464,6 +464,12 @@ const isActionableLevel = (value) => {
   return !text.includes('需确认')
 }
 const normalizeLevelValue = (value) => (isActionableLevel(value) ? String(value).trim() : '当前不设')
+const resolveRetraceFloorRatio = (tsCode) => {
+  const code = String(tsCode || '').toUpperCase()
+  if (code.endsWith('.BJ')) return 0.82
+  if (code.startsWith('300') || code.startsWith('301') || code.startsWith('688')) return 0.88
+  return 0.92
+}
 const parseZoneCenter = (value) => {
   const text = String(value || '').trim()
   if (!text || text === '-' || text.includes('需确认')) return null
@@ -484,7 +490,7 @@ const isDeepRetraceReference = computed(() => {
   const current = referenceCurrentPrice.value
   const retraceCenter = parseZoneCenter(orderPlan.value?.retrace_confirm_price)
   if (current === null || retraceCenter === null) return false
-  return retraceCenter < current * 0.88
+  return retraceCenter < current * resolveRetraceFloorRatio(basic.value?.ts_code || props.tsCode)
 })
 const deepRetraceNotice = computed(() => {
   if (!isDeepRetraceReference.value || !isActionableLevel(orderPlan.value?.retrace_confirm_price)) return ''

@@ -25,7 +25,7 @@
             <el-radio-button label="amount">成交额</el-radio-button>
             <el-radio-button label="turnover_rate">换手</el-radio-button>
           </el-radio-group>
-          <el-button @click="loadData()" :loading="loading">刷新</el-button>
+          <el-button @click="loadData({ refresh: true })" :loading="loading">刷新</el-button>
         </div>
       </div>
     </template>
@@ -153,7 +153,7 @@ const handleClose = () => {
   emit('update:modelValue', false)
 }
 
-const loadData = async () => {
+const loadData = async (options = {}) => {
   if (!props.modelValue || !currentSector.value || !props.tradeDate || loading.value) {
     return
   }
@@ -164,6 +164,7 @@ const loadData = async () => {
       currentSector.value.sector_name,
       currentSector.value.sector_source_type,
       10,
+      options,
     )
     data.value = res.data?.data || null
   } catch (error) {

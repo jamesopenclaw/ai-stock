@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.database import async_session_factory
 from app.core.security import hash_password, require_admin
@@ -16,6 +16,7 @@ from app.models.account_setting import AccountSetting
 from app.models.schemas import ApiResponse
 from app.models.trading_account import TradingAccount
 from app.models.user import User
+from app.models.user_session import UserSession
 from app.services.trading_account_service import create_trading_account, serialize_account
 
 
@@ -40,6 +41,12 @@ class UpdateUserRequest(BaseModel):
     role: Optional[str] = Field(None, pattern="^(admin|user)$")
     status: Optional[str] = Field(None, pattern="^(active|disabled)$")
     default_account_id: Optional[str] = None
+
+
+class ResetUserPasswordRequest(BaseModel):
+    """管理员重置用户密码请求。"""
+
+    password: str = Field(..., min_length=6, max_length=128)
 
 
 class CreateAccountRequest(BaseModel):
@@ -159,6 +166,22 @@ async def update_user(user_id: str, request: UpdateUserRequest) -> ApiResponse:
 
     account_lookup = {account.id: account for account in accounts}
     return ApiResponse(data={"user": _serialize_user(user, account_lookup)})
+
+
+@router.post("/users/{user_id}/reset-password", response_model=ApiResponse, dependencies=[Depends(require_admin)])
+async def reset_user_password(user_id: str, request: ResetUserPasswordRequest) -> ApiResponse:
+    """管理员重置用户密码，并撤销用户现有 refresh 会话。"""
+    async with async_session_factory() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            return ApiResponse(code=404, message="用户不存在")
+
+        user.password_hash = hash_password(request.password)
+        await session.execute(delete(UserSession).where(UserSession.user_id == user_id))
+        await session.commit()
+
+    return ApiResponse(data={"success": True})
 
 
 @router.get("/accounts", response_model=ApiResponse, dependencies=[Depends(require_admin)])

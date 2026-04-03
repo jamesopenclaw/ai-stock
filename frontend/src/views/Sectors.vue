@@ -324,11 +324,11 @@
     :ts-code="checkupStock.tsCode"
     :stock-name="checkupStock.stockName"
     :default-target="checkupStock.defaultTarget"
-    :trade-date="scanData.resolved_trade_date || scanData.trade_date"
+    :trade-date="scanData.trade_date || getLocalDate()"
   />
   <SectorTopStocksDrawer
     v-model="topStocksVisible"
-    :trade-date="scanData.resolved_trade_date || scanData.trade_date"
+    :trade-date="scanData.trade_date || getLocalDate()"
     :sector="activeTopSector"
     @checkup="openCheckup"
   />

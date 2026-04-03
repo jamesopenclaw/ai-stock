@@ -917,6 +917,99 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).not.toContain('当前更重要的是等价格回踩到 104.06-104.89 一带')
   })
 
+  it('BuyAnalysisDrawer 对创业板票允许更宽的回踩确认范围，不会过早降级为深回踩参考', async () => {
+    stockApi.buyAnalysis.mockResolvedValue({
+      data: {
+        code: 200,
+        data: {
+          trade_date: '2026-04-03',
+          resolved_trade_date: '2026-04-03',
+          stock_found_in_candidates: true,
+          basic_info: {
+            ts_code: '301408.SZ',
+            stock_name: '华人健康',
+            sector_name: '医药商业',
+            market_env_tag: '防守',
+            stable_market_env_tag: '防守',
+            realtime_market_env_tag: '防守',
+            buy_signal_tag: '观察',
+            buy_point_type: '回踩承接',
+            candidate_bucket_tag: '趋势回踩',
+            quote_time: '2026-04-03 10:31:15',
+            data_source: 'realtime_sina',
+          },
+          account_context: {
+            position_status: '中仓（仓位 13%）',
+            same_direction_exposure: '暂无明显同方向重复暴露。',
+            current_use: '新开仓',
+            market_suitability: '市场偏防守，只能低吸或回踩确认，不能追高。',
+            account_conclusion: '市场偏防守，只能低吸或回踩确认，不能追高。',
+          },
+          daily_judgement: {
+            current_stage: '中继',
+            buy_signal: '回踩承接，观察',
+            buy_point_level: 'C',
+            reason: '日线更多是观察位，不宜急着下单',
+            risk_items: [],
+            reference_levels: [],
+          },
+          intraday_judgement: {
+            price_vs_avg_line: '站均价线上',
+            intraday_structure: '突破后站稳',
+            volume_quality: '实时放量跟随（相对放量 7.7）',
+            key_level_status: '已到突破关键位 19.47 一带。',
+            conclusion: '等确认',
+            note: '承接仍需观察。',
+          },
+          order_plan: {
+            low_absorb_price: '17.97-18.12',
+            breakout_price: '19.94-20.10',
+            retrace_confirm_price: '17.45-17.59',
+            give_up_price: '20.00',
+            trigger_condition: '优先看回踩 17.97-18.12 一带是否缩量承接；若直接走强，则放量过 19.94-20.10 并站稳再考虑。',
+            invalid_condition: '跌破 17.09 且无法快速收回，就视为买点失效。',
+            above_no_chase: '20.00',
+            below_no_buy: '17.09',
+          },
+          add_position_decision: {
+            eligible: false,
+            decision: '不加',
+            reason: '当前不是加仓语境，这里仍按新开仓逻辑处理。',
+          },
+          position_advice: {
+            suggestion: '轻仓试错',
+            reason: '买点还需要盘中确认或账户已有约束，只适合试错仓位。',
+            invalidation_level: '17.09',
+            invalidation_action: '跌破失效位后放弃。',
+          },
+          execution: {
+            action: '等',
+            reason: '日线可以继续看，但分时确认还没到位，先按计划等触发。',
+          },
+        },
+      },
+    })
+
+    const { default: BuyAnalysisDrawer } = await import('../src/components/BuyAnalysisDrawer.vue')
+    const wrapper = mount(BuyAnalysisDrawer, {
+      props: {
+        modelValue: false,
+        tsCode: '301408.SZ',
+        stockName: '华人健康',
+        tradeDate: '2026-04-03',
+        currentPrice: 19.66,
+        currentChangePct: 4.52,
+      },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前先等回踩确认，不是继续追高')
+    expect(wrapper.text()).not.toContain('深回踩参考位')
+    expect(wrapper.text()).not.toContain('当前先不把它当执行位')
+  })
+
   it('Dashboard 页面会串起摘要、市场、板块、账户和买卖信号接口', async () => {
     marketApi.getEnv.mockResolvedValue(makeResponse({
       market_env_tag: '进攻',
@@ -1521,10 +1614,10 @@ describe('关键页面联调', () => {
     const { default: ReviewStatsView } = await import('../src/views/ReviewStats.vue')
     const wrapper = await mountView(ReviewStatsView)
 
-    expect(wrapper.text()).toContain('开仓样本')
-    expect(wrapper.text()).toContain('加仓样本')
-    expect(wrapper.text()).toContain('开仓结论')
-    expect(wrapper.text()).toContain('加仓结论')
+    expect(wrapper.text()).toContain('开仓 · 1')
+    expect(wrapper.text()).toContain('加仓 · 1')
+    expect(wrapper.text()).toContain('当前最强：买点-可买 / 强趋势延续')
+    expect(wrapper.text()).toContain('当前最强：加仓-可加 / 趋势回踩')
 
     const sourceButtons = wrapper.findAll('button').filter((node) => node.text().includes('去源页面'))
     expect(sourceButtons.length).toBeGreaterThan(0)

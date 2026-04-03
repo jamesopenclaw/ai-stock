@@ -734,6 +734,33 @@ def test_buy_point_sop_retrace_confirm_ref_does_not_use_far_below_spot_anchor():
     assert _zone_high(plan.retrace_confirm_price) < 123
 
 
+def test_buy_point_sop_retrace_floor_ratio_is_board_aware():
+    assert buy_point_sop_service._retrace_reference_floor_ratio("002463.SZ") == 0.92
+    assert buy_point_sop_service._retrace_reference_floor_ratio("301408.SZ") == 0.88
+    assert buy_point_sop_service._retrace_reference_floor_ratio("688521.SH") == 0.88
+    assert buy_point_sop_service._retrace_reference_floor_ratio("830001.BJ") == 0.82
+
+
+def test_buy_point_sop_chinext_allows_wider_retrace_before_downgrade():
+    assert buy_point_sop_service._normalize_retrace_confirm_ref(
+        19.66,
+        "301408.SZ",
+        "回踩承接",
+        17.52,
+        18.04,
+    ) == 17.52
+
+
+def test_buy_point_sop_main_board_downgrades_same_retrace_distance():
+    assert buy_point_sop_service._normalize_retrace_confirm_ref(
+        19.66,
+        "002408.SZ",
+        "回踩承接",
+        17.52,
+        18.04,
+    ) == 18.04
+
+
 @pytest.mark.asyncio
 async def test_buy_point_sop_prefers_realtime_single_stock_input_for_intraday(monkeypatch):
     market_env = MarketEnvOutput(
