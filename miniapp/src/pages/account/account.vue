@@ -122,8 +122,10 @@
               <text class="detail-value">{{ item.holding_reason }}</text>
             </view>
             <view class="action-row">
-              <view class="edit-btn" @click.stop="openEditModal(item)">编辑</view>
-              <view class="delete-btn" @click.stop="deletePosition(item.id)">删除持仓</view>
+              <view class="edit-btn add-action" @click.stop="openEditModal(item, 'add')">加仓</view>
+              <view class="edit-btn reduce-action" @click.stop="openEditModal(item, 'reduce')">减仓</view>
+              <view class="edit-btn" @click.stop="openEditModal(item, 'update')">调整</view>
+              <view class="delete-btn" @click.stop="deletePosition(item.id)">清仓</view>
             </view>
           </view>
         </view>
@@ -176,7 +178,7 @@
     <view v-if="showEditModal" class="modal-mask" @click="showEditModal = false">
       <view class="modal-content" @click.stop>
         <view class="modal-header">
-          <text class="modal-title">编辑持仓</text>
+          <text class="modal-title">{{ editDialogTitle }}</text>
           <text class="modal-close" @click="showEditModal = false">×</text>
         </view>
         <view class="modal-body">
@@ -189,8 +191,9 @@
             <text class="form-value">{{ editPosition.stock_name }}</text>
           </view>
           <view class="form-item">
-            <text class="form-label">持仓数量 *</text>
+            <text class="form-label">{{ editQtyLabel }} *</text>
             <input class="form-input" v-model="editPosition.holding_qty" type="number" placeholder="股数" />
+            <text class="form-tip">{{ editDialogHint }}</text>
           </view>
           <view class="form-item">
             <text class="form-label">成本价 *</text>
@@ -202,7 +205,7 @@
           </view>
           <view class="form-actions">
             <view class="btn-cancel" @click="showEditModal = false">取消</view>
-            <view class="btn-confirm" @click="saveEditPosition">保存</view>
+            <view class="btn-confirm" @click="saveEditPosition">{{ editConfirmLabel }}</view>
           </view>
         </view>
       </view>
@@ -215,7 +218,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { accountApi, stockApi } from '../../api'
 
 const loading = ref(false)
@@ -225,7 +228,9 @@ const positions = ref([])
 const expandedItem = ref(null)
 const showAddModal = ref(false)
 const showEditModal = ref(false)
+const editMode = ref('update')
 const editPosition = ref({
+  original_qty: '',
   ts_code: '',
   stock_name: '',
   holding_qty: '',
@@ -265,8 +270,36 @@ const toggleDetail = (item) => {
   expandedItem.value = expandedItem.value === item.id ? null : item.id
 }
 
-const openEditModal = (item) => {
+const editDialogTitle = computed(() => {
+  if (editMode.value === 'add') return '加仓'
+  if (editMode.value === 'reduce') return '减仓'
+  return '调整持仓'
+})
+
+const editQtyLabel = computed(() => {
+  if (editMode.value === 'add') return '加仓后总持仓'
+  if (editMode.value === 'reduce') return '减仓后剩余股数'
+  return '持仓数量'
+})
+
+const editDialogHint = computed(() => {
+  const originalQty = Number(editPosition.value.original_qty || 0)
+  if (!originalQty) return '填写调整后的持仓数量。'
+  if (editMode.value === 'add') return `当前持仓 ${originalQty} 股，请填写加仓后的总持仓数量`
+  if (editMode.value === 'reduce') return `当前持仓 ${originalQty} 股，请填写减仓后保留的股数`
+  return `当前持仓 ${originalQty} 股，可同步调整成本价或买入理由`
+})
+
+const editConfirmLabel = computed(() => {
+  if (editMode.value === 'add') return '确认加仓'
+  if (editMode.value === 'reduce') return '确认减仓'
+  return '保存调整'
+})
+
+const openEditModal = (item, mode = 'update') => {
+  editMode.value = mode
   editPosition.value = {
+    original_qty: String(item.holding_qty ?? ''),
     ts_code: item.ts_code,
     stock_name: item.stock_name || '',
     holding_qty: String(item.holding_qty ?? ''),
@@ -279,8 +312,17 @@ const openEditModal = (item) => {
 const saveEditPosition = async () => {
   const qty = parseInt(editPosition.value.holding_qty, 10)
   const cost = parseFloat(editPosition.value.cost_price)
+  const originalQty = parseInt(editPosition.value.original_qty, 10)
   if (!editPosition.value.ts_code || !qty || qty < 1 || !cost || cost <= 0) {
     uni.showToast({ title: '请填写有效数量与成本', icon: 'none' })
+    return
+  }
+  if (editMode.value === 'add' && qty <= originalQty) {
+    uni.showToast({ title: '加仓后的总持仓必须大于当前持仓', icon: 'none' })
+    return
+  }
+  if (editMode.value === 'reduce' && qty >= originalQty) {
+    uni.showToast({ title: '减仓后剩余股数必须小于当前持仓', icon: 'none' })
     return
   }
   loading.value = true
@@ -291,8 +333,9 @@ const saveEditPosition = async () => {
       holding_reason: editPosition.value.holding_reason ?? ''
     })
     if (res.code === 200) {
-      uni.showToast({ title: '保存成功', icon: 'success' })
+      uni.showToast({ title: res.data?.message || '保存成功', icon: 'success' })
       showEditModal.value = false
+      editMode.value = 'update'
       loadData()
     } else {
       uni.showToast({ title: res.message || '保存失败', icon: 'none' })
@@ -363,8 +406,8 @@ const addPosition = async () => {
 
 const deletePosition = async (id) => {
   uni.showModal({
-    title: '确认删除',
-    content: '确定要删除这条持仓记录吗？',
+    title: '确认清仓',
+    content: '确定要清掉这条持仓吗？清仓后会回补可用资金。',
     success: async (res) => {
       if (res.confirm) {
         loading.value = true
@@ -372,13 +415,13 @@ const deletePosition = async (id) => {
           const res = await accountApi.deletePosition(id)
 
           if (res.code === 200) {
-            uni.showToast({ title: '删除成功', icon: 'success' })
-            loadData()
-          } else {
-            uni.showToast({ title: '删除失败', icon: 'none' })
+            uni.showToast({ title: res.data?.message || '清仓成功', icon: 'success' })
+          loadData()
+        } else {
+            uni.showToast({ title: res.message || '清仓失败', icon: 'none' })
           }
         } catch (e) {
-          uni.showToast({ title: '删除失败', icon: 'none' })
+          uni.showToast({ title: '清仓失败', icon: 'none' })
         } finally {
           loading.value = false
         }
@@ -466,12 +509,15 @@ onMounted(() => {
 .form-label { display: block; font-size: 14px; color: #666; margin-bottom: 5px; }
 .form-input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
 .form-value { font-size: 14px; color: #999; }
+.form-tip { display: block; margin-top: 6px; font-size: 12px; color: #999; line-height: 1.5; }
 .picker-value { padding: 10px; border: 1px solid #ddd; border-radius: 4px; color: #333; }
 
 .form-actions { display: flex; gap: 10px; margin-top: 20px; }
 .btn-cancel, .btn-confirm { flex: 1; padding: 12px; text-align: center; border-radius: 4px; font-size: 14px; }
 .btn-cancel { background: #f5f5f5; color: #666; }
 .btn-confirm { background: #409eff; color: #fff; }
+.add-action { color: #67c23a; border-color: #67c23a; }
+.reduce-action { color: #e6a23c; border-color: #e6a23c; }
 
 .loading { text-align: center; padding: 30px; color: #999; }
 .text-red { color: #f56c6c; }

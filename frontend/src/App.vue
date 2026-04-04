@@ -56,6 +56,12 @@
               </el-tag>
             </div>
           </div>
+          <NotificationBell
+            v-if="currentAccount"
+            :unread-count="notificationSummary.unread_count"
+            :critical-count="notificationSummary.critical_count"
+            @open="notificationCenterVisible = true"
+          />
           <el-tag>{{ currentDate }}</el-tag>
           <el-button type="danger" plain size="small" @click="handleLogout">退出登录</el-button>
         </div>
@@ -64,15 +70,18 @@
       <el-main>
         <router-view />
       </el-main>
+      <NotificationCenter
+        v-model="notificationCenterVisible"
+      />
     </el-container>
   </el-container>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import {
   Avatar,
   DataAnalysis,
@@ -88,8 +97,11 @@ import {
   UserFilled,
   Wallet,
 } from '@element-plus/icons-vue'
+import NotificationBell from './components/NotificationBell.vue'
+import NotificationCenter from './components/NotificationCenter.vue'
 import { adminApi, authApi } from './api'
 import { authState, clearSession, getRefreshToken, setCurrentAccount, setSession } from './auth'
+import { useNotificationStore } from './stores/notificationStore'
 
 const route = useRoute()
 const router = useRouter()
@@ -97,6 +109,12 @@ const currentDate = ref(dayjs().format('YYYY-MM-DD'))
 const accountOptions = ref([])
 const switchingAccount = ref(false)
 const selectedAccountId = ref('')
+const notificationCenterVisible = ref(false)
+const notificationInitialized = ref(false)
+let clockTimer = null
+let notificationPollTimer = null
+const notificationStore = useNotificationStore()
+const notificationSummary = computed(() => notificationStore.summary.value)
 const currentUser = computed(() => authState.user)
 const currentAccount = computed(() => authState.account)
 const isAdmin = computed(() => currentUser.value?.role === 'admin')
@@ -187,11 +205,63 @@ const handleLogout = async () => {
   }
 }
 
+const stopNotificationPolling = () => {
+  if (!notificationPollTimer) return
+  window.clearTimeout(notificationPollTimer)
+  notificationPollTimer = null
+}
+
+const scheduleNotificationPolling = () => {
+  stopNotificationPolling()
+  if (typeof window === 'undefined' || !showShell.value || !currentAccount.value?.id) return
+      notificationPollTimer = window.setTimeout(async () => {
+    await loadNotificationSummary()
+    scheduleNotificationPolling()
+  }, notificationCenterVisible.value ? 10000 : 25000)
+}
+
+const loadNotificationSummary = async ({ refresh = false } = {}) => {
+  if (!currentAccount.value?.id || !showShell.value) {
+    notificationStore.resetState()
+    return
+  }
+  try {
+    const previousCriticalCount = Number(notificationSummary.value.critical_count || 0)
+    const payload = await notificationStore.loadSummary({ force: refresh })
+
+    if (
+      notificationInitialized.value
+      && Number(payload.critical_count || 0) > previousCriticalCount
+      && payload.latest_items.length
+      && !payload.quiet_window_active
+    ) {
+      const latest = payload.latest_items[0]
+      ElNotification({
+        title: latest.title || '新的高优先级提醒',
+        message: latest.message || '有新的盘中待处理事项',
+        type: 'warning',
+        duration: 5000,
+      })
+    }
+    notificationInitialized.value = true
+  } catch {
+    // 避免顶栏轮询把页面打满错误提示
+  }
+}
+
 onMounted(() => {
   loadCurrentUser()
-  setInterval(() => {
+  clockTimer = window.setInterval(() => {
     currentDate.value = dayjs().format('YYYY-MM-DD HH:mm')
   }, 60000)
+})
+
+onBeforeUnmount(() => {
+  if (clockTimer) {
+    window.clearInterval(clockTimer)
+    clockTimer = null
+  }
+  stopNotificationPolling()
 })
 
 watch(
@@ -207,6 +277,18 @@ watch(
   () => currentAccount.value?.id,
   () => {
     syncSelectedAccount()
+    notificationInitialized.value = false
+    notificationStore.ensureAccountScope()
+    loadNotificationSummary({ refresh: true })
+    scheduleNotificationPolling()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => [showShell.value, notificationCenterVisible.value],
+  () => {
+    scheduleNotificationPolling()
   },
   { immediate: true }
 )

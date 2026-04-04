@@ -422,7 +422,8 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { decisionApi, stockApi } from '../api'
 import { authState } from '../auth'
 import { ElMessage } from 'element-plus'
@@ -431,6 +432,8 @@ import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
 import SellAnalysisDrawer from '../components/SellAnalysisDrawer.vue'
 import { formatLocalTime } from '../utils/datetime'
 
+const route = useRoute()
+const router = useRouter()
 const loading = ref(false)
 const llmRefreshing = ref(false)
 const activeTab = ref('sell')
@@ -446,6 +449,9 @@ const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型'
 const priceRefreshingMap = ref({})
 const SELL_POINT_CACHE_PREFIX = 'sell_point_snapshot_v2'
 const DASHBOARD_CACHE_PREFIX = 'dashboard_snapshot_v2'
+const notificationAction = computed(() => String(route.query.notification_action || '').trim())
+const notificationTsCode = computed(() => String(route.query.ts_code || '').trim())
+const notificationStockName = computed(() => String(route.query.stock_name || '').trim())
 
 const sellHeadline = computed(() => {
   if (sellData.value.sell_positions?.length) return '先处理 SOP 明确要求退出的持仓，再看减仓和继续观察的部分'
@@ -649,6 +655,52 @@ const openBuyAnalysis = (point) => {
   buyAnalysisVisible.value = true
 }
 
+const clearNotificationQuery = () => {
+  const query = { ...route.query }
+  delete query.notification_action
+  delete query.ts_code
+  delete query.stock_name
+  router.replace({ query })
+}
+
+const matchesTsCode = (point, tsCode) => String(point?.ts_code || '').toUpperCase() === String(tsCode || '').toUpperCase()
+
+const handleNotificationQuery = () => {
+  if (!notificationAction.value || !notificationTsCode.value) return
+  const allPoints = [
+    ...(sellData.value.sell_positions || []),
+    ...(sellData.value.reduce_positions || []),
+    ...(sellData.value.hold_positions || []),
+  ]
+  const targetPoint = allPoints.find((point) => matchesTsCode(point, notificationTsCode.value))
+  if (notificationAction.value === 'sell_analysis') {
+    openSellAnalysis(targetPoint || {
+      ts_code: notificationTsCode.value,
+      stock_name: notificationStockName.value || notificationTsCode.value,
+      market_price: null,
+      pnl_pct: null,
+    })
+    clearNotificationQuery()
+    return
+  }
+  if (notificationAction.value === 'buy_analysis') {
+    openBuyAnalysis(targetPoint || {
+      ts_code: notificationTsCode.value,
+      stock_name: notificationStockName.value || notificationTsCode.value,
+      market_price: null,
+    })
+    clearNotificationQuery()
+    return
+  }
+  if (notificationAction.value === 'checkup') {
+    openCheckup({
+      ts_code: notificationTsCode.value,
+      stock_name: notificationStockName.value || notificationTsCode.value,
+    })
+    clearNotificationQuery()
+  }
+}
+
 const setPointRefreshing = (tsCode, refreshing) => {
   priceRefreshingMap.value = {
     ...priceRefreshingMap.value,
@@ -818,6 +870,7 @@ const loadData = async (options = {}) => {
     else if (sellData.value.reduce_positions?.length) activeTab.value = 'reduce'
     else activeTab.value = 'hold'
     persistSellPointCache()
+    handleNotificationQuery()
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '加载失败'
     if (forceLlmRefresh) {
@@ -842,6 +895,14 @@ onMounted(() => {
   const hydrated = hydrateSellPointCache(tradeDate) || hydrateDashboardSellPointCache(tradeDate)
   loadData({ silent: hydrated })
 })
+
+watch(
+  () => [notificationAction.value, notificationTsCode.value, loading.value],
+  () => {
+    if (loading.value) return
+    handleNotificationQuery()
+  }
+)
 </script>
 
 <style scoped>

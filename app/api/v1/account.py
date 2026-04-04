@@ -19,6 +19,8 @@ from app.models.schemas import (
 from app.services.account_adapter import account_adapter_service
 from app.data.tushare_client import tushare_client, normalize_ts_code
 from app.models.holding import Holding
+from app.models.account_setting import AccountSetting
+from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.security import AuthenticatedAccount, get_current_account
 from app.services.account_config_service import (
@@ -58,6 +60,96 @@ def _cache_account_overview(account_id: str, payload: dict) -> None:
 
 def _invalidate_account_overview_cache(account_id: str) -> None:
     _account_overview_cache.pop(_account_overview_cache_key(account_id), None)
+
+
+def _position_cost_amount(holding_qty: int, cost_price: float) -> float:
+    return round(max(int(holding_qty or 0), 0) * max(float(cost_price or 0.0), 0.0), 2)
+
+
+def _position_liquidation_amount(holding: dict) -> float:
+    market_value = _safe_float(holding.get("holding_market_value"), 0.0)
+    if market_value > 0:
+        return round(market_value, 2)
+
+    holding_qty = int(holding.get("holding_qty") or 0)
+    market_price = _safe_float(holding.get("market_price"), 0.0)
+    if holding_qty > 0 and market_price > 0:
+        return round(holding_qty * market_price, 2)
+
+    return _position_cost_amount(holding_qty, _safe_float(holding.get("cost_price"), 0.0))
+
+
+def _holding_effective_market_price(holding: Holding) -> float:
+    market_price = _safe_float(getattr(holding, "market_price", 0.0), 0.0)
+    if market_price > 0:
+        return round(market_price, 2)
+    cost_price = _safe_float(getattr(holding, "cost_price", 0.0), 0.0)
+    return round(cost_price, 2)
+
+
+def _classify_position_change(existing_holding: Holding, payload: dict) -> tuple[str, float]:
+    if "holding_qty" not in payload:
+        return "update", 0.0
+
+    old_qty = max(int(existing_holding.holding_qty or 0), 0)
+    new_qty = max(int(payload.get("holding_qty") or 0), 0)
+    if new_qty == old_qty:
+        return "update", 0.0
+
+    if new_qty <= 0:
+        liquidation_amount = round(old_qty * _holding_effective_market_price(existing_holding), 2)
+        return "close", liquidation_amount
+
+    if new_qty > old_qty:
+        old_cost_amount = _position_cost_amount(old_qty, existing_holding.cost_price)
+        new_cost = payload.get("cost_price", existing_holding.cost_price)
+        new_cost_amount = _position_cost_amount(new_qty, new_cost)
+        return "add", round(old_cost_amount - new_cost_amount, 2)
+
+    sold_qty = old_qty - new_qty
+    liquidation_amount = round(sold_qty * _holding_effective_market_price(existing_holding), 2)
+    return "reduce", liquidation_amount
+
+
+async def _get_or_create_account_setting(session, account_id: str) -> AccountSetting:
+    result = await session.execute(
+        select(AccountSetting).where(AccountSetting.account_id == account_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is not None:
+        return row
+
+    row = AccountSetting(
+        account_id=account_id,
+        available_cash=float(settings.qingzhou_total_asset),
+        total_asset=float(settings.qingzhou_total_asset),
+        updated_at=datetime.utcnow(),
+    )
+    session.add(row)
+    return row
+
+
+async def _apply_available_cash_delta(session, account_id: str, cash_delta: float) -> float:
+    cash_delta = round(float(cash_delta or 0.0), 2)
+    if cash_delta == 0:
+        row = await _get_or_create_account_setting(session, account_id)
+        available_cash = row.available_cash if row.available_cash is not None else row.total_asset
+        return round(float(available_cash or 0.0), 2)
+
+    row = await _get_or_create_account_setting(session, account_id)
+    current_available_cash = row.available_cash
+    if current_available_cash is None:
+        current_available_cash = row.total_asset
+    current_available_cash = round(float(current_available_cash or 0.0), 2)
+    next_available_cash = round(current_available_cash + cash_delta, 2)
+    if next_available_cash < 0:
+        raise ValueError(
+            f"可用资金不足，当前可用 {current_available_cash:.2f} 元，本次变更需要 {abs(cash_delta):.2f} 元"
+        )
+
+    row.available_cash = next_available_cash
+    row.updated_at = datetime.utcnow()
+    return next_available_cash
 
 
 async def build_account_input(holdings: List[dict], account_id: Optional[str] = None) -> AccountInput:
@@ -144,14 +236,19 @@ async def build_account_overview_payload(current_account: AuthenticatedAccount) 
     }
 
 
-async def save_holding_to_db(holding_data: dict) -> dict:
+async def save_holding_to_db(holding_data: dict, session=None) -> dict:
     """保存持仓到数据库"""
-    async with async_session_factory() as session:
-        holding = Holding(**holding_data)
-        session.add(holding)
-        await session.commit()
-        await session.refresh(holding)
-        return holding.to_dict()
+    if session is None:
+        async with async_session_factory() as db_session:
+            holding = await save_holding_to_db(holding_data, session=db_session)
+            await db_session.commit()
+            return holding
+
+    holding = Holding(**holding_data)
+    session.add(holding)
+    await session.flush()
+    await session.refresh(holding)
+    return holding.to_dict()
 
 
 async def delete_holding_from_db(account_id: str, ts_code: str) -> bool:
@@ -313,11 +410,17 @@ async def add_position(
             "holding_reason": request.holding_reason or ""
         }
         
-        # 保存到数据库
-        saved_holding = await save_holding_to_db(holding_data)
+        cash_delta = -_position_cost_amount(request.holding_qty, request.cost_price)
+
+        async with async_session_factory() as session:
+            await _apply_available_cash_delta(session, current_account.id, cash_delta)
+            saved_holding = await save_holding_to_db(holding_data, session=session)
+            await session.commit()
         _invalidate_account_overview_cache(current_account.id)
         
         return ApiResponse(data={"message": "持仓添加成功", "position": saved_holding})
+    except ValueError as e:
+        return ApiResponse(code=400, message=str(e))
     except Exception as e:
         return ApiResponse(code=500, message=f"添加持仓失败：{str(e)}")
 
@@ -336,17 +439,43 @@ async def update_position(
         if not payload:
             return ApiResponse(code=400, message="请至少修改一项")
 
-        # 更新数据库
-        updated = await update_holding_in_db(current_account.id, ts_code, **payload)
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(Holding).where(Holding.account_id == current_account.id, Holding.ts_code == ts_code)
+            )
+            holding = result.scalar_one_or_none()
+            if not holding:
+                return ApiResponse(code=404, message="持仓不存在")
 
-        if updated:
-            # 与 GET 持仓一致：按当日行情刷新现价、盈亏、市值
-            refresh_holdings_price([updated])
-            enrich_holdings([updated])
-            _invalidate_account_overview_cache(current_account.id)
-            return ApiResponse(data={"message": "持仓更新成功", "position": updated})
-        else:
-            return ApiResponse(code=404, message="持仓不存在")
+            operation, cash_delta = _classify_position_change(holding, payload)
+            await _apply_available_cash_delta(session, current_account.id, cash_delta)
+
+            if operation == "close":
+                await session.delete(holding)
+                await session.commit()
+                _invalidate_account_overview_cache(current_account.id)
+                return ApiResponse(data={"message": "清仓成功", "operation": operation})
+
+            for key, value in payload.items():
+                if hasattr(holding, key) and value is not None:
+                    setattr(holding, key, value)
+
+            await session.commit()
+            await session.refresh(holding)
+            updated = holding.to_dict()
+
+        # 与 GET 持仓一致：按当日行情刷新现价、盈亏、市值
+        refresh_holdings_price([updated])
+        enrich_holdings([updated])
+        _invalidate_account_overview_cache(current_account.id)
+        operation_message = {
+            "add": "加仓成功",
+            "reduce": "减仓成功",
+            "update": "持仓更新成功",
+        }.get(operation, "持仓更新成功")
+        return ApiResponse(data={"message": operation_message, "operation": operation, "position": updated})
+    except ValueError as e:
+        return ApiResponse(code=400, message=str(e))
     except Exception as e:
         return ApiResponse(code=500, message=f"更新持仓失败：{str(e)}")
 
@@ -367,12 +496,18 @@ async def delete_position(
             )
             holding = result.scalar_one_or_none()
             if holding:
+                holding_snapshot = holding.to_dict()
+                refresh_holdings_price([holding_snapshot])
+                liquidation_amount = _position_liquidation_amount(holding_snapshot)
+                await _apply_available_cash_delta(session, current_account.id, liquidation_amount)
                 await session.delete(holding)
                 await session.commit()
                 _invalidate_account_overview_cache(current_account.id)
-                return ApiResponse(data={"message": "持仓删除成功"})
+                return ApiResponse(data={"message": "清仓成功", "operation": "close"})
             else:
                 return ApiResponse(code=404, message="持仓不存在")
+    except ValueError as e:
+        return ApiResponse(code=400, message=str(e))
     except Exception as e:
         return ApiResponse(code=500, message=f"删除持仓失败：{str(e)}")
 

@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.api.v1 import account
+from app.models.account_setting import AccountSetting
 from app.services.portfolio_service import portfolio_service
 
 
@@ -199,3 +200,276 @@ async def test_build_account_input_uses_available_cash_and_auto_computes_total_a
     assert account_input.available_cash == 20000.0
     assert account_input.total_asset == 50000.0
     assert account_input.total_position_ratio == 0.6
+
+
+class _FakeResult:
+    def __init__(self, row):
+        self._row = row
+
+    def scalar_one_or_none(self):
+        return self._row
+
+
+class _PositionSession:
+    def __init__(self, *, holding=None, setting=None):
+        self.holding = holding
+        self.setting = setting
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def execute(self, stmt):
+        entity = stmt.column_descriptions[0].get("entity")
+        if entity is account.Holding:
+            return _FakeResult(self.holding)
+        if entity is account.AccountSetting:
+            return _FakeResult(self.setting)
+        raise AssertionError(f"unexpected entity: {entity}")
+
+    def add(self, row):
+        if isinstance(row, account.Holding):
+            self.holding = row
+            return
+        if isinstance(row, account.AccountSetting):
+            self.setting = row
+            return
+        raise AssertionError(f"unexpected add: {type(row)}")
+
+    async def flush(self):
+        return None
+
+    async def commit(self):
+        return None
+
+    async def refresh(self, _row):
+        return None
+
+    async def delete(self, row):
+        assert row is self.holding
+        self.holding = None
+
+
+def test_classify_position_change_distinguishes_add_reduce_and_close():
+    holding = account.Holding(
+        id="h1",
+        account_id="account-1",
+        ts_code="000001.SZ",
+        stock_name="平安银行",
+        holding_qty=100,
+        cost_price=10.0,
+        market_price=12.0,
+        pnl_pct=20.0,
+        holding_market_value=1200.0,
+        buy_date="2026-04-01",
+        can_sell_today=True,
+        holding_reason="测试",
+    )
+
+    assert account._classify_position_change(holding, {"holding_reason": "新理由"}) == ("update", 0.0)
+    assert account._classify_position_change(holding, {"holding_qty": 150}) == ("add", -500.0)
+    assert account._classify_position_change(holding, {"cost_price": 9.5}) == ("update", 0.0)
+    assert account._classify_position_change(holding, {"holding_qty": 60}) == ("reduce", 480.0)
+    assert account._classify_position_change(holding, {"holding_qty": 0}) == ("close", 1200.0)
+    assert account._classify_position_change(holding, {"holding_qty": 200, "cost_price": 11.0}) == ("add", -1200.0)
+
+
+@pytest.mark.asyncio
+async def test_add_position_auto_decreases_available_cash(monkeypatch):
+    session = _PositionSession(
+        setting=AccountSetting(
+            account_id="account-1",
+            available_cash=10000.0,
+            total_asset=10000.0,
+        )
+    )
+
+    monkeypatch.setattr(account, "async_session_factory", lambda: session)
+    monkeypatch.setattr(account, "normalize_ts_code", lambda _code: "000001.SZ")
+    monkeypatch.setattr(account, "get_stock_name", lambda _code: __import__("asyncio").sleep(0, result="平安银行"))
+    monkeypatch.setattr(
+        account.tushare_client,
+        "get_stock_detail",
+        lambda *_args, **_kwargs: {"close": 10.2, "stock_name": "平安银行"},
+    )
+    monkeypatch.setattr(account, "_invalidate_account_overview_cache", lambda _account_id: None)
+
+    response = await account.add_position(
+        account.AddPositionRequest(
+            ts_code="000001",
+            holding_qty=100,
+            cost_price=10.0,
+            buy_date="2026-04-01",
+            holding_reason="测试建仓",
+        ),
+        current_account=SimpleNamespace(id="account-1"),
+    )
+
+    assert response.code == 200
+    assert session.setting.available_cash == 9000.0
+    assert session.holding is not None
+    assert session.holding.ts_code == "000001.SZ"
+
+
+@pytest.mark.asyncio
+async def test_update_position_auto_adjusts_available_cash(monkeypatch):
+    session = _PositionSession(
+        holding=account.Holding(
+            id="h1",
+            account_id="account-1",
+            ts_code="000001.SZ",
+            stock_name="平安银行",
+            holding_qty=100,
+            cost_price=10.0,
+            market_price=12.0,
+            pnl_pct=20.0,
+            holding_market_value=1200.0,
+            buy_date="2026-04-01",
+            can_sell_today=True,
+            holding_reason="测试",
+        ),
+        setting=AccountSetting(
+            account_id="account-1",
+            available_cash=9000.0,
+            total_asset=10000.0,
+        ),
+    )
+
+    monkeypatch.setattr(account, "async_session_factory", lambda: session)
+    monkeypatch.setattr(account, "normalize_ts_code", lambda code: code)
+    monkeypatch.setattr(account, "refresh_holdings_price", lambda _holdings: None)
+    monkeypatch.setattr(account, "enrich_holdings", lambda _holdings: None)
+    monkeypatch.setattr(account, "_invalidate_account_overview_cache", lambda _account_id: None)
+
+    response = await account.update_position(
+        "000001.SZ",
+        account.UpdatePositionRequest(holding_qty=150, cost_price=10.0),
+        current_account=SimpleNamespace(id="account-1"),
+    )
+
+    assert response.code == 200
+    assert session.setting.available_cash == 8500.0
+    assert session.holding.holding_qty == 150
+
+
+@pytest.mark.asyncio
+async def test_update_position_reduce_uses_market_price_to_increase_available_cash(monkeypatch):
+    session = _PositionSession(
+        holding=account.Holding(
+            id="h1",
+            account_id="account-1",
+            ts_code="000001.SZ",
+            stock_name="平安银行",
+            holding_qty=100,
+            cost_price=10.0,
+            market_price=12.0,
+            pnl_pct=20.0,
+            holding_market_value=1200.0,
+            buy_date="2026-04-01",
+            can_sell_today=True,
+            holding_reason="测试",
+        ),
+        setting=AccountSetting(
+            account_id="account-1",
+            available_cash=9000.0,
+            total_asset=10000.0,
+        ),
+    )
+
+    monkeypatch.setattr(account, "async_session_factory", lambda: session)
+    monkeypatch.setattr(account, "normalize_ts_code", lambda code: code)
+    monkeypatch.setattr(account, "refresh_holdings_price", lambda _holdings: None)
+    monkeypatch.setattr(account, "enrich_holdings", lambda _holdings: None)
+    monkeypatch.setattr(account, "_invalidate_account_overview_cache", lambda _account_id: None)
+
+    response = await account.update_position(
+        "000001.SZ",
+        account.UpdatePositionRequest(holding_qty=60, cost_price=10.0),
+        current_account=SimpleNamespace(id="account-1"),
+    )
+
+    assert response.code == 200
+    assert response.data["operation"] == "reduce"
+    assert session.setting.available_cash == 9480.0
+    assert session.holding.holding_qty == 60
+
+
+@pytest.mark.asyncio
+async def test_update_position_zero_qty_is_close(monkeypatch):
+    session = _PositionSession(
+        holding=account.Holding(
+            id="h1",
+            account_id="account-1",
+            ts_code="000001.SZ",
+            stock_name="平安银行",
+            holding_qty=100,
+            cost_price=10.0,
+            market_price=12.0,
+            pnl_pct=20.0,
+            holding_market_value=1200.0,
+            buy_date="2026-04-01",
+            can_sell_today=True,
+            holding_reason="测试",
+        ),
+        setting=AccountSetting(
+            account_id="account-1",
+            available_cash=8800.0,
+            total_asset=10000.0,
+        ),
+    )
+
+    monkeypatch.setattr(account, "async_session_factory", lambda: session)
+    monkeypatch.setattr(account, "normalize_ts_code", lambda code: code)
+    monkeypatch.setattr(account, "_invalidate_account_overview_cache", lambda _account_id: None)
+
+    response = await account.update_position(
+        "000001.SZ",
+        account.UpdatePositionRequest(holding_qty=0),
+        current_account=SimpleNamespace(id="account-1"),
+    )
+
+    assert response.code == 200
+    assert response.data["operation"] == "close"
+    assert session.setting.available_cash == 10000.0
+    assert session.holding is None
+
+
+@pytest.mark.asyncio
+async def test_delete_position_auto_increases_available_cash(monkeypatch):
+    session = _PositionSession(
+        holding=account.Holding(
+            id="h1",
+            account_id="account-1",
+            ts_code="000001.SZ",
+            stock_name="平安银行",
+            holding_qty=100,
+            cost_price=10.0,
+            market_price=12.0,
+            pnl_pct=20.0,
+            holding_market_value=1200.0,
+            buy_date="2026-04-01",
+            can_sell_today=True,
+            holding_reason="测试",
+        ),
+        setting=AccountSetting(
+            account_id="account-1",
+            available_cash=8800.0,
+            total_asset=10000.0,
+        ),
+    )
+
+    monkeypatch.setattr(account, "async_session_factory", lambda: session)
+    monkeypatch.setattr(account, "refresh_holdings_price", lambda _holdings: None)
+    monkeypatch.setattr(account, "_invalidate_account_overview_cache", lambda _account_id: None)
+
+    response = await account.delete_position(
+        "h1",
+        current_account=SimpleNamespace(id="account-1"),
+    )
+
+    assert response.code == 200
+    assert response.data["operation"] == "close"
+    assert session.setting.available_cash == 10000.0
+    assert session.holding is None

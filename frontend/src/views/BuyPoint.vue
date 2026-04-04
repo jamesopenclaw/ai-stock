@@ -589,6 +589,9 @@ const BUY_POINT_CACHE_PREFIX = 'ai_stock_buy_point'
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
 const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
+const notificationAction = computed(() => String(route.query.notification_action || '').trim())
+const notificationTsCode = computed(() => String(route.query.ts_code || '').trim())
+const notificationStockName = computed(() => String(route.query.stock_name || '').trim())
 const focusOnly = ref(false)
 
 const matchesFocusSector = (point) => {
@@ -1021,6 +1024,42 @@ const openBuyAnalysis = (point) => {
   buyAnalysisVisible.value = true
 }
 
+const clearNotificationQuery = () => {
+  const query = { ...route.query }
+  delete query.notification_action
+  delete query.ts_code
+  delete query.stock_name
+  router.replace({ query })
+}
+
+const matchesTsCode = (point, tsCode) => String(point?.ts_code || '').toUpperCase() === String(tsCode || '').toUpperCase()
+
+const handleNotificationQuery = () => {
+  if (!notificationAction.value || !notificationTsCode.value) return
+  if (notificationAction.value === 'buy_analysis') {
+    const point = [
+      ...(buyData.value.available_buy_points || []),
+      ...(buyData.value.observe_buy_points || []),
+      ...(buyData.value.not_buy_points || []),
+    ].find((item) => matchesTsCode(item, notificationTsCode.value))
+    openBuyAnalysis(point || {
+      ts_code: notificationTsCode.value,
+      stock_name: notificationStockName.value || notificationTsCode.value,
+      buy_current_price: null,
+      buy_current_change_pct: null,
+    })
+    clearNotificationQuery()
+    return
+  }
+  if (notificationAction.value === 'checkup') {
+    openCheckup({
+      ts_code: notificationTsCode.value,
+      stock_name: notificationStockName.value || notificationTsCode.value,
+    })
+    clearNotificationQuery()
+  }
+}
+
 const clearFocusSector = () => {
   const query = { ...route.query }
   delete query.focus_sector
@@ -1050,6 +1089,7 @@ const loadData = async ({ silent = false } = {}) => {
     }
     applyBuyData(payload.data)
     persistBuyPointCache()
+    handleNotificationQuery()
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '买点数据加载失败，请刷新重试。'
     loadError.value = message
@@ -1080,6 +1120,14 @@ onMounted(() => {
 watch(reviewSourceFilter, () => {
   activeTab.value = resolveDefaultTab(buyData.value)
 })
+
+watch(
+  () => [notificationAction.value, notificationTsCode.value, loading.value],
+  () => {
+    if (loading.value) return
+    handleNotificationQuery()
+  }
+)
 </script>
 
 <style scoped>

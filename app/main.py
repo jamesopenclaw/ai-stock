@@ -1,7 +1,10 @@
 """
 轻舟版交易系统 - 主入口
 """
+import asyncio
 import uuid
+from contextlib import suppress
+from time import monotonic
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +13,7 @@ import sys
 
 from app.core.config import settings
 from app.core.security import get_current_user, hash_password
+from app.services.notification_engine import notification_engine
 
 # 配置日志
 logger.remove()
@@ -35,6 +39,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_notification_refresh_task: asyncio.Task | None = None
+
+
+async def _notification_refresh_loop() -> None:
+    """后台定时生成通知事件，避免请求路径同步重算。"""
+    interval_seconds = max(10, int(settings.notification_refresh_interval_seconds))
+    initial_delay_seconds = max(0, int(settings.notification_refresh_initial_delay_seconds))
+
+    if initial_delay_seconds > 0:
+        await asyncio.sleep(initial_delay_seconds)
+
+    while True:
+        cycle_started_at = monotonic()
+        try:
+            refreshed_accounts = await notification_engine.refresh_active_accounts()
+            logger.debug("通知后台刷新完成 accounts={}", refreshed_accounts)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("通知后台刷新失败 error={}", exc)
+
+        elapsed_seconds = monotonic() - cycle_started_at
+        sleep_seconds = max(1.0, interval_seconds - elapsed_seconds)
+        await asyncio.sleep(sleep_seconds)
 
 
 @app.on_event("startup")
@@ -117,10 +146,25 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"默认业务数据初始化失败，请先执行 Alembic 迁移: {e}")
 
+    global _notification_refresh_task
+    if settings.notification_background_refresh_enabled and _notification_refresh_task is None:
+        _notification_refresh_task = asyncio.create_task(_notification_refresh_loop())
+        logger.info(
+            "已启动通知后台刷新 interval={}s initial_delay={}s",
+            settings.notification_refresh_interval_seconds,
+            settings.notification_refresh_initial_delay_seconds,
+        )
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """关闭事件"""
+    global _notification_refresh_task
+    if _notification_refresh_task is not None:
+        _notification_refresh_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await _notification_refresh_task
+        _notification_refresh_task = None
     logger.info("应用关闭...")
 
 
@@ -147,7 +191,7 @@ async def api_ping():
 
 
 # 导入并注册路由
-from app.api.v1 import account, auth, decision, market, sector, stock, task
+from app.api.v1 import account, auth, decision, market, notification, sector, stock, task
 from app.api.v1 import admin as admin_api
 from app.api.v1 import system as system_api
 
@@ -160,6 +204,7 @@ app.include_router(decision.router, prefix=settings.api_v1_prefix, tags=["决策
 app.include_router(account.router, prefix=settings.api_v1_prefix, tags=["账户适配"], dependencies=[Depends(get_current_user)])
 app.include_router(task.router, prefix=settings.api_v1_prefix, tags=["任务管理"], dependencies=[Depends(get_current_user)])
 app.include_router(system_api.router, prefix=settings.api_v1_prefix, tags=["系统设置"], dependencies=[Depends(get_current_user)])
+app.include_router(notification.router, prefix=settings.api_v1_prefix, tags=["通知"], dependencies=[Depends(get_current_user)])
 
 # 兼容前端按业务分组的路径：/api/v1/market/* /api/v1/decision/* 等
 app.include_router(market.router, prefix=f"{settings.api_v1_prefix}/market", tags=["市场环境"], dependencies=[Depends(get_current_user)])

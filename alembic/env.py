@@ -13,6 +13,9 @@ import app.models.account_config  # noqa: F401
 import app.models.holding  # noqa: F401
 import app.models.llm_cache_entry  # noqa: F401
 import app.models.llm_call_log  # noqa: F401
+import app.models.notification_event  # noqa: F401
+import app.models.notification_setting  # noqa: F401
+import app.models.notification_state_snapshot  # noqa: F401
 import app.models.review_snapshot  # noqa: F401
 import app.models.sector_scan_snapshot  # noqa: F401
 import app.models.stock_pool_snapshot  # noqa: F401

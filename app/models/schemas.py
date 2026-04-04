@@ -1159,6 +1159,94 @@ class LlmCallStatus(BaseModel):
     message: str = ""
 
 
+# ========== 通知相关 ==========
+
+class NotificationCategory(str, Enum):
+    MARKET = "market"
+    HOLDING = "holding"
+    CANDIDATE = "candidate"
+    SYSTEM = "system"
+
+
+class NotificationPriority(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+
+
+class NotificationStatus(str, Enum):
+    PENDING = "pending"
+    READ = "read"
+    DISMISSED = "dismissed"
+    SNOOZED = "snoozed"
+    RESOLVED = "resolved"
+
+
+class NotificationActionTargetType(str, Enum):
+    ROUTE = "route"
+    BUY_ANALYSIS = "buy_analysis"
+    SELL_ANALYSIS = "sell_analysis"
+    CHECKUP = "checkup"
+    EXTERNAL = "external"
+
+
+class NotificationItem(BaseModel):
+    id: str
+    event_type: str
+    category: NotificationCategory
+    priority: NotificationPriority
+    status: NotificationStatus
+    title: str
+    message: str
+    action_label: str
+    action_target_type: NotificationActionTargetType
+    action_target_payload: dict = Field(default_factory=dict)
+    entity_type: str
+    entity_code: Optional[str] = None
+    trade_date: str
+    data_source: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    read_at: Optional[datetime] = None
+    snoozed_until: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+
+
+class NotificationListResponse(BaseModel):
+    items: List[NotificationItem] = Field(default_factory=list)
+    unread_count: int = 0
+    critical_count: int = 0
+    next_cursor: Optional[str] = None
+
+
+class NotificationSummaryResponse(BaseModel):
+    unread_count: int = 0
+    critical_count: int = 0
+    latest_items: List[NotificationItem] = Field(default_factory=list)
+    quiet_window_active: bool = False
+    quiet_window_label: Optional[str] = None
+
+
+class NotificationReadRequest(BaseModel):
+    ids: List[str] = Field(default_factory=list)
+    status: Optional[NotificationStatus] = None
+    category: Optional[NotificationCategory] = None
+    priority: Optional[NotificationPriority] = None
+    exclude_priorities: List[NotificationPriority] = Field(default_factory=list)
+
+
+class NotificationSnoozeRequest(BaseModel):
+    minutes: int = Field(..., ge=5, le=480)
+
+
+class NotificationSettingsPayload(BaseModel):
+    in_app_enabled: bool = True
+    wecom_enabled: bool = False
+    rules: dict = Field(default_factory=dict)
+    quiet_windows: List[dict] = Field(default_factory=list)
+
+
 # ========== 通用响应 ==========
 
 class ApiResponse(BaseModel):

@@ -351,6 +351,23 @@ export const accountApi = {
   deletePosition: (positionId) => api.delete(`/account/positions/${positionId}`)
 }
 
+export const notificationApi = {
+  list: (params = {}, options = {}) => api.get('/notifications', {
+    params,
+    timeout: options.timeout
+  }),
+  summary: (options = {}) => api.get('/notifications/summary', {
+    params: { refresh: Boolean(options.refresh) },
+    timeout: options.timeout
+  }),
+  markRead: (eventId) => api.post(`/notifications/${encodeURIComponent(eventId)}/read`),
+  markAllRead: (payload = {}) => api.post('/notifications/read-all', payload),
+  dismiss: (eventId) => api.post(`/notifications/${encodeURIComponent(eventId)}/dismiss`),
+  snooze: (eventId, minutes = 30) => api.post(`/notifications/${encodeURIComponent(eventId)}/snooze`, { minutes }),
+  settings: (options = {}) => api.get('/notifications/settings', { timeout: options.timeout }),
+  updateSettings: (payload) => api.put('/notifications/settings', payload),
+}
+
 export const systemApi = {
   getConfig: () => api.get('/system/config'),
   updateConfig: (payload) => api.put('/system/config', payload),

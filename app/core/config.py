@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # 企业微信机器人
     wecom_webhook_url: str = ""
     notify_enabled: bool = False
+    notification_background_refresh_enabled: bool = True
+    notification_refresh_interval_seconds: int = 30
+    notification_refresh_initial_delay_seconds: int = 15
+    notification_timezone: str = "Asia/Shanghai"
 
     # LLM 辅助层
     llm_enabled: bool = False

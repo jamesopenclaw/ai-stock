@@ -147,11 +147,15 @@
           </template>
         </el-table-column>
         <el-table-column prop="holding_reason" label="买入理由" />
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="openCheckup(row)">全面体检</el-button>
-            <el-button type="primary" link size="small" @click="openEditDialog(row)">编辑</el-button>
-            <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
+            <div class="action-buttons">
+              <el-button type="primary" link size="small" @click="openCheckup(row)">全面体检</el-button>
+              <el-button type="success" link size="small" @click="openEditDialog(row, 'add')">加仓</el-button>
+              <el-button type="warning" link size="small" @click="openEditDialog(row, 'reduce')">减仓</el-button>
+              <el-button type="primary" link size="small" @click="openEditDialog(row, 'update')">调整</el-button>
+              <el-button type="danger" link size="small" @click="handleDelete(row)">清仓</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -187,7 +191,7 @@
     </el-dialog>
 
     <!-- 编辑持仓 -->
-    <el-dialog v-model="showEditDialog" title="编辑持仓" width="500px" @closed="resetEditForm">
+    <el-dialog v-model="showEditDialog" :title="editDialogTitle" width="500px" @closed="resetEditForm">
       <el-form :model="editPosition" label-width="100px">
         <el-form-item label="股票代码">
           <span>{{ editPosition.ts_code }}</span>
@@ -195,8 +199,9 @@
         <el-form-item label="股票名称">
           <span>{{ editPosition.stock_name }}</span>
         </el-form-item>
-        <el-form-item label="持仓数量" required>
+        <el-form-item :label="editQtyLabel" required>
           <el-input-number v-model="editPosition.holding_qty" :min="1" :step="100" style="width: 100%" />
+          <div class="form-hint">{{ editDialogHint }}</div>
         </el-form-item>
         <el-form-item label="成本价" required>
           <el-input-number v-model="editPosition.cost_price" :min="0.01" :precision="2" style="width: 100%" />
@@ -207,25 +212,25 @@
       </el-form>
       <template #footer>
         <el-button @click="showEditDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleEditSave" :loading="editSaving">保存</el-button>
+        <el-button type="primary" @click="handleEditSave" :loading="editSaving">{{ editConfirmLabel }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showDeleteDialog" title="确认删除" width="420px" class="delete-position-dialog">
+    <el-dialog v-model="showDeleteDialog" title="确认清仓" width="420px" class="delete-position-dialog">
       <div class="delete-dialog-body">
         <div class="delete-dialog-icon">!</div>
         <div class="delete-dialog-copy">
-          <div class="delete-dialog-title">确定要删除这条持仓记录吗？</div>
+          <div class="delete-dialog-title">确定要清掉这条持仓吗？</div>
           <div class="delete-dialog-meta">
             <span>{{ deleteTarget.stock_name || '未命名持仓' }}</span>
             <span>{{ deleteTarget.ts_code || '-' }}</span>
           </div>
-          <div class="delete-dialog-note">删除后该持仓会从账户持仓列表中移除。</div>
+          <div class="delete-dialog-note">清仓后会按当前持仓现价回补可用资金，并从持仓列表移除。</div>
         </div>
       </div>
       <template #footer>
         <el-button :disabled="deleteLoading" @click="closeDeleteDialog">取消</el-button>
-        <el-button type="danger" :loading="deleteLoading" @click="confirmDelete">确定删除</el-button>
+        <el-button type="danger" :loading="deleteLoading" @click="confirmDelete">确认清仓</el-button>
       </template>
     </el-dialog>
 
@@ -372,15 +377,47 @@ const newPosition = ref({
 })
 
 const editPosition = ref({
+  original_qty: null,
   ts_code: '',
   stock_name: '',
   holding_qty: null,
   cost_price: null,
   holding_reason: ''
 })
+const editMode = ref('update')
 
-const openEditDialog = (row) => {
+const editDialogTitleMap = {
+  add: '加仓',
+  reduce: '减仓',
+  update: '调整持仓'
+}
+
+const editDialogTitle = computed(() => editDialogTitleMap[editMode.value] || '调整持仓')
+
+const editQtyLabel = computed(() => {
+  if (editMode.value === 'add') return '加仓后总持仓'
+  if (editMode.value === 'reduce') return '减仓后剩余持仓'
+  return '持仓数量'
+})
+
+const editConfirmLabel = computed(() => {
+  if (editMode.value === 'add') return '确认加仓'
+  if (editMode.value === 'reduce') return '确认减仓'
+  return '保存调整'
+})
+
+const editDialogHint = computed(() => {
+  const originalQty = Number(editPosition.value.original_qty || 0)
+  if (!originalQty) return '填写调整后的持仓数量。'
+  if (editMode.value === 'add') return `当前持仓 ${originalQty} 股，请填写加仓后的总持仓数量。`
+  if (editMode.value === 'reduce') return `当前持仓 ${originalQty} 股，请填写减仓后保留的股数。`
+  return `当前持仓 ${originalQty} 股，可同步调整成本价或买入理由。`
+})
+
+const openEditDialog = (row, mode = 'update') => {
+  editMode.value = mode
   editPosition.value = {
+    original_qty: row.holding_qty,
     ts_code: row.ts_code,
     stock_name: row.stock_name || '',
     holding_qty: row.holding_qty,
@@ -391,7 +428,9 @@ const openEditDialog = (row) => {
 }
 
 const resetEditForm = () => {
+  editMode.value = 'update'
   editPosition.value = {
+    original_qty: null,
     ts_code: '',
     stock_name: '',
     holding_qty: null,
@@ -401,9 +440,17 @@ const resetEditForm = () => {
 }
 
 const handleEditSave = async () => {
-  const { ts_code, holding_qty, cost_price } = editPosition.value
+  const { ts_code, holding_qty, cost_price, original_qty } = editPosition.value
   if (!ts_code || holding_qty == null || holding_qty < 1 || cost_price == null || cost_price <= 0) {
     ElMessage.warning('请填写有效的持仓数量与成本价')
+    return
+  }
+  if (editMode.value === 'add' && Number(holding_qty) <= Number(original_qty || 0)) {
+    ElMessage.warning('加仓后的总持仓数量必须大于当前持仓')
+    return
+  }
+  if (editMode.value === 'reduce' && Number(holding_qty) >= Number(original_qty || 0)) {
+    ElMessage.warning('减仓后剩余股数必须小于当前持仓')
     return
   }
   editSaving.value = true
@@ -415,7 +462,7 @@ const handleEditSave = async () => {
     })
     const data = res.data
     if (data.code === 200) {
-      ElMessage.success('保存成功')
+      ElMessage.success(data.data?.message || '保存成功')
       showEditDialog.value = false
       await loadData({ refresh: true })
     } else {
@@ -505,7 +552,7 @@ const confirmDelete = async () => {
     const data = res.data
 
     if (data.code === 200) {
-      ElMessage.success('删除成功')
+      ElMessage.success(data.data?.message || '清仓成功')
       closeDeleteDialog(true)
       await loadData({ refresh: true })
     } else {
@@ -592,6 +639,11 @@ onMounted(() => {
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .form-hint { font-size: 12px; color: var(--color-text-sec); margin-top: 6px; }
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+}
 
 .account-view :deep(.el-table th .cell) {
   white-space: nowrap;
