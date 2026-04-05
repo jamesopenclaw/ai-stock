@@ -322,7 +322,6 @@ def _collect_buy_point_source_stocks(stock_pools) -> list:
     deduped = OrderedDict()
     for group in (
         stock_pools.account_executable_pool,
-        stock_pools.trend_recognition_pool,
         stock_pools.market_watch_pool,
     ):
         for stock in group:

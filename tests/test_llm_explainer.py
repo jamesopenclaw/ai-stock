@@ -314,7 +314,7 @@ class TestLlmExplainer:
                     "page_summary": "今天以观察为主。",
                     "top_focus_summary": "先看账户可参与池。",
                     "pool_empty_reason": {
-                        "trend_recognition_pool": "趋势辨识度不足。",
+                        "market_watch_pool": "观察池样本不足。",
                         "account_executable_pool": "账户可参与条件未满足。",
                     },
                     "stock_notes": [],
@@ -330,7 +330,7 @@ class TestLlmExplainer:
         summary, status = asyncio.run(service.summarize_stock_pools_with_status(sample_stock_pools, MockMarketEnv()))
 
         assert summary is not None
-        assert "trend_recognition_pool: 趋势辨识度不足。" in summary.pool_empty_reason
+        assert "market_watch_pool: 观察池样本不足。" in summary.pool_empty_reason
         assert "account_executable_pool: 账户可参与条件未满足。" in summary.pool_empty_reason
         assert status.success is True
 

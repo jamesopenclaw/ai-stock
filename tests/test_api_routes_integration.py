@@ -344,7 +344,6 @@ async def test_buy_point_route_via_testclient(client, monkeypatch):
         stock_pools=StockPoolsOutput(
             trade_date="2026-03-28",
             market_watch_pool=[],
-            trend_recognition_pool=[],
             account_executable_pool=[],
             holding_process_pool=[],
             total_count=0,
@@ -421,7 +420,7 @@ async def test_stock_pools_route_uses_cached_snapshot_via_testclient(client, mon
         resolved_trade_date="2026-03-27",
         sector_scan_trade_date="2026-03-27",
         sector_scan_resolved_trade_date="2026-03-27",
-        snapshot_version=3,
+        snapshot_version=4,
         market_watch_pool=[
             StockOutput(
                 ts_code="000001.SZ",
@@ -435,7 +434,6 @@ async def test_stock_pools_route_uses_cached_snapshot_via_testclient(client, mon
                 stock_pool_tag=StockPoolTag.MARKET_WATCH,
             )
         ],
-        trend_recognition_pool=[],
         account_executable_pool=[],
         holding_process_pool=[],
         total_count=1,

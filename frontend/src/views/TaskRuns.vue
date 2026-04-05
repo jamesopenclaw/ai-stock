@@ -248,7 +248,7 @@ const buildTaskSummary = (task) => {
       {
         label: '候选池规模',
         value: String(summary.candidate_pool_count ?? 0),
-        tip: '观察池、趋势池、账户池三者合计',
+        tip: '观察池、账户池两者合计',
       },
     ].filter((item) => item.value !== '-')
   }
@@ -286,10 +286,9 @@ const buildTaskSummary = (task) => {
       label: '候选池规模',
       value: String(
         Number(stockPools.market_watch_count || 0) +
-        Number(stockPools.trend_recognition_count || 0) +
         Number(stockPools.account_executable_count || 0)
       ),
-      tip: '观察池、趋势池、账户池三者合计',
+      tip: '观察池、账户池两者合计',
     },
   ].filter((item) => item.value !== '-')
 }

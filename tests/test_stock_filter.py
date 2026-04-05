@@ -3,7 +3,7 @@
 
 测试 V0.3 选股与买点模块 - 个股筛选功能：
 - 个股评分逻辑
-- 三池分类（市场最强观察池 / 趋势辨识度观察池 / 账户可参与池 / 持仓处理池）
+- 三池分类（市场最强观察池 / 账户可参与池 / 持仓处理池）
 - 强弱标签判定
 - 核心属性标签
 """
@@ -319,9 +319,9 @@ class TestStockFilter:
 
         assert len(pools.market_watch_pool) == 0
 
-    def test_trend_structure_stock_can_enter_trend_and_account_pools(self, service, mock_market_env_attack):
+    def test_retrace_structure_stock_can_enter_market_watch_and_account_pools(self, service, mock_market_env_attack):
         """
-        测试：主线前排但存在舒服回踩确认位时，可同时进入趋势池与账户池
+        测试：主线前排但存在舒服回踩确认位时，可同时进入观察池与账户池
         """
         trend_stock = StockInput(
             ts_code="002200.SZ",
@@ -373,9 +373,8 @@ class TestStockFilter:
         )
 
         assert len(pools.market_watch_pool) == 1
-        assert len(pools.trend_recognition_pool) == 1
         assert len(pools.account_executable_pool) == 1
-        trend_item = pools.trend_recognition_pool[0]
+        trend_item = pools.market_watch_pool[0]
         account_item = pools.account_executable_pool[0]
         assert trend_item.structure_state_tag == StructureStateTag.DIVERGENCE
         assert trend_item.stock_role_tag == StockRoleTag.FRONT
@@ -675,8 +674,8 @@ class TestStockFilter:
         )
 
         assert len(pools.account_executable_pool) == 0
-        assert len(pools.trend_recognition_pool) == 1
-        assert "同板块持仓已偏重" in " ".join(pools.trend_recognition_pool[0].not_other_pools)
+        assert len(pools.market_watch_pool) == 1
+        assert "同板块持仓已偏重" in " ".join(pools.market_watch_pool[0].not_other_pools)
 
     def test_same_concept_holding_blocks_account_pool_when_stock_uses_industry_name(self, service, mock_market_env_attack):
         """
@@ -759,8 +758,8 @@ class TestStockFilter:
         )
 
         assert len(pools.account_executable_pool) == 0
-        assert len(pools.trend_recognition_pool) == 1
-        assert "同板块持仓已偏重" in " ".join(pools.trend_recognition_pool[0].not_other_pools)
+        assert len(pools.market_watch_pool) == 1
+        assert "同板块持仓已偏重" in " ".join(pools.market_watch_pool[0].not_other_pools)
 
     def test_weak_holding_blocks_breakthrough_entry(self, service, mock_market_env_attack):
         """
@@ -1098,7 +1097,6 @@ class TestStockFilter:
         )
 
         assert [stock.ts_code for stock in pools.market_watch_pool] == ["002201.SZ", "002202.SZ"]
-        assert {stock.ts_code for stock in pools.trend_recognition_pool} == {"002201.SZ", "002202.SZ"}
         assert {stock.ts_code for stock in pools.account_executable_pool} == {"002201.SZ", "002202.SZ"}
 
     def test_new_pools_fall_back_to_b_sub_mainline_when_no_a_mainline(self, service, mock_market_env_attack):
@@ -1155,7 +1153,6 @@ class TestStockFilter:
         )
 
         assert [stock.ts_code for stock in pools.market_watch_pool] == ["002203.SZ"]
-        assert [stock.ts_code for stock in pools.trend_recognition_pool] == ["002203.SZ"]
         assert [stock.ts_code for stock in pools.account_executable_pool] == ["002203.SZ"]
 
     def test_new_pools_only_use_visible_mainline_sectors(self, service, mock_market_env_attack):
@@ -1243,7 +1240,6 @@ class TestStockFilter:
         )
 
         assert [stock.ts_code for stock in pools.market_watch_pool] == ["002210.SZ"]
-        assert [stock.ts_code for stock in pools.trend_recognition_pool] == ["002210.SZ"]
         assert len(pools.account_executable_pool) == 0
 
     def test_new_pools_exclude_star_and_bj_codes(self, service, mock_market_env_attack):
@@ -1362,10 +1358,8 @@ class TestStockFilter:
 
         assert [stock.ts_code for stock in pools.market_watch_pool] == ["002902.SZ"]
         assert all(not stock.ts_code.startswith("688") for stock in pools.market_watch_pool)
-        assert all(not stock.ts_code.startswith("688") for stock in pools.trend_recognition_pool)
         assert all(not stock.ts_code.startswith("688") for stock in pools.account_executable_pool)
         assert all(not stock.ts_code.endswith(".BJ") for stock in pools.market_watch_pool)
-        assert all(not stock.ts_code.endswith(".BJ") for stock in pools.trend_recognition_pool)
         assert all(not stock.ts_code.endswith(".BJ") for stock in pools.account_executable_pool)
 
     def test_new_pools_ignore_688_when_choosing_a_or_b_profiles(self, service, mock_market_env_attack):
@@ -1452,7 +1446,6 @@ class TestStockFilter:
         )
 
         assert [stock.ts_code for stock in pools.market_watch_pool] == ["002265.SZ"]
-        assert [stock.ts_code for stock in pools.trend_recognition_pool] == ["002265.SZ"]
         assert [stock.ts_code for stock in pools.account_executable_pool] == ["002265.SZ"]
 
     def test_sector_representatives_are_capped_at_four(self, service):
@@ -1642,7 +1635,6 @@ class TestStockFilter:
         )
 
         assert len(pools.market_watch_pool) == 0
-        assert len(pools.trend_recognition_pool) == 0
         assert len(pools.account_executable_pool) == 0
 
     def test_low_liquidity_stock_filtered_out(self, service, mock_market_env_attack):
@@ -2130,7 +2122,6 @@ class TestStockFilter:
 
         visible_count = (
             len(pools.market_watch_pool)
-            + len(pools.trend_recognition_pool)
             + len(pools.account_executable_pool)
             + len(pools.holding_process_pool)
         )

@@ -109,12 +109,11 @@ class TaskScheduler:
         self.logger.info("执行三池分类...")
         stock_pools = bundle.stock_pools
         pools_dict = {
+            "global_trade_gate": stock_pools.global_trade_gate.model_dump(),
             "market_watch_pool": [s.model_dump() for s in stock_pools.market_watch_pool[:10]],
-            "trend_recognition_pool": [s.model_dump() for s in stock_pools.trend_recognition_pool[:10]],
             "account_executable_pool": [s.model_dump() for s in stock_pools.account_executable_pool[:10]],
             "holding_process_pool": [s.model_dump() for s in stock_pools.holding_process_pool],
             "market_watch_count": len(stock_pools.market_watch_pool),
-            "trend_recognition_count": len(stock_pools.trend_recognition_pool),
             "account_executable_count": len(stock_pools.account_executable_pool),
             "holding_process_count": len(stock_pools.holding_process_pool)
         }

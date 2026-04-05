@@ -941,7 +941,6 @@ const quoteMetaLine = (source, quoteTime, fallbackDate) => {
 
 const poolTagLabel = (tag) => {
   if (tag === '账户可参与池') return '账户可参与池'
-  if (tag === '趋势辨识度观察池') return '趋势辨识度观察池'
   if (tag === '市场最强观察池') return '市场最强观察池'
   if (tag === '持仓处理池') return '持仓处理池'
   return tag || '未入池'

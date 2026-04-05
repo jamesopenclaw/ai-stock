@@ -29,7 +29,6 @@ def _build_result_summary(result: Optional[Dict[str, Any]]) -> Optional[Dict[str
     sell_count = len(sell_analysis.get("sell_positions") or []) + len(sell_analysis.get("reduce_positions") or [])
     candidate_pool_count = (
         int(stock_pools.get("market_watch_count") or 0)
-        + int(stock_pools.get("trend_recognition_count") or 0)
         + int(stock_pools.get("account_executable_count") or 0)
     )
 

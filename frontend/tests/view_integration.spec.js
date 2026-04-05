@@ -234,7 +234,6 @@ describe('关键页面联调', () => {
             stock_comment: '先观察这只票是否继续保持强势结构。',
           },
         ],
-        trend_recognition_pool: [],
         account_executable_pool: [],
         holding_process_pool: [],
       })
@@ -286,7 +285,6 @@ describe('关键页面联调', () => {
               stock_core_tag: '核心',
             },
           ],
-          trend_recognition_pool: [],
           account_executable_pool: [],
           holding_process_pool: [],
           refresh_in_progress: false,
@@ -309,7 +307,6 @@ describe('关键页面联调', () => {
               stock_core_tag: '核心',
             },
           ],
-          trend_recognition_pool: [],
           account_executable_pool: [],
           holding_process_pool: [],
           refresh_in_progress: true,
@@ -332,7 +329,6 @@ describe('关键页面联调', () => {
               stock_core_tag: '核心',
             },
           ],
-          trend_recognition_pool: [],
           account_executable_pool: [],
           holding_process_pool: [],
           refresh_in_progress: false,
@@ -373,7 +369,6 @@ describe('关键页面联调', () => {
       trade_date: '2026-03-28',
       resolved_trade_date: '2026-03-28',
       market_watch_pool: [],
-      trend_recognition_pool: [],
       account_executable_pool: [
         {
           ts_code: '000001.SZ',
@@ -422,7 +417,6 @@ describe('关键页面联调', () => {
       trade_date: '2026-03-28',
       resolved_trade_date: '2026-03-28',
       market_watch_pool: [],
-      trend_recognition_pool: [],
       account_executable_pool: [
         {
           ts_code: '000003.SZ',
@@ -458,7 +452,6 @@ describe('关键页面联调', () => {
       trade_date: '2026-03-28',
       resolved_trade_date: '2026-03-28',
       market_watch_pool: [],
-      trend_recognition_pool: [],
       account_executable_pool: [
         {
           ts_code: '000004.SZ',
@@ -1141,7 +1134,6 @@ describe('关键页面联调', () => {
                 },
                 stock_pools: {
                   market_watch_count: 3,
-                  trend_recognition_count: 2,
                   account_executable_count: 1,
                 },
               },
@@ -1493,13 +1485,13 @@ describe('关键页面联调', () => {
     const { default: AccountView } = await import('../src/views/Account.vue')
     const wrapper = await mountView(AccountView)
 
-    const deleteButton = wrapper.findAll('button').find((node) => node.text().includes('删除'))
+    const deleteButton = wrapper.findAll('button').find((node) => node.text().includes('清仓'))
     expect(deleteButton).toBeTruthy()
     await deleteButton.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('确认删除')
-    expect(wrapper.text()).toContain('确定要删除这条持仓记录吗？')
+    expect(wrapper.text()).toContain('确认清仓')
+    expect(wrapper.text()).toContain('确定要清掉这条持仓吗？')
     expect(wrapper.text()).toContain('沪电股份')
     expect(wrapper.text()).toContain('3,100.00')
   })

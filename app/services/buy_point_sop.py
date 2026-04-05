@@ -142,7 +142,7 @@ class BuyPointSopService:
             analysis_stock.stock_pool_tag = (
                 StockPoolTag.ACCOUNT_EXECUTABLE
                 if analysis_stock.stock_tradeability_tag != StockTradeabilityTag.NOT_RECOMMENDED
-                else StockPoolTag.TREND_RECOGNITION
+                else StockPoolTag.MARKET_WATCH
             )
         buy_point = buy_point_service._analyze_stock_buy_point(
             analysis_stock,
@@ -256,7 +256,6 @@ class BuyPointSopService:
         groups = [
             (stock_pools.holding_process_pool, StockPoolTag.HOLDING_PROCESS),
             (stock_pools.account_executable_pool, StockPoolTag.ACCOUNT_EXECUTABLE),
-            (stock_pools.trend_recognition_pool, StockPoolTag.TREND_RECOGNITION),
             (stock_pools.market_watch_pool, StockPoolTag.MARKET_WATCH),
         ]
         for group, pool_tag in groups:

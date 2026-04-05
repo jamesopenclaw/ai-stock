@@ -214,7 +214,6 @@ class StockCheckupService:
         groups = [
             (stock_pools.holding_process_pool, StockPoolTag.HOLDING_PROCESS),
             (stock_pools.account_executable_pool, StockPoolTag.ACCOUNT_EXECUTABLE),
-            (stock_pools.trend_recognition_pool, StockPoolTag.TREND_RECOGNITION),
             (stock_pools.market_watch_pool, StockPoolTag.MARKET_WATCH),
         ]
         for group, pool_tag in groups:

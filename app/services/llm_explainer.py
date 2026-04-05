@@ -230,11 +230,10 @@ key, title, content
         available = {
             "holding": len(stock_pools.holding_process_pool),
             "account": len(stock_pools.account_executable_pool),
-            "trend": len(stock_pools.trend_recognition_pool),
             "market": len(stock_pools.market_watch_pool),
         }
-        limits = {"holding": 0, "account": 0, "trend": 0, "market": 0}
-        order = ["holding", "account", "trend", "market"]
+        limits = {"holding": 0, "account": 0, "market": 0}
+        order = ["holding", "account", "market"]
         remaining = max(1, total_limit)
 
         for key in order:
@@ -271,17 +270,12 @@ key, title, content
             "market_comment": getattr(market_env, "market_comment", ""),
             "counts": {
                 "market_watch": len(stock_pools.market_watch_pool),
-                "trend_recognition": len(stock_pools.trend_recognition_pool),
                 "account_executable": len(stock_pools.account_executable_pool),
                 "holding_process": len(stock_pools.holding_process_pool),
             },
             "market_watch_pool": [
                 self._serialize_pool_stock(s, "market")
                 for s in self._slice_pool_items(stock_pools.market_watch_pool, limits["market"])
-            ],
-            "trend_recognition_pool": [
-                self._serialize_pool_stock(s, "trend")
-                for s in self._slice_pool_items(stock_pools.trend_recognition_pool, limits["trend"])
             ],
             "account_executable_pool": [
                 self._serialize_pool_stock(s, "account")
@@ -429,7 +423,6 @@ key, title, content
         notes = {note.ts_code: note for note in summary.stock_notes}
         for group in (
             stock_pools.market_watch_pool,
-            stock_pools.trend_recognition_pool,
             stock_pools.account_executable_pool,
             stock_pools.holding_process_pool,
         ):

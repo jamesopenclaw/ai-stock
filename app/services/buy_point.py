@@ -83,8 +83,6 @@ class BuyPointService:
         pool_tag_by_code = {}
         for stock in stock_pools.market_watch_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.MARKET_WATCH
-        for stock in stock_pools.trend_recognition_pool:
-            pool_tag_by_code[stock.ts_code] = StockPoolTag.TREND_RECOGNITION
         for stock in stock_pools.account_executable_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.ACCOUNT_EXECUTABLE
         for stock in stock_pools.holding_process_pool:
@@ -115,7 +113,6 @@ class BuyPointService:
                 buy_point.buy_signal_tag == BuySignalTag.OBSERVE
                 and stock.stock_pool_tag in {
                 StockPoolTag.MARKET_WATCH,
-                StockPoolTag.TREND_RECOGNITION,
                 StockPoolTag.ACCOUNT_EXECUTABLE,
                 }
             ):
@@ -379,8 +376,6 @@ class BuyPointService:
         # 核心强势股 -> 可买
         if stock.stock_core_tag.value == "核心" and stock.stock_strength_tag == StockStrengthTag.STRONG:
             if stock.stock_pool_tag == StockPoolTag.MARKET_WATCH:
-                return BuySignalTag.OBSERVE
-            if stock.stock_pool_tag == StockPoolTag.TREND_RECOGNITION:
                 return BuySignalTag.OBSERVE
             if constrained_account:
                 return BuySignalTag.OBSERVE

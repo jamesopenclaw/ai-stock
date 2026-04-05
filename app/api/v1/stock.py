@@ -32,7 +32,7 @@ from app.core.security import AuthenticatedAccount, get_current_account
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-STOCK_POOLS_SNAPSHOT_VERSION = 3
+STOCK_POOLS_SNAPSHOT_VERSION = 4
 _stock_pools_refresh_tasks: dict[str, asyncio.Task] = {}
 RADAR_POOLS_CACHE_TTL_SECONDS = 20
 _radar_stock_pools_cache: dict[str, dict] = {}
@@ -89,8 +89,8 @@ def _serialize_stock_pools_result(
         "resolved_trade_date": result.resolved_trade_date,
         "sector_scan_trade_date": result.sector_scan_trade_date,
         "sector_scan_resolved_trade_date": result.sector_scan_resolved_trade_date,
+        "global_trade_gate": result.global_trade_gate.model_dump(),
         "market_watch_pool": [s.model_dump() for s in result.market_watch_pool],
-        "trend_recognition_pool": [s.model_dump() for s in result.trend_recognition_pool],
         "account_executable_pool": [s.model_dump() for s in result.account_executable_pool],
         "holding_process_pool": [s.model_dump() for s in result.holding_process_pool],
         "total_count": result.total_count,
@@ -316,8 +316,8 @@ async def get_stock_pools(
     三池分类
 
     返回：
+    - global_trade_gate: 三池总闸门
     - market_watch_pool: 市场最强观察池
-    - trend_recognition_pool: 趋势辨识度观察池
     - account_executable_pool: 账户可参与池
     - holding_process_pool: 持仓处理池
     """
@@ -398,8 +398,14 @@ async def get_stock_pools(
                     "resolved_trade_date": "",
                     "sector_scan_trade_date": expected_sector_scan_trade_date,
                     "sector_scan_resolved_trade_date": "",
+                    "global_trade_gate": {
+                        "status": "允许试错",
+                        "allow_new_positions": True,
+                        "dominant_reason": "等待后台刷新后再给出正式总闸门。",
+                        "reasons": [],
+                        "account_pool_limit": 3,
+                    },
                     "market_watch_pool": [],
-                    "trend_recognition_pool": [],
                     "account_executable_pool": [],
                     "holding_process_pool": [],
                     "total_count": 0,

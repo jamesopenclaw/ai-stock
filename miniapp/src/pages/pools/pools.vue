@@ -8,6 +8,9 @@
           <view v-if="pools.resolved_trade_date && pools.resolved_trade_date !== today" class="page-date">
             实际候选日 {{ pools.resolved_trade_date }}
           </view>
+          <view v-if="globalTradeGate.status" class="page-date">
+            总闸门 {{ globalTradeGate.status }}
+          </view>
         </view>
         <view class="hero-badge" :class="heroBadgeClass">{{ heroBadge }}</view>
       </view>
@@ -329,7 +332,13 @@ import { stockApi, getToday } from '../../api'
 const today = ref(getToday())
 const activeTab = ref('holding')
 const loading = ref(false)
-const pools = ref({ market_watch_pool: [], account_executable_pool: [], holding_process_pool: [], resolved_trade_date: '' })
+const pools = ref({
+  market_watch_pool: [],
+  account_executable_pool: [],
+  holding_process_pool: [],
+  resolved_trade_date: '',
+  global_trade_gate: null,
+})
 
 const tabs = [
   { key: 'market', name: '观察池' },
@@ -340,6 +349,13 @@ const tabs = [
 const marketCount = computed(() => pools.value.market_watch_pool?.length || 0)
 const accountCount = computed(() => pools.value.account_executable_pool?.length || 0)
 const holdingCount = computed(() => pools.value.holding_process_pool?.length || 0)
+const globalTradeGate = computed(() => pools.value.global_trade_gate || {
+  status: '允许试错',
+  allow_new_positions: true,
+  dominant_reason: '',
+  reasons: [],
+  account_pool_limit: 3,
+})
 
 const marketPool = computed(() =>
   [...(pools.value.market_watch_pool || [])].sort((a, b) => Number(b.stock_score || 0) - Number(a.stock_score || 0))
@@ -364,6 +380,7 @@ const heroBadgeClass = computed(() => {
 })
 
 const heroTitle = computed(() => {
+  if (globalTradeGate.value.status === '优先处理持仓，不建议新开') return '先处理旧仓风险，今天不建议新增仓位'
   if (holdingCount.value) return '已有仓位优先，先把该卖、该减、该持有的动作排清楚'
   if (accountCount.value) return '当前有能执行的新标的，先看账户可参与池'
   if (marketCount.value) return '当前更适合先观察市场最强结构'
@@ -371,6 +388,7 @@ const heroTitle = computed(() => {
 })
 
 const heroDesc = computed(() => {
+  if (globalTradeGate.value.dominant_reason) return globalTradeGate.value.dominant_reason
   if (holdingCount.value) return '持仓处理池优先级最高；先处理旧仓风险，再决定是否看新票。'
   if (accountCount.value) return '可参与池说明系统已通过账户准入，但真正执行仍要结合买点确认。'
   if (marketCount.value) return '观察池只负责缩小盯盘范围，不是直接下单列表。'
@@ -378,6 +396,7 @@ const heroDesc = computed(() => {
 })
 
 const heroRules = computed(() => {
+  if (globalTradeGate.value.status === '优先处理持仓，不建议新开') return ['先处理旧仓风险', '今天不建议新开', '观察池只负责跟踪']
   if (holdingCount.value) return ['先处理旧仓', '高优先级先动', '证伪到了就别拖']
   if (accountCount.value) return ['先看进池理由', '先按仓位提示执行', '别把可参与当立刻追价']
   return ['观察池只看方向', '先看最强结构', '没有确认就不执行']
@@ -518,7 +537,13 @@ const loadData = async () => {
   loading.value = true
   try {
     const res = await stockApi.pools(today.value, 50)
-    pools.value = res.data.data || { market_watch_pool: [], account_executable_pool: [], holding_process_pool: [], resolved_trade_date: '' }
+    pools.value = res.data.data || {
+      market_watch_pool: [],
+      account_executable_pool: [],
+      holding_process_pool: [],
+      resolved_trade_date: '',
+      global_trade_gate: null,
+    }
     if (holdingCount.value) activeTab.value = 'holding'
     else if (accountCount.value) activeTab.value = 'account'
     else activeTab.value = 'market'

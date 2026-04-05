@@ -399,7 +399,6 @@ class TestBuyPoint:
             stock_pools=StockPoolsOutput(
                 trade_date="2026-03-20",
                 market_watch_pool=[strong_stock],
-                trend_recognition_pool=[],
                 account_executable_pool=[],
                 holding_process_pool=[],
                 total_count=1,
@@ -479,7 +478,6 @@ class TestBuyPoint:
             stock_pools=StockPoolsOutput(
                 trade_date="2026-03-24",
                 market_watch_pool=[],
-                trend_recognition_pool=[],
                 account_executable_pool=[strong_stock],
                 holding_process_pool=[],
                 total_count=1,

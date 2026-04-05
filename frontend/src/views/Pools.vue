@@ -83,8 +83,13 @@
           </article>
 
           <article class="summary-card summary-card-action">
-            <div class="summary-kicker">今日执行建议</div>
-            <div class="summary-headline summary-headline-action">{{ executionGuidanceTitle }}</div>
+            <div class="summary-kicker">总闸门</div>
+            <div class="summary-title-row">
+              <el-tag size="large" effect="dark" :type="globalTradeGate.allow_new_positions ? 'success' : 'danger'">
+                {{ globalTradeGate.status }}
+              </el-tag>
+              <span class="summary-headline summary-headline-action">{{ executionGuidanceTitle }}</span>
+            </div>
             <div class="summary-copy">{{ executionGuidanceCopy }}</div>
           </article>
 
@@ -108,7 +113,7 @@
                 </div>
                 <div class="overview-mini-stat overview-mini-stat-trend">
                   <span class="overview-mini-label">观察票</span>
-                  <strong class="overview-mini-value">{{ marketCount + trendCount }}</strong>
+                  <strong class="overview-mini-value">{{ marketCount }}</strong>
                   <span class="overview-mini-tip">先盯不先做</span>
                 </div>
                 <div class="overview-mini-stat overview-mini-stat-holding">
@@ -236,10 +241,6 @@
                   <div class="focus-hit-inline-item">
                     <span>账户池</span>
                     <strong>{{ focusMatches.account }}</strong>
-                  </div>
-                  <div class="focus-hit-inline-item">
-                    <span>趋势池</span>
-                    <strong>{{ focusMatches.trend }}</strong>
                   </div>
                   <div class="focus-hit-inline-item">
                     <span>观察池</span>
@@ -455,37 +456,6 @@
             </div>
           </article>
 
-          <article class="priority-panel">
-            <div class="priority-panel-head">
-              <div>
-                <div class="section-kicker">模块 C</div>
-                <div class="section-title">趋势辨识度观察池</div>
-                <div class="priority-panel-desc">今天不一定最炸，但未来 1-3 天仍值得继续盯的结构票。</div>
-              </div>
-              <el-button text type="primary" @click="activeTab = 'trend'">查看详细清单</el-button>
-            </div>
-            <div v-if="!trendPool.length" class="priority-empty">当前没有明显更耐看的趋势锚。</div>
-            <div v-else class="trend-preview-grid">
-              <article v-for="stock in trendPreviewPool" :key="`trend-preview-${stock.ts_code}`" class="trend-preview-card">
-                <div class="trend-preview-top">
-                  <div>
-                    <div class="action-stock">{{ stock.stock_name }}</div>
-                    <div class="action-meta">{{ stock.ts_code }} · {{ stock.sector_name || '无方向' }}</div>
-                  </div>
-                  <span class="action-type-badge action-type-badge-watch">继续跟踪</span>
-                </div>
-                <div class="action-state-row">
-                  <span class="action-state-chip">{{ stock.structure_state_tag || '结构待定' }}</span>
-                  <span class="action-state-chip">{{ stock.next_tradeability_tag || '继续观察' }}</span>
-                </div>
-                <div class="action-judgement">{{ stock.why_this_pool || stock.stock_comment || '今天先跟踪，不急着抬手。' }}</div>
-                <div class="action-risk">{{ trendUpgradeLine(stock) }}</div>
-                <div class="stock-inline-actions">
-                  <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
-                </div>
-              </article>
-            </div>
-          </article>
         </section>
 
         <el-card class="detail-card">
@@ -647,158 +617,6 @@
                   <span>{{ marketFooterLine(stock) }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">只观察，不直接执行</span>
-                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
-                    <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
-                  </div>
-                </div>
-              </article>
-            </div>
-          </el-tab-pane>
-
-          <el-tab-pane name="trend">
-            <template #label>
-              <span>趋势辨识度观察池 <em class="tab-count">{{ trendPool.length }}</em></span>
-            </template>
-            <el-empty v-if="!trendCount" :description="emptyPoolText('trend')" />
-            <div v-else class="signal-grid">
-              <article
-                v-for="stock in trendPool"
-                :key="stock.ts_code"
-                :class="['signal-card', 'signal-card-trend', { 'signal-card-focused': matchesFocusSector(stock) }]"
-              >
-                <div class="signal-card-header">
-                  <div>
-                    <div class="signal-stock">{{ stock.stock_name }}</div>
-                    <div class="signal-code">{{ stock.ts_code }}</div>
-                  </div>
-                  <div class="signal-badges">
-                    <el-tag v-if="stock.direction_signal_tag" size="small" type="warning">
-                      {{ stock.direction_signal_tag }}
-                    </el-tag>
-                    <el-tag v-if="stock.representative_role_tag" size="small" type="danger">
-                      {{ stock.representative_role_tag }}
-                    </el-tag>
-                    <el-tag size="small" type="warning">{{ stock.structure_state_tag || '结构观察' }}</el-tag>
-                    <el-tooltip v-if="stock.review_bias_label" :content="stock.review_bias_reason || stock.review_bias_label" placement="top">
-                      <el-tag size="small" :type="reviewBiasTagType(stock.review_bias_label)">
-                        {{ stock.review_bias_label }}
-                      </el-tag>
-                    </el-tooltip>
-                    <el-tag size="small" type="info">{{ stock.stock_role_tag || stock.stock_core_tag }}</el-tag>
-                  </div>
-                </div>
-
-                <div class="signal-meta">
-                  <span>{{ stock.sector_name || '无板块信息' }}</span>
-                  <span>{{ stock.candidate_source_tag || '无来源标记' }}</span>
-                </div>
-                <div v-if="stock.representative_role_tag" class="sample-role-line">
-                  {{ representativeRoleLine(stock) }}
-                </div>
-
-                <div class="signal-intent signal-intent-trend">
-                  {{ trendActionLine(stock) }}
-                </div>
-                <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (stock.hard_filter_failed_count || 0) > 0 }">
-                  {{ hardFilterLine(stock) }}
-                </div>
-
-                <div class="quote-strip">
-                  <div class="quote-main">
-                    <span class="quote-label">最新价</span>
-                    <strong class="quote-price">{{ formatPrice(stock.close) }}</strong>
-                    <span :class="['quote-change', pctClass(stock.change_pct)]">
-                      {{ formatSignedPct(stock.change_pct) }}
-                    </span>
-                    <span class="quote-source" :class="{ 'quote-source-live': isRealtimeSource(stock.data_source) }">
-                      {{ quoteMetaLine(stock.data_source, stock.quote_time, poolsData.resolved_trade_date || displayDate) }}
-                    </span>
-                  </div>
-                  <div class="quote-side">
-                    <span class="quote-pair">
-                      市场分
-                      <strong>{{ formatScore(stock.market_strength_score) }}</strong>
-                    </span>
-                    <span class="quote-pair">
-                      执行分
-                      <strong>{{ formatScore(stock.execution_opportunity_score) }}</strong>
-                    </span>
-                  </div>
-                </div>
-
-                <div class="price-strip">
-                  <div class="metric-card">
-                    <span class="metric-label">结构</span>
-                    <strong class="metric-value">{{ stock.structure_state_tag }}</strong>
-                  </div>
-                  <div class="metric-card">
-                    <span class="metric-label">次日交易性</span>
-                    <strong class="metric-value">{{ stock.next_tradeability_tag }}</strong>
-                  </div>
-                  <div class="metric-card">
-                    <span class="metric-label">连续性</span>
-                    <strong class="metric-value">{{ stock.stock_continuity_tag }}</strong>
-                  </div>
-                </div>
-
-                <div class="profile-section">
-                  <div class="section-kicker">五项画像</div>
-                  <div class="profile-tags">
-                    <span v-for="tag in stockProfileTags(stock)" :key="tag" class="profile-tag">
-                      {{ tag }}
-                    </span>
-                  </div>
-                </div>
-
-                <div class="decision-section">
-                  <div class="decision-card">
-                    <div class="decision-title">为什么值得长期盯</div>
-                    <div class="decision-copy">{{ stock.why_this_pool || stock.pool_decision_summary || '结构更耐打，适合持续跟踪。' }}</div>
-                  </div>
-                  <div class="decision-card">
-                    <div class="decision-title">暂不执行原因</div>
-                    <div class="decision-copy">{{ watchOnlyReasonLine(stock) }}</div>
-                  </div>
-                </div>
-                <div v-if="stock.miss_risk_note" class="sample-role-line">
-                  机会提醒：{{ stock.miss_risk_note }}
-                </div>
-
-                <div class="condition-section">
-                  <div class="section-kicker">趋势清单</div>
-                  <div class="condition-panel-grid condition-panel-grid-watch">
-                    <section class="condition-panel condition-panel-trigger">
-                      <div class="panel-head">
-                        <span class="panel-step">1</span>
-                        <div>
-                          <div class="panel-title">盯结构</div>
-                          <div class="panel-subtitle">看承接、趋势和分歧修复</div>
-                        </div>
-                      </div>
-                      <div class="panel-body">
-                        <div class="condition-title">{{ stock.pool_decision_summary || stock.stock_comment || '重点看趋势是否继续保持清晰。' }}</div>
-                      </div>
-                    </section>
-
-                    <section class="condition-panel condition-panel-invalid">
-                      <div class="panel-head">
-                        <span class="panel-step">2</span>
-                        <div>
-                          <div class="panel-title">失效点</div>
-                          <div class="panel-subtitle">结构破坏就不再当趋势锚</div>
-                        </div>
-                      </div>
-                      <div class="panel-body">
-                        <div class="condition-title">{{ stock.llm_risk_note || stock.stock_falsification_cond || '承接转弱或关键位失守时降级。' }}</div>
-                      </div>
-                    </section>
-                  </div>
-                </div>
-
-                <div class="signal-footer">
-                  <span>{{ trendFooterLine(stock) }}</span>
-                  <div class="footer-actions">
-                    <span class="footer-flag">看结构，不急着追</span>
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
                   </div>
@@ -1135,12 +953,12 @@ const activeTab = ref('holding')
 const displayDate = ref('')
 const poolsData = ref({
   market_watch_pool: [],
-  trend_recognition_pool: [],
   account_executable_pool: [],
   holding_process_pool: [],
   resolved_trade_date: '',
   sector_scan_trade_date: '',
   sector_scan_resolved_trade_date: '',
+  global_trade_gate: null,
   mode: 'stable',
   is_realtime: false,
   radar_generated_at: '',
@@ -1175,9 +993,15 @@ const buyAnalysisTradeDate = computed(() => (
 ))
 
 const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 0)
-const trendCount = computed(() => poolsData.value.trend_recognition_pool?.length || 0)
 const accountCount = computed(() => poolsData.value.account_executable_pool?.length || 0)
 const holdingCount = computed(() => poolsData.value.holding_process_pool?.length || 0)
+const globalTradeGate = computed(() => poolsData.value.global_trade_gate || {
+  status: '允许试错',
+  allow_new_positions: true,
+  dominant_reason: '等待规则结果',
+  reasons: [],
+  account_pool_limit: 3,
+})
 const refreshButtonLoading = computed(() => loading.value || Boolean(poolsData.value.refresh_in_progress))
 const todayMarketEnv = computed(() => marketEnvData.value || {
   market_env_tag: '中性',
@@ -1189,7 +1013,7 @@ const radarModeBanner = computed(() => {
   const generatedAt = poolsData.value.radar_generated_at
     ? `最新生成于 ${formatLocalDateTime(poolsData.value.radar_generated_at, { assumeUtc: true })}`
     : '盘中结果会变化'
-  return `${generatedAt}。观察池和趋势池更偏实时雷达，账户池仍应以纪律和买点确认优先；页面每 30 秒自动更新一次。`
+  return `${generatedAt}。观察池更偏实时雷达，账户池仍应以纪律和买点确认优先；页面每 30 秒自动更新一次。`
 })
 
 const stopRefreshPolling = () => {
@@ -1243,17 +1067,15 @@ const matchesReviewBucket = (stock) => {
 const applyPoolFilters = (rows = []) => sortByFocusSector(rows).filter(matchesReviewBucket)
 
 const marketPool = computed(() => applyPoolFilters(poolsData.value.market_watch_pool || []))
-const trendPool = computed(() => applyPoolFilters(poolsData.value.trend_recognition_pool || []))
 const accountPool = computed(() => applyPoolFilters(poolsData.value.account_executable_pool || []))
 const focusMatches = computed(() => ({
   market: (poolsData.value.market_watch_pool || []).filter((stock) => matchesFocusSector(stock)).length,
-  trend: (poolsData.value.trend_recognition_pool || []).filter((stock) => matchesFocusSector(stock)).length,
   account: (poolsData.value.account_executable_pool || []).filter((stock) => matchesFocusSector(stock)).length,
 }))
 const accountEmptyReason = computed(() => {
   if (accountCount.value) return ''
 
-  const rawReasons = [...marketPool.value, ...trendPool.value]
+  const rawReasons = [...marketPool.value]
     .flatMap((stock) => stock.not_other_pools || [])
     .map((reason) => String(reason || '').trim())
     .filter((reason) => (
@@ -1328,7 +1150,7 @@ const directionStateLabel = (stock) => {
 
 const groupedDirections = computed(() => {
   const groups = new Map()
-  ;[...marketPool.value, ...trendPool.value, ...accountPool.value].forEach((stock) => {
+  ;[...marketPool.value, ...accountPool.value].forEach((stock) => {
     const name = String(stock.sector_name || '').trim()
     if (!name) return
     const current = groups.get(name) || { name, count: 0, items: [], top: null }
@@ -1362,6 +1184,8 @@ const directionOverviewCopy = computed(() => {
 
 const executionGuidanceTitle = computed(() => {
   if (holdingCount.value) return '先处理持仓，再看新机会'
+  if (globalTradeGate.value.status === '优先处理持仓，不建议新开') return '先处理持仓风险，不建议新开'
+  if (globalTradeGate.value.status === '以防守为主') return '以防守为主，只保留极少数试错'
   if (standardExecutionPool.value.length) return '优先做标准执行票'
   if (aggressiveTrialPool.value.length) return '允许小仓试错，但别当标准模式'
   if (defenseTrialPool.value.length) return '防守环境仅保留轻仓试错'
@@ -1370,11 +1194,12 @@ const executionGuidanceTitle = computed(() => {
 
 const executionGuidanceCopy = computed(() => {
   if (holdingCount.value) return '旧仓优先级最高；先把卖、减、持处理清楚，再决定是否看新票。'
+  if (globalTradeGate.value.dominant_reason) return globalTradeGate.value.dominant_reason
   if (standardExecutionPool.value.length && !aggressiveTrialPool.value.length) return '今天有计划内机会，先看标准执行区，不要被观察池分散注意力。'
   if (standardExecutionPool.value.length && aggressiveTrialPool.value.length) return '先做标准执行；进攻试错只给强化方向前排的小仓资格。'
   if (aggressiveTrialPool.value.length) return '今天没有太舒服的标准位，若要出手，只能在强化方向里做更快确认的试错仓。'
   if (defenseTrialPool.value.length) return '当前环境偏防守，只保留极少数最强核心股的轻仓试错资格，不要把它当进攻信号。'
-  return '当前更适合先看观察池和趋势池，等更清晰的确认条件。'
+  return '当前更适合先看观察池，等更清晰的确认条件。'
 })
 
 const executionEmptyStates = computed(() => {
@@ -1438,7 +1263,6 @@ const accountPoolGroups = computed(() => {
 const holdingPool = computed(() =>
   [...(poolsData.value.holding_process_pool || [])].sort(compareHoldingPriority)
 )
-const trendPreviewPool = computed(() => trendPool.value.slice(0, 6))
 const marketDirectionGroups = computed(() => {
   const grouped = new Map()
   marketPool.value.forEach((stock) => {
@@ -1474,14 +1298,13 @@ const reviewSourceLabel = computed(() => reviewSnapshotTypeLabel(reviewSourceFil
 
 const resolveDefaultTab = () => {
   if (reviewSourceFilter.value === 'pool_account') {
-    return accountCount.value ? 'account' : holdingCount.value ? 'holding' : trendCount.value ? 'trend' : 'market'
+    return accountCount.value ? 'account' : holdingCount.value ? 'holding' : 'market'
   }
   if (reviewSourceFilter.value === 'pool_market') {
-    return marketCount.value ? 'market' : trendCount.value ? 'trend' : accountCount.value ? 'account' : 'holding'
+    return marketCount.value ? 'market' : accountCount.value ? 'account' : 'holding'
   }
   if (holdingCount.value) return 'holding'
   if (accountCount.value) return 'account'
-  if (trendCount.value) return 'trend'
   return 'market'
 }
 
@@ -1527,42 +1350,40 @@ const reviewInsight = computed(() => {
 const overviewBadge = computed(() => {
   if (holdingCount.value) return '先处理持仓'
   if (accountCount.value) return '看可参与'
-  if (trendCount.value) return '先看趋势锚'
   return '先看观察池'
 })
 
 const overviewBadgeClass = computed(() => {
   if (holdingCount.value) return 'badge-holding'
   if (accountCount.value) return 'badge-account'
-  if (trendCount.value) return 'badge-trend'
   return 'badge-market'
 })
 
 const overviewTitle = computed(() => {
+  if (globalTradeGate.value.status === '优先处理持仓，不建议新开') return '先处理旧仓风险，今天不建议新增仓位'
   if (holdingCount.value) return '已有仓位优先，先把该卖、该减、该持有的动作排清楚'
   if (accountCount.value) return '当前有能执行的新标的，先看账户可参与池，再回到买点页确认'
-  if (trendCount.value) return '今天更值得盯结构清晰的趋势锚，不必只追最热那一笔'
   if (marketCount.value) return '当前更适合先观察市场最强结构，不要把观察票当成执行票'
   return '今天几类观察池都比较清淡，先等新的结构和账户信号'
 })
 
 const overviewDesc = computed(() => {
+  if (globalTradeGate.value.status === '优先处理持仓，不建议新开') return globalTradeGate.value.dominant_reason
   if (holdingCount.value) return '持仓处理池是今天优先级最高的区域；先处理旧仓风险，再决定是否看新票。'
   if (accountCount.value) return '账户可参与池说明系统已经过了账户准入这一步，但真正执行仍要结合买点和盘中确认。'
-  if (trendCount.value) return '趋势辨识度池更关注结构、承接和连续性，适合盯真正能当锚的票。'
   if (marketCount.value) return '观察池的任务是帮你缩小盯盘范围，先看方向、板块和量能，不要直接下单。'
   return '当前没有明显需要处理的仓位，也没有通过准入的新标的，适合保持节奏。'
 })
 
 const overviewRules = computed(() => {
+  if (globalTradeGate.value.status === '优先处理持仓，不建议新开') {
+    return ['先处理旧仓风险', '今天不建议新开仓', '观察池只负责跟踪，不负责下单']
+  }
   if (holdingCount.value) {
     return ['先处理旧仓，再考虑新开仓', '动作建议优先看高优先级', '证伪条件到了就不要拖']
   }
   if (accountCount.value) {
     return ['先看进池理由', '仓位提示比题材更重要', '可参与不等于立刻追价']
-  }
-  if (trendCount.value) {
-    return ['看谁最耐打，不看谁最响', '趋势锚优先盯承接和修复', '结构清晰比日内最强更重要']
   }
   return ['观察池只负责缩小盯盘范围', '先看最强结构，再看账户是否允许', '没有执行确认就不要急着动']
 })
@@ -1579,7 +1400,6 @@ const compactRuleSummary = computed(() => overviewRules.value.slice(0, 2).join('
 const compactStatItems = computed(() => [
   { key: 'holding', label: '持仓处理', value: holdingCount.value, tip: '先清旧仓动作' },
   { key: 'account', label: '账户可参与', value: accountCount.value, tip: '能做但仍要确认' },
-  { key: 'trend', label: '趋势辨识', value: trendCount.value, tip: '看结构锚' },
   { key: 'market', label: '市场观察', value: marketCount.value, tip: '看方向样本' },
 ])
 
@@ -1611,20 +1431,7 @@ const decisionSteps = computed(() => {
       rule: '能做但别急追',
       hint: '先看进池理由和仓位提示',
     })
-  } else if (trendCount.value) {
-    steps.push({
-      key: 'trend',
-      rank: steps.length + 1,
-      tab: 'trend',
-      tone: 'trend',
-      title: '先盯趋势锚',
-      desc: '今天暂无直接可执行票，先看结构最耐打的趋势锚，不要急着抬手。',
-      countLabel: `${trendCount.value} 只趋势锚`,
-      rule: '盯结构',
-      hint: '重点看承接、修复和连续性',
-    })
   }
-
   steps.push({
     key: 'market',
     rank: steps.length + 1,
@@ -1644,9 +1451,6 @@ const focusSummary = computed(() => {
   if (!focusSector.value) return ''
   if (focusMatches.value.account) {
     return `${focusSector.value} 已经有 ${focusMatches.value.account} 只进入账户可参与池，可以先看账户池，再去买点页确认。`
-  }
-  if (focusMatches.value.trend) {
-    return `${focusSector.value} 还没走到可执行，但已经有 ${focusMatches.value.trend} 只在趋势池里，可以先盯结构，不要急着下手。`
   }
   if (focusMatches.value.market) {
     return `${focusSector.value} 目前更多停留在市场观察池，说明这条线还在观察期，先看板块一致性和量能。`
@@ -1677,16 +1481,6 @@ const topFocusItems = computed(() => {
       focus: stock.pool_entry_reason || stock.position_hint || stock.stock_comment || '等待买点确认',
       meta: `可参与 / ${stock.candidate_bucket_tag || '未分层'} / ${formatSignedPct(stock.change_pct)}`,
       orderLabel: items.length ? '再看 ' : '先看 ',
-    })
-  } else if (trendPool.value.length) {
-    const stock = trendPool.value[0]
-    items.push({
-      poolKey: 'trend',
-      ts_code: stock.ts_code,
-      stock_name: stock.stock_name,
-      focus: stock.why_this_pool || stock.pool_decision_summary || stock.stock_comment || '先盯结构与承接',
-      meta: `趋势池 / ${stock.structure_state_tag || '结构'} / ${formatSignedPct(stock.change_pct)}`,
-      orderLabel: items.length ? '再盯 ' : '先盯 ',
     })
   } else if (marketPool.value.length) {
     const stock = marketPool.value[0]
@@ -1983,8 +1777,8 @@ const loadData = async (options = {}) => {
     }
     const res = await stockApi.pools(tradeDate, 50, { ...options, mode: poolMode.value, timeout: POOLS_TIMEOUT })
     const payload = res.data.data || {
+      global_trade_gate: null,
       market_watch_pool: [],
-      trend_recognition_pool: [],
       account_executable_pool: [],
       holding_process_pool: [],
       resolved_trade_date: '',

@@ -304,10 +304,25 @@ class StockCoreTag(str, Enum):
 class StockPoolTag(str, Enum):
     """个股所属池"""
     MARKET_WATCH = "市场最强观察池"
-    TREND_RECOGNITION = "趋势辨识度观察池"
     ACCOUNT_EXECUTABLE = "账户可参与池"
     HOLDING_PROCESS = "持仓处理池"
     NOT_IN_POOL = "不入池"
+
+
+class TradeGateStatus(str, Enum):
+    """三池总闸门状态"""
+    ATTACK = "允许进攻"
+    TRIAL = "允许试错"
+    DEFENSE = "以防守为主"
+    HOLDINGS_FIRST = "优先处理持仓，不建议新开"
+
+
+class HoldingActionBucket(str, Enum):
+    """持仓处理池分档"""
+    IMMEDIATE = "立即处理"
+    REDUCE_FIRST = "优先减仓"
+    OBSERVE = "继续观察"
+    HOLD_STRONG = "持有/强留仓"
 
 
 class SectorProfileTag(str, Enum):
@@ -458,6 +473,7 @@ class StockOutput(BaseModel):
     sell_reason: Optional[str] = None
     sell_priority: Optional[str] = None
     sell_comment: Optional[str] = None
+    holding_action_bucket: Optional[HoldingActionBucket] = None
     # 账户可参与池补充说明
     account_entry_mode: Optional[str] = None
     pool_entry_reason: Optional[str] = None
@@ -485,6 +501,15 @@ class IntradayFeatureSet(BaseModel):
 
 # ========== 三池相关 ==========
 
+class GlobalTradeGateOutput(BaseModel):
+    """三池上层总闸门"""
+    status: TradeGateStatus
+    allow_new_positions: bool = Field(..., description="是否允许新增仓位")
+    dominant_reason: str = Field(default="", description="主导结论")
+    reasons: List[str] = Field(default_factory=list, description="触发原因列表")
+    account_pool_limit: int = Field(default=0, description="账户可参与池最大展示数")
+
+
 class StockPoolsOutput(BaseModel):
     """三池输出"""
     trade_date: str
@@ -492,8 +517,14 @@ class StockPoolsOutput(BaseModel):
     sector_scan_trade_date: Optional[str] = Field(None, description="三池实际使用的板块扫描请求日")
     sector_scan_resolved_trade_date: Optional[str] = Field(None, description="三池实际使用的板块扫描数据日")
     snapshot_version: Optional[int] = Field(None, description="三池规则快照版本")
+    global_trade_gate: GlobalTradeGateOutput = Field(default_factory=lambda: GlobalTradeGateOutput(
+        status=TradeGateStatus.TRIAL,
+        allow_new_positions=True,
+        dominant_reason="默认允许试错",
+        reasons=[],
+        account_pool_limit=3,
+    ))
     market_watch_pool: List[StockOutput] = Field(default_factory=list, description="市场最强观察池")
-    trend_recognition_pool: List[StockOutput] = Field(default_factory=list, description="趋势辨识度观察池")
     account_executable_pool: List[StockOutput] = Field(default_factory=list, description="账户可参与池")
     holding_process_pool: List[StockOutput] = Field(default_factory=list, description="持仓处理池")
     total_count: int

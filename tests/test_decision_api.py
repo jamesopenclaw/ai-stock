@@ -97,7 +97,6 @@ async def test_buy_point_page_saves_review_snapshot(monkeypatch):
         trade_date="2026-03-24",
         resolved_trade_date="2026-03-23",
         market_watch_pool=[],
-        trend_recognition_pool=[],
         account_executable_pool=scored,
         holding_process_pool=[],
         total_count=1,
@@ -218,7 +217,6 @@ async def test_buy_point_prefers_cached_stock_pools_snapshot(monkeypatch):
                 stock_pool_tag=StockPoolTag.MARKET_WATCH,
             )
         ],
-        trend_recognition_pool=[],
         account_executable_pool=[],
         holding_process_pool=[],
         total_count=1,

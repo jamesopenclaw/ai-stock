@@ -17,7 +17,7 @@ def test_serialize_task_run_includes_result_summary():
         attempt_count=1,
         max_attempts=2,
         duration_ms=1200,
-        result_json='{"pipeline":"daily","report":{"summary":{"today_action":"可适度出手","priority_action":"先看核心票"},"market_env":{"market_env_tag":"进攻","market_comment":"题材扩散"},"buy_analysis":{"available_buy_points":[{"ts_code":"300024.SZ"},{"ts_code":"300025.SZ"}]},"sell_analysis":{"sell_positions":[{"ts_code":"600001.SH"}],"reduce_positions":[]},"stock_pools":{"market_watch_count":3,"trend_recognition_count":2,"account_executable_count":1}}}',
+        result_json='{"pipeline":"daily","report":{"summary":{"today_action":"可适度出手","priority_action":"先看核心票"},"market_env":{"market_env_tag":"进攻","market_comment":"题材扩散"},"buy_analysis":{"available_buy_points":[{"ts_code":"300024.SZ"},{"ts_code":"300025.SZ"}]},"sell_analysis":{"sell_positions":[{"ts_code":"600001.SH"}],"reduce_positions":[]},"stock_pools":{"market_watch_count":3,"account_executable_count":1}}}',
         last_error="",
         created_at=datetime(2026, 3, 28, 10, 0, 0),
         updated_at=datetime(2026, 3, 28, 10, 2, 0),
@@ -33,5 +33,5 @@ def test_serialize_task_run_includes_result_summary():
         "market_comment": "题材扩散",
         "available_buy_count": 2,
         "sell_signal_count": 1,
-        "candidate_pool_count": 6,
+        "candidate_pool_count": 4,
     }
