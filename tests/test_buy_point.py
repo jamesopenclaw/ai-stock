@@ -209,6 +209,31 @@ class TestBuyPoint:
         assert "当日高点" in buy_point.buy_trigger_cond
         assert "%" not in buy_point.buy_trigger_cond
 
+    def test_retrace_support_conditions_use_stock_specific_price_levels(self, service, medium_stock):
+        """
+        测试：回踩承接型条件应带个股自己的价格锚点，而不是通用模板句
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        medium_stock.open = 1550.0
+        medium_stock.close = 1562.0
+        medium_stock.pre_close = 1541.0
+        medium_stock.low = 1538.0
+        medium_stock.high = 1568.0
+        medium_stock.avg_price = 1551.6
+        medium_stock.stock_tradeability_tag = StockTradeabilityTag.TRADABLE
+        medium_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+
+        buy_point = service._analyze_stock_buy_point(medium_stock, MockMarketEnv())
+
+        assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
+        assert "开盘价 1550.00" in buy_point.buy_trigger_cond
+        assert "开盘价 1550.00" in buy_point.buy_confirm_cond
+        assert "失效价" in buy_point.buy_confirm_cond
+
     def test_extended_strong_stock_prefers_retrace_support(self, service, strong_stock):
         """
         测试：涨幅过大的强票不应默认继续追突破

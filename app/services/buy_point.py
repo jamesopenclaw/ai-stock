@@ -1,7 +1,7 @@
 """
 买点分析服务
 """
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from app.data.tushare_client import normalize_ts_code, tushare_client
 from app.models.schemas import (
@@ -268,7 +268,7 @@ class BuyPointService:
         trigger_price = self._estimate_trigger_price(stock, buy_type)
         invalid_price = self._estimate_invalid_price(stock, buy_type)
         trigger_cond = self._generate_trigger_cond(stock, buy_type, trigger_price)
-        confirm_cond = self._generate_confirm_cond(stock, buy_type)
+        confirm_cond = self._generate_confirm_cond(stock, buy_type, trigger_price, invalid_price)
         invalid_cond = self._generate_invalid_cond(stock, buy_type)
         current_price = self._current_price(stock)
         current_change_pct = self._current_change_pct(stock)
@@ -476,11 +476,28 @@ class BuyPointService:
                 return f"放量站上触发价 {ref_price:.2f} 时触发"
             return "放量突破关键压力位并站稳时触发"
         elif buy_type == BuyPointType.RETRACE_SUPPORT:
-            return "回踩至今日开盘价附近企稳时触发"
+            anchor_label, anchor_price = self._resolve_retrace_anchor(stock, trigger_price)
+            if anchor_label and anchor_price:
+                return f"先等回踩到{anchor_label} {anchor_price:.2f} 附近企稳，再看承接"
+            if trigger_price:
+                return f"先等回踩到触发价 {trigger_price:.2f} 一带企稳，再看承接"
+            return "先等回踩到关键支撑附近企稳，再看承接"
+        elif buy_type == BuyPointType.LOW_SUCK:
+            if trigger_price:
+                return f"先等价格回到低吸参考位 {trigger_price:.2f} 附近止跌，再看试错"
+            return "先等价格回到低吸参考位附近止跌，再看试错"
         else:
-            return "出现分时反转信号、量能配合时触发"
+            if trigger_price:
+                return f"先看能否重新站回触发价 {trigger_price:.2f} 并维持强势，再看转强确认"
+            return "先看能否重新站回关键位并维持强势，再看转强确认"
 
-    def _generate_confirm_cond(self, stock: StockOutput, buy_type: BuyPointType) -> str:
+    def _generate_confirm_cond(
+        self,
+        stock: StockOutput,
+        buy_type: BuyPointType,
+        trigger_price: Optional[float] = None,
+        invalid_price: Optional[float] = None,
+    ) -> str:
         """生成确认条件"""
         conds = []
 
@@ -488,13 +505,37 @@ class BuyPointService:
         conds.append("成交量放大至前一交易日1.2倍以上")
 
         if buy_type == BuyPointType.BREAKTHROUGH:
-            conds.append("突破后不回落到关键位下方")
+            if trigger_price:
+                conds.append(f"突破后不回落到触发价 {trigger_price:.2f} 下方")
+            else:
+                conds.append("突破后不回落到关键位下方")
             conds.append("有板块或指数共振")
         elif buy_type == BuyPointType.RETRACE_SUPPORT:
-            conds.append("在支撑位收出止跌K线")
-            conds.append("分时走势企稳")
+            anchor_label, anchor_price = self._resolve_retrace_anchor(stock, trigger_price)
+            if anchor_label and anchor_price:
+                conds.append(f"回踩到{anchor_label} {anchor_price:.2f} 后收出止跌K线")
+            elif trigger_price:
+                conds.append(f"回踩到触发价 {trigger_price:.2f} 后收出止跌K线")
+            else:
+                conds.append("在支撑位收出止跌K线")
+            if invalid_price:
+                conds.append(f"分时企稳后不再跌回失效价 {invalid_price:.2f} 下方")
+            else:
+                conds.append("分时走势企稳")
+        elif buy_type == BuyPointType.LOW_SUCK:
+            if trigger_price:
+                conds.append(f"靠近低吸参考位 {trigger_price:.2f} 时出现止跌承接")
+            else:
+                conds.append("靠近支撑时出现止跌承接")
+            if invalid_price:
+                conds.append(f"试错后不再跌回失效价 {invalid_price:.2f} 下方")
+            else:
+                conds.append("止跌后不再快速走弱")
         else:
-            conds.append("出现明显反转信号")
+            if trigger_price:
+                conds.append(f"重新站回触发价 {trigger_price:.2f} 后维持强势")
+            else:
+                conds.append("出现明显反转信号")
             conds.append("板块整体回暖")
 
         return "；".join(conds)
@@ -539,6 +580,32 @@ class BuyPointService:
             return round(base * 0.98, 2) if base else None
         base = stock.low or stock.close or stock.pre_close
         return round(base * 0.99, 2) if base else None
+
+    def _resolve_retrace_anchor(
+        self,
+        stock: StockOutput,
+        trigger_price: Optional[float],
+    ) -> Tuple[Optional[str], Optional[float]]:
+        """给回踩承接类文案找最近的锚点名称。"""
+        if not trigger_price:
+            return None, None
+
+        candidates = [
+            ("开盘价", stock.open),
+            ("前收价", stock.pre_close),
+            ("日内均价", stock.avg_price),
+            ("最低价", stock.low),
+        ]
+        valid = [
+            (label, float(price))
+            for label, price in candidates
+            if price is not None and float(price) > 0
+        ]
+        if not valid:
+            return "触发价", round(float(trigger_price), 2)
+
+        label, price = min(valid, key=lambda item: abs(item[1] - float(trigger_price)))
+        return label, round(price, 2)
 
     def _required_volume_ratio(self, buy_type: BuyPointType) -> float:
         """返回结构化量能门槛。"""

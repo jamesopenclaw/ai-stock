@@ -432,7 +432,7 @@
                   </div>
                   <div class="quote-side">
                     <span class="quote-pair">
-                      距触发
+                      {{ observeTriggerGapLabel(point) }}
                       <strong :class="priceClass(point.buy_trigger_gap_pct)">{{ formatGap(point.buy_trigger_gap_pct) }}</strong>
                     </span>
                   </div>
@@ -440,33 +440,33 @@
 
 	                  <div class="condition-section">
 	                    <div class="section-kicker">观察重点</div>
-	                  <div
-	                    v-if="!isCardExpanded(cardKey(point, 'observe'))"
-	                    class="condition-summary-grid condition-summary-grid-watch"
-	                  >
-	                    <section class="condition-summary-card condition-summary-trigger">
-	                      <div class="summary-card-head">
-	                        <span class="panel-step">1</span>
-	                        <div class="summary-card-copy">
-	                          <div class="panel-title">先看</div>
-	                          <div class="panel-subtitle">先等这个动作出现</div>
-	                        </div>
-	                      </div>
-	                      <div class="summary-card-body">{{ point.buy_trigger_cond }}</div>
-	                    </section>
+		                  <div
+		                    v-if="!isCardExpanded(cardKey(point, 'observe'))"
+		                    class="condition-summary-grid condition-summary-grid-watch"
+		                  >
+		                    <section class="condition-summary-card condition-summary-trigger">
+		                      <div class="summary-card-head">
+		                        <span class="panel-step">1</span>
+		                        <div class="summary-card-copy">
+		                          <div class="panel-title">{{ observeFocusTitle(point) }}</div>
+		                          <div class="panel-subtitle">{{ observeFocusSubtitle(point) }}</div>
+		                        </div>
+		                      </div>
+		                      <div class="summary-card-body">{{ observeFocusBody(point) }}</div>
+		                    </section>
 
-	                    <section class="condition-summary-card condition-summary-confirm">
-	                      <div class="summary-card-head">
-	                        <span class="panel-step">2</span>
-	                        <div class="summary-card-copy">
-	                          <div class="panel-title">卡点</div>
-	                          <div class="panel-subtitle">条件没到齐就继续观察</div>
-	                        </div>
-	                        <span class="summary-count">{{ splitCond(point.buy_confirm_cond).length }}条</span>
-	                      </div>
-	                      <div class="summary-card-body">{{ summarizeCond(point.buy_confirm_cond) }}</div>
-	                    </section>
-	                  </div>
+		                    <section class="condition-summary-card condition-summary-confirm">
+		                      <div class="summary-card-head">
+		                        <span class="panel-step">2</span>
+		                        <div class="summary-card-copy">
+		                          <div class="panel-title">{{ observeConfirmTitle(point) }}</div>
+		                          <div class="panel-subtitle">{{ observeConfirmSubtitle(point) }}</div>
+		                        </div>
+		                        <span class="summary-count">{{ splitCond(point.buy_confirm_cond).length }}条</span>
+		                      </div>
+		                      <div class="summary-card-body">{{ observeConfirmBody(point) }}</div>
+		                    </section>
+		                  </div>
 
 	                  <div class="condition-expand-bar">
 	                    <el-button
@@ -483,27 +483,27 @@
 	                    v-if="isCardExpanded(cardKey(point, 'observe'))"
 	                    class="condition-panel-grid condition-panel-grid-watch"
 	                  >
-	                    <section class="condition-panel condition-panel-trigger">
-	                      <div class="panel-head">
-	                        <span class="panel-step">1</span>
-	                        <div>
-	                          <div class="panel-title">先看</div>
-	                          <div class="panel-subtitle">先等这个动作出现</div>
-	                        </div>
-	                      </div>
-	                      <div class="panel-body">
-	                        <div class="condition-title">{{ point.buy_trigger_cond }}</div>
-	                      </div>
-	                    </section>
+		                    <section class="condition-panel condition-panel-trigger">
+		                      <div class="panel-head">
+		                        <span class="panel-step">1</span>
+		                        <div>
+		                          <div class="panel-title">{{ observeFocusTitle(point) }}</div>
+		                          <div class="panel-subtitle">{{ observeFocusSubtitle(point) }}</div>
+		                        </div>
+		                      </div>
+		                      <div class="panel-body">
+		                        <div class="condition-title">{{ observeFocusBody(point) }}</div>
+		                      </div>
+		                    </section>
 
-	                    <section class="condition-panel condition-panel-confirm">
-	                      <div class="panel-head">
-	                        <span class="panel-step">2</span>
-	                        <div>
-	                          <div class="panel-title">卡点</div>
-	                          <div class="panel-subtitle">条件没到齐就继续观察</div>
-	                        </div>
-	                      </div>
+		                    <section class="condition-panel condition-panel-confirm">
+		                      <div class="panel-head">
+		                        <span class="panel-step">2</span>
+		                        <div>
+		                          <div class="panel-title">{{ observeConfirmTitle(point) }}</div>
+		                          <div class="panel-subtitle">{{ observeConfirmSubtitle(point) }}</div>
+		                        </div>
+		                      </div>
 	                      <div class="panel-body">
 	                        <ul class="condition-bullets">
 	                          <li v-for="item in splitCond(point.buy_confirm_cond)" :key="item">{{ item }}</li>
@@ -516,7 +516,7 @@
                 <div class="signal-footer">
                   <span>{{ point.buy_comment || '-' }}</span>
                   <div class="footer-actions">
-                    <span class="footer-flag">未到执行位</span>
+                    <span class="footer-flag">{{ observeFooterFlag(point) }}</span>
                     <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
@@ -1088,6 +1088,104 @@ const primaryActionLine = (point, envTag) => {
   return `${prefix}：到 ${trigger} 附近再看，跌回 ${invalid} 下方就放弃。`
 }
 
+const observeTypeLabel = (point) => String(point?.buy_point_type || '').trim()
+
+const resolveRetraceFloorRatio = (tsCode) => {
+  const code = String(tsCode || '').toUpperCase()
+  if (code.endsWith('.BJ')) return 0.82
+  if (code.startsWith('300') || code.startsWith('301') || code.startsWith('688')) return 0.88
+  return 0.93
+}
+
+const isObserveDeepRetraceReference = (point) => {
+  if (observeTypeLabel(point) !== '回踩承接') return false
+  const current = Number(point?.buy_current_price)
+  const trigger = Number(point?.buy_trigger_price)
+  if (Number.isNaN(current) || Number.isNaN(trigger) || current <= 0 || trigger <= 0) return false
+  return trigger < current * resolveRetraceFloorRatio(point?.ts_code)
+}
+
+const observeTriggerGapLabel = (point) => (isObserveDeepRetraceReference(point) ? '深回踩' : '距触发')
+
+const observeFooterFlag = (point) => (isObserveDeepRetraceReference(point) ? '深回踩参考' : '未到执行位')
+
+const observeFocusTitle = (point) => {
+  if (isObserveDeepRetraceReference(point)) return '先看承接'
+  const type = observeTypeLabel(point)
+  if (type === '突破') return '先等突破'
+  if (type === '修复转强') return '先等修复'
+  if (type === '低吸') return '先等低吸'
+  return '先等回踩'
+}
+
+const observeFocusSubtitle = (point) => {
+  if (isObserveDeepRetraceReference(point)) return '深回踩位离现价较远，先看现价附近别转弱'
+  const type = observeTypeLabel(point)
+  if (type === '突破') return '先等关键价位和量能一起到位'
+  if (type === '修复转强') return '先等关键位重新站回'
+  if (type === '低吸') return '先等价格回到支撑附近'
+  return '先等价格回到触发位附近'
+}
+
+const observeFocusBody = (point) => {
+  const type = observeTypeLabel(point)
+  const trigger = formatPrice(point?.buy_trigger_price)
+  const invalid = formatPrice(point?.buy_invalid_price)
+
+  if (isObserveDeepRetraceReference(point)) {
+    return `触发价 ${trigger} 离现价较远，当前先把它当深回踩参考；更近端先看现价附近能否横住，不要快速跌回 ${invalid} 下方。`
+  }
+  if (type === '突破') {
+    return `先看能否靠近 ${trigger} 一带并放量站稳；没到这一步前，先别把它当成已经突破。`
+  }
+  if (type === '修复转强') {
+    return `先等价格重新站回 ${trigger} 一带，再看修复动作能不能延续；提前转弱跌回 ${invalid} 下方就不继续跟。`
+  }
+  if (type === '低吸') {
+    return `先等价格回到 ${trigger} 一带附近再看承接，不要在离支撑还远的时候抢低吸。`
+  }
+  return `先等价格回踩到 ${trigger} 一带稳住；没回到这里前，不把现价附近当执行位，跌回 ${invalid} 下方则直接失效。`
+}
+
+const observeConfirmTitle = (point) => {
+  if (isObserveDeepRetraceReference(point)) return '看别转弱'
+  const type = observeTypeLabel(point)
+  if (type === '突破') return '看站稳'
+  if (type === '修复转强') return '看修复'
+  if (type === '低吸') return '看止跌'
+  return '看承接'
+}
+
+const observeConfirmSubtitle = (point) => {
+  if (isObserveDeepRetraceReference(point)) return '先确认高位不补跌，再等更深回踩'
+  const type = observeTypeLabel(point)
+  if (type === '突破') return '量价没站稳就继续观察'
+  if (type === '修复转强') return '修复不完整就继续观察'
+  if (type === '低吸') return '止跌和承接不到位就继续观察'
+  return '承接和量能没到位就继续观察'
+}
+
+const observeConfirmBody = (point) => {
+  const type = observeTypeLabel(point)
+  const summary = summarizeCond(point?.buy_confirm_cond)
+  const trigger = formatPrice(point?.buy_trigger_price)
+  const invalid = formatPrice(point?.buy_invalid_price)
+
+  if (isObserveDeepRetraceReference(point)) {
+    return `重点看 ${summary}；在没回到 ${trigger} 前，先确认现价附近不放量转弱，也不要快速跌回 ${invalid} 下方。`
+  }
+  if (type === '突破') {
+    return `重点看 ${summary}；只有突破后的量价和承接都站住，才算从观察转成可执行。`
+  }
+  if (type === '修复转强') {
+    return `重点看 ${summary}；修复动作要连续、要站稳，不能只是一脚拉回去。`
+  }
+  if (type === '低吸') {
+    return `重点看 ${summary}；先确认止跌和承接，再谈试错，不要只因为价格回落就急着接。`
+  }
+  return `重点看 ${summary}；回踩之后要确认承接和量能都到位，才考虑从观察升级。`
+}
+
 const buySizingLine = (point) => {
   if (!point?.recommended_shares || !point?.recommended_order_amount) return ''
   const pct = point.recommended_order_pct ? `${(Number(point.recommended_order_pct) * 100).toFixed(0)}%` : null
@@ -1103,6 +1201,9 @@ const buySizingLine = (point) => {
 }
 
 const observeActionLine = (point, envTag) => {
+  if (isObserveDeepRetraceReference(point)) {
+    return '先观察，不抢先手；深回踩位离现价较远，当前先看现价附近别转弱，把远处回踩位只当参考。'
+  }
   if (envTag === '防守') {
     return '先观察，不抢先手；只有触发和确认都到位才考虑出手。'
   }

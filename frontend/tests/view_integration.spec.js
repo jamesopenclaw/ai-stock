@@ -543,6 +543,53 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('19,215.00 元')
   })
 
+  it('BuyPoint 页面会把过远的回踩承接触发位降级为深回踩参考', async () => {
+    decisionApi.buyPoint.mockResolvedValue(
+      makeResponse({
+        market_env_tag: '防守',
+        available_buy_points: [],
+        observe_buy_points: [
+          {
+            ts_code: '002796.SZ',
+            stock_name: '世嘉科技',
+            sector_name: '机器人',
+            stock_pool_tag: '账户可参与池',
+            account_entry_mode: '',
+            candidate_bucket_tag: '强势确认',
+            candidate_source_tag: '涨幅前列/涨停入选',
+            buy_point_type: '回踩承接',
+            buy_risk_level: '高',
+            buy_account_fit: '一般',
+            buy_trigger_cond: '先等回踩到开盘价 46.66 附近企稳，再看承接',
+            buy_confirm_cond: '成交量放大至前一交易日1.2倍以上；回踩到开盘价 46.66 后收出止跌K线；分时企稳后不再跌回失效价 45.73 下方',
+            buy_invalid_cond: '收盘跌破今日最低价，视为突破失败；次日开盘跌破今日收盘价3%以上；跌破支撑位2%以上无法收回',
+            buy_comment: '回踩承接型，需观察',
+            buy_current_price: 50.59,
+            buy_current_change_pct: 10.0,
+            buy_trigger_gap_pct: -7.77,
+            buy_invalid_gap_pct: -9.61,
+            buy_trigger_price: 46.66,
+            buy_invalid_price: 45.73,
+            buy_required_volume_ratio: 1.1,
+          },
+        ],
+        not_buy_points: [],
+      })
+    )
+    decisionApi.reviewStats.mockResolvedValue(makeResponse({ bucket_stats: [] }))
+
+    const { default: BuyPointView } = await import('../src/views/BuyPoint.vue')
+    const wrapper = await mountView(BuyPointView)
+    await new Promise((resolve) => window.setTimeout(resolve, 220))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('世嘉科技')
+    expect(wrapper.text()).toContain('深回踩')
+    expect(wrapper.text()).toContain('深回踩参考')
+    expect(wrapper.text()).toContain('深回踩位离现价较远')
+    expect(wrapper.text()).not.toContain('未到执行位')
+  })
+
   it('BuyPoint 页面会展示后端返回的真实失败原因', async () => {
     decisionApi.buyPoint.mockResolvedValue({
       data: {
@@ -831,6 +878,7 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('50%')
     expect(wrapper.text()).toContain('建议先买 700 股')
     expect(wrapper.text()).toContain('19,040.00 元')
+    expect((wrapper.text().match(/建议先买 700 股/g) || []).length).toBe(1)
     expect(wrapper.text()).toContain('先撤新增仓')
   })
 

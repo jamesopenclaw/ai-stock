@@ -242,8 +242,7 @@
             <div class="section-header">{{ showAddDecisionSection ? '6）仓位建议' : '5）仓位建议' }}</div>
             <div class="strategy-pill" :class="actionBadgeClass">{{ positionAdvice?.suggestion || '-' }}</div>
             <div class="section-emphasis">{{ positionAdvice?.reason || '-' }}</div>
-            <div v-if="positionAdviceSizingSummary" class="section-note">{{ positionAdviceSizingSummary }}</div>
-            <div v-if="positionAdvice?.sizing_note" class="section-note">{{ positionAdvice?.sizing_note }}</div>
+            <div v-if="positionAdviceSizingDisplay" class="section-note">{{ positionAdviceSizingDisplay }}</div>
             <div class="section-note">错了看哪里失效：{{ positionAdvice?.invalidation_level || '-' }}</div>
             <div class="section-note">{{ positionAdvice?.invalidation_action || '-' }}</div>
           </section>
@@ -481,7 +480,7 @@ const resolveRetraceFloorRatio = (tsCode) => {
   const code = String(tsCode || '').toUpperCase()
   if (code.endsWith('.BJ')) return 0.82
   if (code.startsWith('300') || code.startsWith('301') || code.startsWith('688')) return 0.88
-  return 0.92
+  return 0.93
 }
 const parseZoneCenter = (value) => {
   const text = String(value || '').trim()
@@ -743,6 +742,9 @@ const positionAdviceSizingSummary = computed(() => {
   const lotText = lots ? `，约 ${lots} 手` : ''
   return `按当前价 ${Number(referencePrice).toFixed(2)} 测算：${pctText}建议先买 ${formatShares(shares)}${lotText}，预计占用 ${formatMoney(amount)} 元。`
 })
+const positionAdviceSizingDisplay = computed(() => (
+  positionAdviceSizingSummary.value || positionAdvice.value?.sizing_note || ''
+))
 
 watch(
   () => [props.modelValue, props.tsCode, props.tradeDate],

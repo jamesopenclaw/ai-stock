@@ -1434,7 +1434,7 @@ class BuyPointSopService:
     def _retrace_reference_floor_ratio(self, ts_code: str) -> float:
         """
         回踩确认位距离现价的容忍度按板块放宽：
-        - 主板 10cm：默认不超过约 8%
+        - 主板 10cm：默认不超过约 7%
         - 创业板/科创板 20cm：默认不超过约 12%
         - 北交所 30cm：默认不超过约 18%
         """
@@ -1443,7 +1443,7 @@ class BuyPointSopService:
             return 0.82
         if code.startswith(("300", "301", "688")):
             return 0.88
-        return 0.92
+        return 0.93
 
     def _select_invalid_ref(
         self,

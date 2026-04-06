@@ -747,7 +747,7 @@ def test_buy_point_sop_retrace_confirm_ref_does_not_use_far_below_spot_anchor():
 
 
 def test_buy_point_sop_retrace_floor_ratio_is_board_aware():
-    assert buy_point_sop_service._retrace_reference_floor_ratio("002463.SZ") == 0.92
+    assert buy_point_sop_service._retrace_reference_floor_ratio("002463.SZ") == 0.93
     assert buy_point_sop_service._retrace_reference_floor_ratio("301408.SZ") == 0.88
     assert buy_point_sop_service._retrace_reference_floor_ratio("688521.SH") == 0.88
     assert buy_point_sop_service._retrace_reference_floor_ratio("830001.BJ") == 0.82
