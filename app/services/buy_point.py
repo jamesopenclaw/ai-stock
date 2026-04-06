@@ -102,6 +102,7 @@ class BuyPointService:
 
             buy_point = self._analyze_stock_buy_point(stock, market_env, account, review_bias_profile)
             buy_point = self._apply_display_quote(buy_point, stock, display_quote_map)
+            buy_point = self._apply_recommended_order_sizing(buy_point, stock, market_env, account)
             analyzed_count += 1
 
             if (
@@ -174,6 +175,72 @@ class BuyPointService:
         )
         return buy_point
 
+    def _apply_recommended_order_sizing(
+        self,
+        buy_point: BuyPointOutput,
+        stock: StockOutput,
+        market_env,
+        account: Optional[AccountInput],
+    ) -> BuyPointOutput:
+        if not account or buy_point.buy_signal_tag != BuySignalTag.CAN_BUY:
+            return buy_point
+        if stock.stock_pool_tag != StockPoolTag.ACCOUNT_EXECUTABLE:
+            return buy_point
+
+        order_pct = self._resolve_recommended_order_pct(stock, market_env)
+        current_price = buy_point.buy_current_price
+        if current_price is None or current_price <= 0 or order_pct <= 0:
+            return buy_point
+
+        total_asset = float(getattr(account, "total_asset", 0) or 0)
+        available_cash = max(float(getattr(account, "available_cash", 0) or 0), 0.0)
+        if total_asset <= 0 or available_cash <= 0:
+            return buy_point
+
+        effective_order_pct = min(order_pct, available_cash / total_asset if total_asset > 0 else 0.0)
+        if effective_order_pct <= 0:
+            return buy_point
+
+        lot_size = 100
+        lot_cost = float(current_price) * lot_size
+        if lot_cost <= 0:
+            return buy_point
+
+        desired_amount = min(total_asset * effective_order_pct, available_cash)
+        lots = int(desired_amount // lot_cost)
+        if lots <= 0:
+            buy_point.recommended_order_pct = round(effective_order_pct, 4)
+            buy_point.sizing_reference_price = round(float(current_price), 2)
+            buy_point.sizing_note = (
+                f"按当前价 {float(current_price):.2f} 测算，可用资金不足以买入 1 手（100 股），先不下单。"
+            )
+            return buy_point
+
+        shares = lots * lot_size
+        amount = round(shares * float(current_price), 2)
+        buy_point.recommended_order_pct = round(effective_order_pct, 4)
+        buy_point.recommended_order_amount = amount
+        buy_point.recommended_shares = shares
+        buy_point.recommended_lots = lots
+        buy_point.sizing_reference_price = round(float(current_price), 2)
+        buy_point.sizing_note = (
+            f"按当前价 {float(current_price):.2f} 测算，并按 A 股 100 股整手取整；"
+            f"建议先买 {shares} 股左右，预计占用 {amount:.2f} 元。"
+        )
+        return buy_point
+
+    def _resolve_recommended_order_pct(self, stock: StockOutput, market_env) -> float:
+        entry_mode = str(getattr(stock, "account_entry_mode", "") or "")
+        if entry_mode == "defense_trial":
+            return 0.1
+        if entry_mode == "aggressive_trial":
+            return 0.1 if market_env.market_env_tag != MarketEnvTag.ATTACK else 0.15
+        if market_env.market_env_tag == MarketEnvTag.DEFENSE:
+            return 0.1
+        if market_env.market_env_tag == MarketEnvTag.NEUTRAL:
+            return 0.15
+        return 0.2
+
     def _analyze_stock_buy_point(
         self,
         stock: StockOutput,
@@ -228,6 +295,7 @@ class BuyPointService:
             candidate_bucket_tag=stock.candidate_bucket_tag,
             stock_pool_tag=stock.stock_pool_tag.value if stock.stock_pool_tag else "",
             pool_entry_reason=stock.pool_entry_reason or "",
+            account_entry_mode=stock.account_entry_mode or "",
             hard_filter_failed_rules=list(stock.hard_filter_failed_rules or []),
             hard_filter_failed_count=int(stock.hard_filter_failed_count or 0),
             hard_filter_pass_count=int(stock.hard_filter_pass_count or 0),
@@ -250,6 +318,12 @@ class BuyPointService:
             buy_risk_level=risk_level,
             buy_account_fit=account_fit,
             buy_comment=comment,
+            recommended_order_pct=None,
+            recommended_order_amount=None,
+            recommended_shares=None,
+            recommended_lots=None,
+            sizing_reference_price=None,
+            sizing_note=None,
             review_bias_score=review_bias["score"],
             review_bias_label=review_bias["label"],
             review_bias_reason=review_bias["reason"],

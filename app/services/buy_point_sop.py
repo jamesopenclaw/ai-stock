@@ -207,6 +207,7 @@ class BuyPointSopService:
         position_advice = self._build_position_advice(
             context.account,
             realtime_market_env,
+            target_input,
             account_context,
             direction_exposure,
             daily_judgement,
@@ -803,6 +804,7 @@ class BuyPointSopService:
         self,
         account,
         market_env,
+        target_input,
         account_context: BuyPointSopAccountContext,
         direction_exposure: DirectionExposureSnapshot,
         daily_judgement: BuyPointSopDailyJudgement,
@@ -818,6 +820,7 @@ class BuyPointSopService:
         if direction_exposure.has_same_code:
             return self._build_add_position_advice(
                 account,
+                target_input,
                 account_context,
                 order_plan,
                 add_position_decision,
@@ -853,18 +856,34 @@ class BuyPointSopService:
             else:
                 reason = "买点还需要盘中确认或账户已有约束，只适合试错仓位。"
 
+        recommended_position_pct = self._resolve_entry_position_pct(suggestion, market_env)
+        order_sizing = self._build_order_sizing(
+            account,
+            suggestion=suggestion,
+            reference_price=self._round_price(getattr(target_input, "close", None)),
+            recommended_position_pct=recommended_position_pct,
+            recommended_order_pct=recommended_position_pct,
+        )
         invalidation_level = order_plan.below_no_buy
         return BuyPointSopPositionAdvice(
             suggestion=suggestion,
             reason=reason,
             invalidation_level=invalidation_level,
             invalidation_action="跌破失效位后不再找理由硬扛，直接放弃这笔计划。",
+            recommended_position_pct=order_sizing["recommended_position_pct"],
+            recommended_order_pct=order_sizing["recommended_order_pct"],
+            recommended_order_amount=order_sizing["recommended_order_amount"],
+            recommended_shares=order_sizing["recommended_shares"],
+            recommended_lots=order_sizing["recommended_lots"],
+            sizing_reference_price=order_sizing["sizing_reference_price"],
+            sizing_note=order_sizing["sizing_note"],
             risk_control_action="新开仓失败直接撤退，不把试错单拖成重仓问题单。",
         )
 
     def _build_add_position_advice(
         self,
         account,
+        target_input,
         account_context: BuyPointSopAccountContext,
         order_plan: BuyPointSopOrderPlan,
         add_position_decision: BuyPointSopAddPositionDecision,
@@ -888,6 +907,13 @@ class BuyPointSopService:
             suggestion = "继续持有"
             reason = add_position_decision.reason or "当前不满足加仓条件，先保持底仓观察。"
 
+        order_sizing = self._build_order_sizing(
+            account,
+            suggestion=suggestion,
+            reference_price=self._round_price(getattr(target_input, "close", None)),
+            recommended_position_pct=plan_position_pct,
+            recommended_order_pct=increment_position_pct,
+        )
         return BuyPointSopPositionAdvice(
             suggestion=suggestion,
             reason=reason,
@@ -896,6 +922,13 @@ class BuyPointSopService:
             plan_position_pct=round(plan_position_pct, 4),
             increment_position_pct=round(increment_position_pct, 4),
             max_position_pct=max_position_pct,
+            recommended_position_pct=order_sizing["recommended_position_pct"],
+            recommended_order_pct=order_sizing["recommended_order_pct"],
+            recommended_order_amount=order_sizing["recommended_order_amount"],
+            recommended_shares=order_sizing["recommended_shares"],
+            recommended_lots=order_sizing["recommended_lots"],
+            sizing_reference_price=order_sizing["sizing_reference_price"],
+            sizing_note=order_sizing["sizing_note"],
             risk_control_action="加仓失败先撤新增仓，不把舒服单拖成高波动重仓单。",
             exit_priority="先撤新增仓",
         )
@@ -1027,6 +1060,88 @@ class BuyPointSopService:
         if total_asset <= 0 or market_price <= 0 or holding_qty <= 0:
             return 0.0
         return min(1.0, (market_price * holding_qty) / total_asset)
+
+    def _resolve_entry_position_pct(self, suggestion: str, market_env) -> float:
+        if suggestion == "中仓参与":
+            return 0.3
+        if suggestion != "轻仓试错":
+            return 0.0
+        if market_env.market_env_tag == MarketEnvTag.DEFENSE:
+            return 0.1
+        if market_env.market_env_tag == MarketEnvTag.NEUTRAL:
+            return 0.15
+        return 0.2
+
+    def _build_order_sizing(
+        self,
+        account,
+        suggestion: str,
+        reference_price: Optional[float],
+        recommended_position_pct: float,
+        recommended_order_pct: float,
+    ) -> Dict[str, object]:
+        if suggestion in {"不出手", "继续持有"}:
+            return self._empty_order_sizing()
+
+        total_asset = float(getattr(account, "total_asset", 0) or 0)
+        available_cash = max(float(getattr(account, "available_cash", 0) or 0), 0.0)
+        reference_price = self._round_price(reference_price)
+        if (
+            total_asset <= 0
+            or available_cash <= 0
+            or reference_price is None
+            or reference_price <= 0
+            or recommended_order_pct <= 0
+        ):
+            return self._empty_order_sizing()
+
+        lot_size = 100
+        effective_position_pct = min(
+            max(float(recommended_position_pct or 0), 0.0),
+            available_cash / total_asset if total_asset > 0 else 0.0,
+        )
+        effective_order_pct = min(
+            max(float(recommended_order_pct or 0), 0.0),
+            available_cash / total_asset if total_asset > 0 else 0.0,
+        )
+        desired_amount = min(total_asset * effective_order_pct, available_cash)
+        lot_cost = reference_price * lot_size
+        recommended_lots = int(desired_amount // lot_cost) if lot_cost > 0 else 0
+        recommended_shares = recommended_lots * lot_size
+        if recommended_shares <= 0:
+            return {
+                "recommended_position_pct": round(effective_position_pct, 4) if effective_position_pct > 0 else None,
+                "recommended_order_pct": round(effective_order_pct, 4) if effective_order_pct > 0 else None,
+                "recommended_order_amount": None,
+                "recommended_shares": None,
+                "recommended_lots": None,
+                "sizing_reference_price": reference_price,
+                "sizing_note": f"按当前价 {reference_price:.2f} 测算，可用资金不足以买入 1 手（100 股），先不下单。",
+            }
+        recommended_order_amount = round(recommended_shares * reference_price, 2)
+        return {
+            "recommended_position_pct": round(effective_position_pct, 4) if effective_position_pct > 0 else None,
+            "recommended_order_pct": round(effective_order_pct, 4) if effective_order_pct > 0 else None,
+            "recommended_order_amount": recommended_order_amount,
+            "recommended_shares": recommended_shares,
+            "recommended_lots": recommended_lots,
+            "sizing_reference_price": reference_price,
+            "sizing_note": (
+                f"按当前价 {reference_price:.2f} 测算，并按 A 股 100 股整手取整；"
+                f"建议先买 {recommended_shares} 股左右，预计占用 {recommended_order_amount:.2f} 元。"
+            ),
+        }
+
+    def _empty_order_sizing(self) -> Dict[str, object]:
+        return {
+            "recommended_position_pct": None,
+            "recommended_order_pct": None,
+            "recommended_order_amount": None,
+            "recommended_shares": None,
+            "recommended_lots": None,
+            "sizing_reference_price": None,
+            "sizing_note": None,
+        }
 
     def _safe_float(self, payload: Optional[dict], key: str) -> Optional[float]:
         if not payload:

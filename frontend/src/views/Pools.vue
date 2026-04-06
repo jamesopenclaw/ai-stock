@@ -55,6 +55,10 @@
           :closable="false"
           class="page-alert"
         />
+        <DataFreshnessBar
+          :items="poolsFreshnessItems"
+          :note="poolsFreshnessNote"
+        />
         <section class="command-center">
           <article class="summary-card summary-card-market">
             <div class="summary-kicker">市场环境</div>
@@ -910,7 +914,7 @@
                   <span>{{ stock.llm_risk_note || stock.sell_comment || stock.stock_comment || '-' }}</span>
                   <div class="footer-actions">
                     <span class="footer-flag">{{ holdingFooterFlag(stock) }}</span>
-                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                    <el-button class="sell-analysis-btn" size="small" @click="openSellAnalysis(stock)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '持仓型')">全面体检</el-button>
                   </div>
                 </div>
@@ -936,6 +940,14 @@
       :current-price="buyAnalysisStock.currentPrice"
       :current-change-pct="buyAnalysisStock.currentChangePct"
     />
+    <SellAnalysisDrawer
+      v-model="sellAnalysisVisible"
+      :ts-code="sellAnalysisStock.tsCode"
+      :stock-name="sellAnalysisStock.stockName"
+      :trade-date="displayDate"
+      :current-price="sellAnalysisStock.currentPrice"
+      :current-pnl-pct="sellAnalysisStock.currentPnlPct"
+    />
   </div>
 </template>
 
@@ -946,6 +958,8 @@ import { stockApi, decisionApi, marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
+import SellAnalysisDrawer from '../components/SellAnalysisDrawer.vue'
+import DataFreshnessBar from '../components/DataFreshnessBar.vue'
 import { formatLocalDateTime, formatLocalTime } from '../utils/datetime'
 
 const loading = ref(false)
@@ -967,6 +981,8 @@ const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
 const buyAnalysisVisible = ref(false)
 const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentChangePct: null })
+const sellAnalysisVisible = ref(false)
+const sellAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentPnlPct: null })
 const reviewStatsData = ref(null)
 const marketEnvData = ref(null)
 const loadError = ref('')
@@ -986,6 +1002,41 @@ const focusSector = computed(() => String(route.query.focus_sector || '').trim()
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
 const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
 const isRadarMode = computed(() => poolMode.value === 'radar')
+const poolsFreshnessItems = computed(() => [
+  {
+    label: '模式',
+    value: isRadarMode.value ? '实时雷达' : '稳定模式',
+    tone: isRadarMode.value ? 'strong' : 'muted',
+  },
+  {
+    label: '请求日',
+    value: displayDate.value || '-',
+    tone: 'strong',
+  },
+  {
+    label: '候选口径',
+    value: poolsData.value.resolved_trade_date
+      ? (poolsData.value.resolved_trade_date === displayDate.value
+          ? '当日候选'
+          : `回退到 ${poolsData.value.resolved_trade_date}`)
+      : '待加载',
+    tone: poolsData.value.resolved_trade_date === displayDate.value ? 'strong' : 'warn',
+  },
+  {
+    label: '板块口径',
+    value: poolsData.value.sector_scan_resolved_trade_date
+      ? (poolsData.value.sector_scan_resolved_trade_date === displayDate.value
+          ? '当日扫描'
+          : `回退到 ${poolsData.value.sector_scan_resolved_trade_date}`)
+      : '待加载',
+    tone: poolsData.value.sector_scan_resolved_trade_date === displayDate.value ? 'strong' : 'warn',
+  },
+])
+const poolsFreshnessNote = computed(() => (
+  isRadarMode.value
+    ? '实时雷达适合盯盘，但看到异动后仍要回买点或卖点页确认触发条件。'
+    : '稳定模式优先看最近稳定结论，更适合盘前和盘后判断。'
+))
 const buyAnalysisTradeDate = computed(() => (
   isRadarMode.value
     ? displayDate.value
@@ -1741,6 +1792,16 @@ const openBuyAnalysis = (stock) => {
   buyAnalysisVisible.value = true
 }
 
+const openSellAnalysis = (stock) => {
+  sellAnalysisStock.value = {
+    tsCode: stock.ts_code,
+    stockName: stock.stock_name || stock.ts_code,
+    currentPrice: stock.close ?? null,
+    currentPnlPct: stock.pnl_pct ?? null,
+  }
+  sellAnalysisVisible.value = true
+}
+
 const loadMarketEnv = async (options = {}) => {
   try {
     const tradeDate = getLocalDate()
@@ -2390,6 +2451,29 @@ onUnmounted(() => {
 
 .buy-analysis-btn.el-button:hover,
 .buy-analysis-btn.el-button:focus-visible {
+  transform: translateY(-1px);
+}
+
+.sell-analysis-btn.el-button {
+  --el-button-bg-color: rgba(255, 118, 102, 0.18);
+  --el-button-border-color: rgba(255, 141, 126, 0.48);
+  --el-button-text-color: #ffd9d2;
+  --el-button-hover-bg-color: rgba(255, 128, 112, 0.28);
+  --el-button-hover-border-color: rgba(255, 161, 148, 0.68);
+  --el-button-hover-text-color: #fff3f0;
+  --el-button-active-bg-color: rgba(230, 97, 82, 0.34);
+  --el-button-active-border-color: rgba(255, 163, 148, 0.74);
+  --el-button-active-text-color: #ffffff;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(255, 172, 160, 0.12), 0 6px 16px rgba(140, 57, 46, 0.16);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.sell-analysis-btn.el-button:hover,
+.sell-analysis-btn.el-button:focus-visible {
   transform: translateY(-1px);
 }
 

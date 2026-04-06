@@ -18,9 +18,10 @@
       </template>
       <el-skeleton v-if="loading" :rows="14" animated />
       <template v-else>
-        <div v-if="dataNotice" class="data-notice">
-          {{ dataNotice }}
-        </div>
+        <DataFreshnessBar
+          :items="freshnessItems"
+          :note="freshnessNote"
+        />
         <div v-if="marketEnv" class="market-hero-shell">
           <section class="hero-overview">
             <div class="hero-tag-panel">
@@ -185,6 +186,7 @@ import { computed, ref, onMounted } from 'vue'
 import { marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import { formatLocalTime } from '../utils/datetime'
+import DataFreshnessBar from '../components/DataFreshnessBar.vue'
 
 const loading = ref(false)
 const marketEnv = ref(null)
@@ -286,6 +288,50 @@ const quoteMetaLine = (source, quoteTime, sourceTradeDate, requestedTradeDate = 
   if (normalizedSourceDate) return `${label} ${normalizedSourceDate}`
   return label
 }
+
+const primaryIndexRow = computed(() => indexData.value?.[0] || null)
+const freshnessItems = computed(() => {
+  const envFallback = resolvedDate.value && resolvedDate.value !== displayDate.value
+  const statsValue = marketStatsUnavailable.value
+    ? `实时不可用${staleFallbackSuffix.value || ''}`
+    : statsRealtimeStatus.value === 'live'
+      ? '盘中实时'
+      : statsRealtimeStatus.value === 'stale'
+        ? '最近成功缓存'
+        : (resolvedDate.value || displayDate.value || '-')
+
+  return [
+    { label: '请求日', value: displayDate.value || '-', tone: 'strong' },
+    {
+      label: '环境口径',
+      value: envFallback ? `回退到 ${resolvedDate.value}` : '当日口径',
+      tone: envFallback ? 'warn' : 'strong',
+    },
+    {
+      label: '指数行情',
+      value: primaryIndexRow.value
+        ? quoteMetaLine(
+            primaryIndexRow.value.data_source,
+            primaryIndexRow.value.quote_time,
+            primaryIndexRow.value.trade_date,
+            displayDate.value
+          )
+        : '待加载',
+      tone: primaryIndexRow.value && isRealtimeSource(primaryIndexRow.value.data_source) ? 'strong' : 'muted',
+    },
+    {
+      label: '情绪统计',
+      value: statsValue,
+      tone: marketStatsUnavailable.value ? 'warn' : statsRealtimeStatus.value === 'live' ? 'strong' : 'muted',
+    },
+  ]
+})
+
+const freshnessNote = computed(() => (
+  [dataNotice.value, indexNotice.value, statsNotice.value]
+    .filter(Boolean)
+    .join(' ')
+))
 
 const parseMarketComment = (comment) => {
   const segments = String(comment || '')

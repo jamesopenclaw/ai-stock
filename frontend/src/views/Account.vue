@@ -2,6 +2,10 @@
   <div class="account-view">
     <el-skeleton v-if="pageLoading" :rows="16" animated />
     <template v-else>
+    <DataFreshnessBar
+      :items="accountFreshnessItems"
+      :note="accountFreshnessNote"
+    />
     <el-row :gutter="20" class="equal-height">
       <el-col :span="12">
         <el-card class="fill-card">
@@ -270,6 +274,7 @@ import { accountApi, stockApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import { formatLocalTime } from '../utils/datetime'
+import DataFreshnessBar from '../components/DataFreshnessBar.vue'
 
 const profile = ref(null)
 const status = ref(null)
@@ -367,6 +372,29 @@ const positionsQuoteSummary = computed(() => {
   const time = formatLocalTime(latest)
   return `${prefix} 最新时间 ${time}。`
 })
+const positionRealtimeCount = computed(() => (
+  positions.value.filter((row) => row?.data_source && String(row.data_source).startsWith('realtime_')).length
+))
+const accountFreshnessItems = computed(() => [
+  { label: '查看日', value: getLocalDate(), tone: 'strong' },
+  {
+    label: '价格口径',
+    value: positions.value.length
+      ? (!positionRealtimeCount.value
+          ? '全部为回退价格'
+          : positionRealtimeCount.value === positions.value.length
+            ? '全部为盘中实时'
+            : `混合口径 ${positionRealtimeCount.value}/${positions.value.length} 为盘中实时`)
+      : '当前无持仓',
+    tone: positionRealtimeCount.value ? 'strong' : 'warn',
+  },
+  {
+    label: '持仓数量',
+    value: `${positions.value.length} 只`,
+    tone: 'muted',
+  },
+])
+const accountFreshnessNote = computed(() => positionsQuoteSummary.value || '当前账户页优先回答仓位、可卖状态和持仓动作。')
 const newPosition = ref({
   ts_code: '',
   stock_name: '',

@@ -16,6 +16,10 @@
         <div v-if="loadError" class="load-error">
           {{ loadError }}
         </div>
+        <DataFreshnessBar
+          :items="buyFreshnessItems"
+          :note="buyFreshnessNote"
+        />
         <div v-if="buyData.market_env_tag" class="decision-overview">
           <div v-if="reviewBucketFilter" class="focus-context focus-context-review">
             <div class="focus-context-copy">
@@ -98,10 +102,18 @@
             <template #label>
               <span>可买 <em class="tab-count">{{ primaryAvailablePoints.length }}/{{ availablePoints.length }}</em></span>
             </template>
-            <el-empty
-              v-if="!availablePoints.length"
-              :description="buyData.market_env_tag === '防守' ? '当前是防守环境，只有极少数试错票会出现在这里' : '暂无可买标的'"
-            />
+            <section v-if="!availablePoints.length" class="no-trade-state">
+              <div class="no-trade-kicker">今日不开新仓</div>
+              <div class="no-trade-title">
+                {{ buyData.market_env_tag === '防守' ? '当前是防守环境，先处理旧仓和风险。' : '当前没有满足执行条件的开仓标的。' }}
+              </div>
+              <div class="no-trade-copy">{{ buyFreshnessNote }}</div>
+              <div class="no-trade-actions">
+                <el-button type="primary" plain @click="router.push('/sell')">先看卖点分析</el-button>
+                <el-button plain @click="router.push('/pools')">回三池分类</el-button>
+                <el-button plain @click="router.push('/review')">看复盘证据</el-button>
+              </div>
+            </section>
             <template v-else>
               <div class="available-group-head">
                 <div>
@@ -113,21 +125,22 @@
                 <div class="available-group-meta">总可买 {{ availablePoints.length }} 只</div>
               </div>
 	            <div class="signal-grid">
-	              <article
-	                v-for="point in primaryAvailablePoints"
-	                :key="point.ts_code"
-	                :class="['signal-card', 'signal-card-buy', { 'signal-card-focused': matchesFocusSector(point) }]"
-              >
+		              <article
+		                v-for="point in primaryAvailablePoints"
+		                :key="point.ts_code"
+		                :class="['signal-card', 'signal-card-buy', entryModeCardClass(point), { 'signal-card-focused': matchesFocusSector(point) }]"
+	              >
                 <div class="signal-card-header">
                   <div>
                     <div class="signal-stock">{{ point.stock_name }}</div>
                     <div class="signal-code">{{ point.ts_code }}</div>
                   </div>
-                  <div class="signal-badges">
-                    <el-tag size="small" type="primary">{{ point.buy_point_type }}</el-tag>
-                    <el-tag size="small" :type="riskTagType(point.buy_risk_level)">{{ point.buy_risk_level }}风险</el-tag>
-                    <el-tag size="small" :type="accountFitType(point.buy_account_fit)">{{ point.buy_account_fit }}</el-tag>
-                    <el-tooltip v-if="point.review_bias_label" :content="point.review_bias_reason || point.review_bias_label" placement="top">
+	                  <div class="signal-badges">
+	                    <el-tag size="small" type="primary">{{ point.buy_point_type }}</el-tag>
+	                    <el-tag v-if="entryModeBadgeLabel(point)" size="small" :type="entryModeBadgeType(point)">{{ entryModeBadgeLabel(point) }}</el-tag>
+	                    <el-tag size="small" :type="riskTagType(point.buy_risk_level)">{{ point.buy_risk_level }}风险</el-tag>
+	                    <el-tag size="small" :type="accountFitType(point.buy_account_fit)">{{ point.buy_account_fit }}</el-tag>
+	                    <el-tooltip v-if="point.review_bias_label" :content="point.review_bias_reason || point.review_bias_label" placement="top">
                       <el-tag size="small" :type="reviewBiasTagType(point.review_bias_label)">
                         {{ point.review_bias_label }}
                       </el-tag>
@@ -144,6 +157,9 @@
                 <div class="signal-intent">
                   {{ primaryActionLine(point, buyData.market_env_tag) }}
                 </div>
+	                <div v-if="buySizingLine(point)" :class="['signal-sizing', entryModeSizingClass(point)]">
+	                  {{ buySizingLine(point) }}
+	                </div>
                 <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (point.hard_filter_failed_count || 0) > 0 }">
                   {{ hardFilterLine(point) }}
                 </div>
@@ -306,21 +322,22 @@
                 <div class="available-group-meta">{{ backupAvailablePoints.length }} 只</div>
               </div>
               <div v-if="backupAvailablePoints.length" class="signal-grid signal-grid-secondary">
-                <article
-                  v-for="point in backupAvailablePoints"
-                  :key="`backup-${point.ts_code}`"
-                  class="signal-card signal-card-watch"
-                >
+	                <article
+	                  v-for="point in backupAvailablePoints"
+	                  :key="`backup-${point.ts_code}`"
+	                  :class="['signal-card', 'signal-card-watch', entryModeCardClass(point)]"
+	                >
                   <div class="signal-card-header">
                     <div>
                       <div class="signal-stock">{{ point.stock_name }}</div>
                       <div class="signal-code">{{ point.ts_code }}</div>
                     </div>
-                    <div class="signal-badges">
-                      <el-tag size="small" type="warning">备选</el-tag>
-                      <el-tag size="small" type="primary">{{ point.buy_point_type }}</el-tag>
-                    </div>
-                  </div>
+	                    <div class="signal-badges">
+	                      <el-tag size="small" type="warning">备选</el-tag>
+	                      <el-tag size="small" type="primary">{{ point.buy_point_type }}</el-tag>
+	                      <el-tag v-if="entryModeBadgeLabel(point)" size="small" :type="entryModeBadgeType(point)">{{ entryModeBadgeLabel(point) }}</el-tag>
+	                    </div>
+	                  </div>
 
                   <div class="signal-meta">
                     <span>{{ poolTagLabel(point.stock_pool_tag) }}</span>
@@ -563,6 +580,7 @@ import { authState } from '../auth'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
+import DataFreshnessBar from '../components/DataFreshnessBar.vue'
 import { formatLocalTime } from '../utils/datetime'
 
 const loading = ref(false)
@@ -889,9 +907,53 @@ const reviewBiasTagType = (label) => {
   return 'info'
 }
 
+const entryModeBadgeLabel = (point) => {
+  const mode = String(point?.account_entry_mode || '')
+  if (mode === 'defense_trial') return '防守试错'
+  if (mode === 'aggressive_trial') return '进攻试错'
+  if (mode === 'standard') return '标准'
+  return ''
+}
+
+const entryModeBadgeType = (point) => {
+  const mode = String(point?.account_entry_mode || '')
+  if (mode === 'defense_trial') return 'danger'
+  if (mode === 'aggressive_trial') return 'warning'
+  return 'success'
+}
+
+const entryModeCardClass = (point) => {
+  const mode = String(point?.account_entry_mode || '')
+  if (mode === 'defense_trial') return 'signal-card-defense-trial'
+  if (mode === 'aggressive_trial') return 'signal-card-aggressive-trial'
+  if (mode === 'standard') return 'signal-card-standard'
+  return ''
+}
+
+const entryModeSizingClass = (point) => {
+  const mode = String(point?.account_entry_mode || '')
+  if (mode === 'defense_trial') return 'signal-sizing-defense-trial'
+  if (mode === 'aggressive_trial') return 'signal-sizing-aggressive-trial'
+  if (mode === 'standard') return 'signal-sizing-standard'
+  return ''
+}
+
 const formatPrice = (value) => {
   if (value === null || value === undefined) return '-'
   return Number(value).toFixed(2)
+}
+
+const formatMoney = (value) => {
+  if (value === null || value === undefined) return '-'
+  return Number(value).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })
+}
+
+const formatShares = (value) => {
+  if (value === null || value === undefined) return '-'
+  return `${Number(value).toLocaleString('zh-CN')} 股`
 }
 
 const formatRatio = (value) => {
@@ -938,6 +1000,42 @@ const quoteMetaLine = (source, quoteTime, fallbackDate) => {
   if (fallbackDate) return `${label} ${fallbackDate}`
   return label
 }
+
+const allBuyCandidates = computed(() => [
+  ...(buyData.value.available_buy_points || []),
+  ...(buyData.value.observe_buy_points || []),
+  ...(buyData.value.not_buy_points || []),
+])
+const buyRealtimeCount = computed(() => allBuyCandidates.value.filter((point) => isRealtimeSource(point.buy_data_source)).length)
+const buyFreshnessSummary = computed(() => {
+  const total = allBuyCandidates.value.length
+  if (!total) return '当前无候选'
+  if (!buyRealtimeCount.value) return '全部为回退价格'
+  if (buyRealtimeCount.value === total) return '全部为盘中实时'
+  return `混合口径 ${buyRealtimeCount.value}/${total} 为盘中实时`
+})
+const buyFreshnessItems = computed(() => [
+  { label: '分析日', value: displayDate.value || '-', tone: 'strong' },
+  {
+    label: '价格口径',
+    value: buyFreshnessSummary.value,
+    tone: buyRealtimeCount.value ? 'strong' : 'warn',
+  },
+  {
+    label: '候选状态',
+    value: `可买 ${availablePoints.value.length} / 观察 ${observePoints.value.length} / 放弃 ${notBuyPoints.value.length}`,
+    tone: availablePoints.value.length ? 'muted' : 'warn',
+  },
+])
+const buyFreshnessNote = computed(() => {
+  if (!availablePoints.value.length && !observePoints.value.length) {
+    return '今天不建议开新仓，优先回三池和卖点页处理旧仓。'
+  }
+  if (!availablePoints.value.length) {
+    return '当前没有直接执行票，先盯观察池，确认条件不到齐就不要抢先手。'
+  }
+  return '先看价格口径和触发位，再决定是观察还是动手。'
+})
 
 const poolTagLabel = (tag) => {
   if (tag === '账户可参与池') return '账户可参与池'
@@ -988,6 +1086,20 @@ const primaryActionLine = (point, envTag) => {
   const invalid = formatPrice(point.buy_invalid_price)
   const prefix = envTag === '防守' ? '轻仓试错' : '执行计划'
   return `${prefix}：到 ${trigger} 附近再看，跌回 ${invalid} 下方就放弃。`
+}
+
+const buySizingLine = (point) => {
+  if (!point?.recommended_shares || !point?.recommended_order_amount) return ''
+  const pct = point.recommended_order_pct ? `${(Number(point.recommended_order_pct) * 100).toFixed(0)}%` : null
+  const price = point.sizing_reference_price ? Number(point.sizing_reference_price).toFixed(2) : formatPrice(point.buy_current_price)
+  const mode = String(point.account_entry_mode || '')
+  const modeLabel = mode === 'defense_trial'
+    ? '防守试错'
+    : mode === 'aggressive_trial'
+      ? '进攻试错'
+      : '标准执行'
+  const head = pct ? `${modeLabel} / 先手仓约 ${pct}` : `${modeLabel} / 先手仓`
+  return `${head}：按 ${price} 测算，建议先买 ${formatShares(point.recommended_shares)}，约 ${formatMoney(point.recommended_order_amount)} 元。`
 }
 
 const observeActionLine = (point, envTag) => {
@@ -1161,6 +1273,39 @@ watch(
   border: 1px solid rgba(255, 120, 120, 0.16);
   color: var(--color-text-main);
   font-size: 13px;
+}
+
+.no-trade-state {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(224, 32, 32, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.no-trade-kicker {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ff9a9f;
+  font-weight: 700;
+}
+
+.no-trade-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.no-trade-copy {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.no-trade-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .focus-context {
@@ -1472,6 +1617,27 @@ watch(
   box-shadow: inset 0 1px 0 rgba(80, 190, 140, 0.12);
 }
 
+.signal-card-standard {
+  border-color: rgba(68, 209, 159, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(80, 190, 140, 0.16),
+    inset 0 0 0 1px rgba(68, 209, 159, 0.06);
+}
+
+.signal-card-aggressive-trial {
+  border-color: rgba(243, 194, 77, 0.2);
+  box-shadow:
+    inset 0 1px 0 rgba(243, 194, 77, 0.18),
+    inset 0 0 0 1px rgba(243, 194, 77, 0.06);
+}
+
+.signal-card-defense-trial {
+  border-color: rgba(245, 110, 128, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 110, 128, 0.18),
+    inset 0 0 0 1px rgba(245, 110, 128, 0.08);
+}
+
 .signal-card-watch {
   box-shadow: inset 0 1px 0 rgba(243, 194, 77, 0.12);
 }
@@ -1528,6 +1694,31 @@ watch(
   border: 1px solid rgba(68, 209, 159, 0.14);
   line-height: 1.55;
   font-size: 13px;
+}
+
+.signal-sizing {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(68, 209, 159, 0.05);
+  border: 1px dashed rgba(68, 209, 159, 0.16);
+  color: var(--color-text-main);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.signal-sizing-standard {
+  background: rgba(68, 209, 159, 0.05);
+  border-color: rgba(68, 209, 159, 0.2);
+}
+
+.signal-sizing-aggressive-trial {
+  background: rgba(243, 194, 77, 0.07);
+  border-color: rgba(243, 194, 77, 0.22);
+}
+
+.signal-sizing-defense-trial {
+  background: rgba(245, 110, 128, 0.07);
+  border-color: rgba(245, 110, 128, 0.24);
 }
 
 .signal-intent-watch {

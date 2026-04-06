@@ -556,6 +556,7 @@ class BuyPointOutput(BaseModel):
     candidate_bucket_tag: str = Field(default="", description="候选分层标签")
     stock_pool_tag: str = Field(default="", description="来源池标签")
     pool_entry_reason: str = Field(default="", description="入池原因")
+    account_entry_mode: str = Field(default="", description="账户执行模式")
     hard_filter_failed_rules: List[str] = Field(default_factory=list, description="硬过滤未通过项")
     hard_filter_failed_count: int = Field(default=0, description="硬过滤失败条数")
     hard_filter_pass_count: int = Field(default=0, description="硬过滤通过条数")
@@ -582,6 +583,12 @@ class BuyPointOutput(BaseModel):
     buy_account_fit: str = Field(..., description="适合/一般/不适合")
     # 简评
     buy_comment: str = ""
+    recommended_order_pct: Optional[float] = Field(None, description="建议本次下单仓位比例")
+    recommended_order_amount: Optional[float] = Field(None, description="建议本次下单金额")
+    recommended_shares: Optional[int] = Field(None, description="建议本次下单股数")
+    recommended_lots: Optional[int] = Field(None, description="建议本次下单手数")
+    sizing_reference_price: Optional[float] = Field(None, description="测算参考价格")
+    sizing_note: Optional[str] = Field(None, description="仓位测算说明")
     # 复盘反馈
     review_bias_score: float = Field(0.0, description="复盘反馈加减分")
     review_bias_label: Optional[str] = Field(None, description="复盘反馈标签")
@@ -688,6 +695,13 @@ class BuyPointSopPositionAdvice(BaseModel):
     plan_position_pct: Optional[float] = None
     increment_position_pct: Optional[float] = None
     max_position_pct: Optional[float] = None
+    recommended_position_pct: Optional[float] = None
+    recommended_order_pct: Optional[float] = None
+    recommended_order_amount: Optional[float] = None
+    recommended_shares: Optional[int] = None
+    recommended_lots: Optional[int] = None
+    sizing_reference_price: Optional[float] = None
+    sizing_note: Optional[str] = None
     risk_control_action: Optional[str] = None
     exit_priority: Optional[str] = None
 

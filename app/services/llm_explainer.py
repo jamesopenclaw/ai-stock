@@ -57,14 +57,17 @@ ts_code, plain_note, risk_note
 9. 如果 reduce_reason_code=protect_profit，优先写“利润保护/先锁一部分”；如果是 structure_loose，优先写“强度下降/结构松动”；如果是 env_weak，优先写“环境转弱/先收缩风险”；如果是 rebound_exit，优先写“借反抽处理/不恋战”。
 10. 当 sell_signal_tag=减仓 时，优先表述为“强度下降/结构分歧/先做防守/先保护利润”，不要使用“日线已坏/必须离场/继续持有没有意义/结构彻底失效”这类只适用于卖出结论的措辞。
 11. 如果 payload 明确说明是 partial_sample，page_summary 和 action_summary 只能总结“已提供样本”，不能写成对全部持仓的全局结论。
-12. 文案要短、直接、有交易价值，避免空话、套话和三句几乎一模一样的复述。
+12. 文案要短、直接、有交易价值，避免空话、套话和三句几乎一模一样的复述，不要反复套用“当前XX，重点是XX，如果不处理XX”的固定骨架。
 13. plain_note 不是 action_sentence/trigger_sentence/risk_sentence 的简单拼接，也不是把 sell_reason 原样换个说法。它应该优先输出：
 当前为什么这样处理 + 现在最该盯的变化 + 不处理的主要代价。
 14. plain_note 必须是一段适合直接展示在股票卡片上的连续说明文字，像交易员给用户的简短解读，不要写成“动作：/时机：/风险：”这种模板格式。
-15. 同类股票允许结论方向一致，但表达重点应尽量结合个股自身差异，例如亏损深浅、是否 T+1、优先级、触发价位、执行重点，避免多只股票只替换名称和价格。
-16. 输出必须是 JSON 对象，字段只允许：
+15. plain_note 必须显式吸收至少 2 个该股票独有的具体事实，优先从 stock_specific_facts 中取材，例如浮盈亏幅度、持有天数、实时/回退口径、优先级、现价与成本关系、触发价位、是否今日可卖。不能只替换股票名和一个价格。
+16. 对两只同为卖出或同为减仓的股票，也要根据 stock_specific_facts 调整切入角度。亏损较深与小幅亏损、持有 3 天与 35 天、实时分时与日线回退，表达重点都应不同。
+17. 不要总用这些开头或骨架：“当前亏损较深”“重点是提高退出效率”“如果不及时处理”。可以保留事实，但要换成更贴合该票处境的自然表达。
+18. 如果 sell_trigger_cond 中有明确价位，plain_note 可以自然带一句“现在先盯 X 一线”，但不要把整段写成规则朗读。
+19. 输出必须是 JSON 对象，字段只允许：
 page_summary, action_summary, notes
-17. notes 是数组，每项字段只允许：
+20. notes 是数组，每项字段只允许：
 ts_code, plain_note, action_sentence, trigger_sentence, risk_sentence
 """.strip()
 
@@ -132,6 +135,34 @@ key, title, content
         if signal_value == "减仓":
             return f"{pnl_profile}，当前重点是先做防守和仓位收缩，再看后续是否修复。"
         return f"{pnl_profile}，当前重点是确认承接是否延续，而不是急着处理。"
+
+    def _sell_point_stock_specific_facts(self, point) -> List[str]:
+        facts: List[str] = []
+        pnl_pct = getattr(point, "pnl_pct", None)
+        if pnl_pct is not None:
+            facts.append(f"当前浮盈亏 {float(pnl_pct):+.2f}%")
+        holding_days = getattr(point, "holding_days", None)
+        if holding_days is not None:
+            facts.append(f"持有 {int(holding_days)} 天")
+        market_price = getattr(point, "market_price", None)
+        cost_price = getattr(point, "cost_price", None)
+        if market_price is not None and cost_price is not None:
+            facts.append(f"现价 {float(market_price):.2f}，成本 {float(cost_price):.2f}")
+        quote_time = str(getattr(point, "quote_time", "") or "").strip()
+        if quote_time:
+            facts.append(f"行情时间 {quote_time}")
+        facts.append(self._sell_point_quote_context(point))
+        priority = getattr(point, "sell_priority", None)
+        priority_value = getattr(priority, "value", priority)
+        if priority_value:
+            facts.append(f"处理优先级 {priority_value}")
+        can_sell_today = getattr(point, "can_sell_today", None)
+        if can_sell_today is False:
+            facts.append("今天受 T+1 约束，不能卖出")
+        trigger = str(getattr(point, "sell_trigger_cond", "") or "").strip()
+        if trigger:
+            facts.append(f"当前触发条件：{trigger}")
+        return facts[:6]
 
     def _cache_key(
         self,
@@ -482,7 +513,7 @@ key, title, content
         )
         sampled_points = points[:max_items]
         payload = {
-            "prompt_version": "sell_points_v3",
+            "prompt_version": "sell_points_v4",
             "trade_date": sell_points.trade_date,
             "market_env_tag": getattr(getattr(market_env, "market_env_tag", None), "value", None),
             "input_scope": "full" if len(points) <= max_items else "partial_sample",
@@ -513,6 +544,7 @@ key, title, content
                     "quote_context": self._sell_point_quote_context(point),
                     "reason_code_hint": self._sell_point_reason_code_hint(point),
                     "execution_focus": self._sell_point_execution_focus(point),
+                    "stock_specific_facts": self._sell_point_stock_specific_facts(point),
                 }
                 for point in sampled_points
             ],

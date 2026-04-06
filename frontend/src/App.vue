@@ -3,27 +3,39 @@
   <el-container v-else class="app-container">
     <el-aside width="200px">
       <div class="logo">
-        <h3>轻舟交易系统</h3>
+        <div class="logo-copy">
+          <h3>轻舟交易系统</h3>
+          <span>交易工作台</span>
+        </div>
       </div>
       <el-menu
         :default-active="route.path"
         router
         class="el-menu-vertical"
       >
-        <el-menu-item
-          v-for="item in visibleMenuItems"
-          :key="item.path"
-          :index="item.path"
+        <el-menu-item-group
+          v-for="group in visibleMenuGroups"
+          :key="group.key"
         >
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span>{{ item.label }}</span>
-        </el-menu-item>
+          <template #title>
+            <span class="menu-group-title">{{ group.label }}</span>
+          </template>
+          <el-menu-item
+            v-for="item in group.items"
+            :key="item.path"
+            :index="item.path"
+          >
+            <el-icon><component :is="item.icon" /></el-icon>
+            <span>{{ item.label }}</span>
+          </el-menu-item>
+        </el-menu-item-group>
       </el-menu>
     </el-aside>
     
     <el-container>
       <el-header>
         <div class="header-title">
+          <el-tag size="small" effect="plain" class="header-mode-tag">{{ currentGroupLabel }}</el-tag>
           <span>{{ route.meta.title }}</span>
         </div>
         <div class="header-right">
@@ -119,24 +131,45 @@ const currentUser = computed(() => authState.user)
 const currentAccount = computed(() => authState.account)
 const isAdmin = computed(() => currentUser.value?.role === 'admin')
 const showShell = computed(() => route.meta.requiresAuth !== false)
-const menuItems = [
-  { path: '/', label: 'Dashboard', icon: House },
-  { path: '/market', label: '市场环境', icon: TrendCharts },
-  { path: '/sectors', label: '板块扫描', icon: Grid },
-  { path: '/pools', label: '三池分类', icon: List },
-  { path: '/buy', label: '买点分析', icon: Plus },
-  { path: '/sell', label: '卖点分析', icon: Minus },
-  { path: '/account', label: '账户管理', icon: Wallet },
-  { path: '/review', label: '复盘统计', icon: DataAnalysis },
-  { path: '/system', label: '系统设置', icon: Setting, adminOnly: true },
-  { path: '/llm-logs', label: 'LLM调用记录', icon: Tickets },
-  { path: '/tasks', label: '任务调度', icon: Operation, adminOnly: true },
-  { path: '/admin/users', label: '用户管理', icon: UserFilled, adminOnly: true },
-  { path: '/admin/accounts', label: '交易账户', icon: Avatar, adminOnly: true },
+const menuGroups = [
+  {
+    key: 'trade',
+    label: '交易决策',
+    items: [
+      { path: '/', label: '今日指令', icon: House },
+      { path: '/market', label: '市场环境', icon: TrendCharts },
+      { path: '/sectors', label: '板块扫描', icon: Grid },
+      { path: '/pools', label: '三池分类', icon: List },
+      { path: '/buy', label: '买点分析', icon: Plus },
+      { path: '/sell', label: '卖点分析', icon: Minus },
+      { path: '/account', label: '账户管理', icon: Wallet },
+      { path: '/review', label: '复盘统计', icon: DataAnalysis },
+    ],
+  },
+  {
+    key: 'admin',
+    label: '系统管理',
+    items: [
+      { path: '/llm-logs', label: 'LLM调用记录', icon: Tickets },
+      { path: '/system', label: '系统设置', icon: Setting, adminOnly: true },
+      { path: '/tasks', label: '任务调度', icon: Operation, adminOnly: true },
+      { path: '/admin/users', label: '用户管理', icon: UserFilled, adminOnly: true },
+      { path: '/admin/accounts', label: '交易账户', icon: Avatar, adminOnly: true },
+    ],
+  },
 ]
-const visibleMenuItems = computed(() =>
-  menuItems.filter((item) => !item.adminOnly || currentUser.value?.role === 'admin')
-)
+const visibleMenuGroups = computed(() => (
+  menuGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !item.adminOnly || currentUser.value?.role === 'admin'),
+    }))
+    .filter((group) => group.items.length)
+))
+const currentGroupLabel = computed(() => {
+  const matchedGroup = visibleMenuGroups.value.find((group) => group.items.some((item) => item.path === route.path))
+  return matchedGroup?.label || '交易工作台'
+})
 
 const syncSelectedAccount = () => {
   selectedAccountId.value = currentAccount.value?.id || ''
@@ -363,6 +396,12 @@ body {
   border-bottom: 1px solid var(--color-border);
 }
 
+.logo-copy {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+}
+
 .logo h3 {
   color: var(--color-text-pri);
   font-size: 16px;
@@ -370,10 +409,24 @@ body {
   letter-spacing: 0.5px;
 }
 
+.logo span {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
+}
+
 /* 导航菜单 */
 .el-menu-vertical {
   border-right: none;
   background-color: var(--color-card);
+}
+
+.menu-group-title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-sec);
 }
 
 .el-menu-item {
@@ -404,9 +457,17 @@ body {
 }
 
 .header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 16px;
   font-weight: 600;
   color: var(--color-text-pri);
+}
+
+.header-mode-tag {
+  border-color: rgba(41, 98, 255, 0.35);
+  color: #8ab4ff;
 }
 
 .header-right {

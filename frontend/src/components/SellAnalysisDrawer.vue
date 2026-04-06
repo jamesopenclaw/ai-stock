@@ -70,8 +70,8 @@
             </div>
             <div class="summary-card">
               <span class="summary-label">分时结论</span>
-              <strong class="summary-value">{{ intraday?.conclusion || '-' }}</strong>
-              <span class="summary-tip">{{ intraday?.intraday_structure || '-' }}</span>
+              <strong class="summary-value">{{ sanitizePendingText(intraday?.conclusion) }}</strong>
+              <span class="summary-tip">{{ sanitizePendingText(intraday?.intraday_structure, '当前待盘中确认') }}</span>
             </div>
             <div class="summary-card">
               <span class="summary-label">重点位</span>
@@ -111,12 +111,12 @@
           <section class="analysis-section">
             <div class="section-header">3）分时执行判断</div>
             <div class="data-list">
-              <div class="data-item"><span>均价线关系</span><strong>{{ intraday?.price_vs_avg_line || '-' }}</strong></div>
-              <div class="data-item"><span>分时结构</span><strong>{{ intraday?.intraday_structure || '-' }}</strong></div>
-              <div class="data-item"><span>量能性质</span><strong>{{ intraday?.volume_quality || '-' }}</strong></div>
-              <div class="data-item"><span>当前结论</span><strong>{{ intraday?.conclusion || '-' }}</strong></div>
+              <div class="data-item"><span>均价线关系</span><strong>{{ sanitizePendingText(intraday?.price_vs_avg_line, '当前待盘中确认') }}</strong></div>
+              <div class="data-item"><span>分时结构</span><strong>{{ sanitizePendingText(intraday?.intraday_structure, '当前待盘中确认') }}</strong></div>
+              <div class="data-item"><span>量能性质</span><strong>{{ sanitizePendingText(intraday?.volume_quality) }}</strong></div>
+              <div class="data-item"><span>当前结论</span><strong>{{ sanitizePendingText(intraday?.conclusion) }}</strong></div>
             </div>
-            <div class="section-note">{{ intraday?.note || '-' }}</div>
+            <div class="section-note">{{ sanitizePendingText(intraday?.note, '当前不是实时分时口径，具体卖法要结合盘中承接再确认。') }}</div>
           </section>
 
           <section class="analysis-section order-plan-section">
@@ -264,6 +264,12 @@ const isActionableLevel = (value) => {
   return !text.includes('不适用')
 }
 const normalizeLevelValue = (value) => (isActionableLevel(value) ? String(value).trim() : '当前不设')
+const sanitizePendingText = (value, fallback = '-') => {
+  const text = String(value || '').trim()
+  if (!text || text === '-') return fallback
+  if (text.includes('需确认')) return fallback
+  return text
+}
 const parseZone = (value) => {
   const text = String(value || '').trim()
   const match = text.match(/(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)/)

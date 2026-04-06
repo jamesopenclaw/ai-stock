@@ -250,6 +250,47 @@ class TestBuyPoint:
         assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
         assert buy_point.buy_signal_tag == BuySignalTag.CAN_BUY
 
+    def test_account_executable_buy_point_includes_recommended_order_sizing(self, service, strong_stock):
+        """
+        测试：可买列表会返回基于账户资金测算的建议股数
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.close = 21.35
+        strong_stock.pre_close = 20.77
+        strong_stock.open = 20.9
+        strong_stock.high = 21.5
+        strong_stock.low = 20.8
+        strong_stock.account_entry_mode = "standard"
+        account = AccountInput(
+            total_asset=100000,
+            available_cash=50000,
+            total_position_ratio=0.2,
+            holding_count=1,
+            today_new_buy_count=0,
+        )
+
+        buy_point = service._analyze_stock_buy_point(
+            strong_stock,
+            MockMarketEnv(),
+            account,
+        )
+        buy_point = service._apply_recommended_order_sizing(
+            buy_point,
+            strong_stock,
+            MockMarketEnv(),
+            account,
+        )
+
+        assert buy_point.account_entry_mode == "standard"
+        assert buy_point.recommended_order_pct == 0.2
+        assert buy_point.recommended_shares == 900
+        assert buy_point.recommended_lots == 9
+        assert buy_point.recommended_order_amount == 19215.0
+
     def test_account_executable_caution_stock_can_buy_on_comfortable_retrace(self, service, medium_stock):
         """
         测试：账户可参与池中的谨慎票，只要是舒服回踩位，也应进入可买

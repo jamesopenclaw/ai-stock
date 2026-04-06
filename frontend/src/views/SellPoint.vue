@@ -24,6 +24,10 @@
           :closable="false"
           class="load-error-alert"
         />
+        <DataFreshnessBar
+          :items="sellFreshnessItems"
+          :note="sellFreshnessNote"
+        />
         <div class="decision-overview">
           <div class="overview-copy">
             <div class="overview-title">{{ sellHeadline }}</div>
@@ -430,6 +434,7 @@ import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
 import SellAnalysisDrawer from '../components/SellAnalysisDrawer.vue'
+import DataFreshnessBar from '../components/DataFreshnessBar.vue'
 import { formatLocalTime } from '../utils/datetime'
 
 const route = useRoute()
@@ -572,6 +577,42 @@ const quoteMetaLine = (source, quoteTime, fallbackDate) => {
   if (fallbackDate) return `${label} ${fallbackDate}`
   return label
 }
+
+const allSellPoints = computed(() => [
+  ...(sellData.value.sell_positions || []),
+  ...(sellData.value.reduce_positions || []),
+  ...(sellData.value.hold_positions || []),
+])
+const sellRealtimeCount = computed(() => allSellPoints.value.filter((point) => isRealtimeSource(point.data_source)).length)
+const sellFreshnessItems = computed(() => {
+  const total = allSellPoints.value.length
+  const summary = !total
+    ? '当前无持仓样本'
+    : !sellRealtimeCount.value
+      ? '全部为回退价格'
+      : sellRealtimeCount.value === total
+        ? '全部为盘中实时'
+        : `混合口径 ${sellRealtimeCount.value}/${total} 为盘中实时`
+  const resolvedTradeDate = sellData.value?.resolved_trade_date || displayDate.value || '-'
+  return [
+    { label: '分析日', value: displayDate.value || '-', tone: 'strong' },
+    {
+      label: '评估口径',
+      value: resolvedTradeDate === displayDate.value ? '当日评估' : `回退到 ${resolvedTradeDate}`,
+      tone: resolvedTradeDate === displayDate.value ? 'strong' : 'warn',
+    },
+    {
+      label: '价格口径',
+      value: summary,
+      tone: sellRealtimeCount.value ? 'strong' : 'warn',
+    },
+  ]
+})
+const sellFreshnessNote = computed(() => {
+  if (sellData.value.sell_positions?.length) return '先处理建议卖出票，再看减仓和持有观察。'
+  if (sellData.value.reduce_positions?.length) return '当前优先降风险，不需要把所有票都按清仓处理。'
+  return '当前没有必须立刻退出的持仓，先看后续触发条件。'
+})
 
 const hasLlmCopy = (point) => Boolean(
   point?.llm_plain_note || point?.llm_action_sentence || point?.llm_trigger_sentence || point?.llm_risk_sentence

@@ -194,6 +194,11 @@ async def test_buy_point_sop_service_returns_structured_buy_plan(monkeypatch):
     assert "放量过 28.31-28.45 并站稳再考虑" in result.order_plan.trigger_condition
     assert result.order_plan.invalid_condition.startswith("跌破 27.20 且无法快速收回")
     assert result.position_advice.suggestion == "中仓参与"
+    assert result.position_advice.recommended_position_pct == 0.3
+    assert result.position_advice.recommended_order_pct == 0.3
+    assert result.position_advice.recommended_shares == 1000
+    assert result.position_advice.recommended_lots == 10
+    assert result.position_advice.recommended_order_amount == 28100.0
     assert result.execution.action == "买"
 
 
@@ -419,6 +424,11 @@ async def test_buy_point_sop_service_builds_positive_add_position_decision(monke
     assert result.add_position_decision.score_total >= 8
     assert result.position_advice.suggestion == "标准加仓"
     assert result.position_advice.increment_position_pct == 0.2
+    assert result.position_advice.recommended_position_pct == 0.2562
+    assert result.position_advice.recommended_order_pct == 0.2
+    assert result.position_advice.recommended_shares == 700
+    assert result.position_advice.recommended_lots == 7
+    assert result.position_advice.recommended_order_amount == 19670.0
     assert result.position_advice.exit_priority == "先撤新增仓"
     assert result.execution.action == "加"
 
@@ -575,6 +585,7 @@ def test_buy_point_sop_account_context_blocks_breakthrough_when_weak_holding_pen
     advice = buy_point_sop_service._build_position_advice(
         account,
         market_env,
+        SimpleNamespace(close=28.1),
         account_context,
         exposure,
         SimpleNamespace(buy_point_level="A"),
@@ -626,6 +637,7 @@ def test_buy_point_sop_account_context_warns_same_sector_exposure_for_new_positi
     advice = buy_point_sop_service._build_position_advice(
         account,
         market_env,
+        SimpleNamespace(close=18.2),
         account_context,
         exposure,
         SimpleNamespace(buy_point_level="A"),

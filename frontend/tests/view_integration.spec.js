@@ -489,6 +489,7 @@ describe('关键页面联调', () => {
             stock_name: '机器人先锋',
             sector_name: '机器人',
             stock_pool_tag: '账户可参与池',
+            account_entry_mode: 'standard',
             candidate_bucket_tag: '强趋势延续',
             candidate_source_tag: '机器人',
             buy_point_type: '回踩承接',
@@ -505,6 +506,11 @@ describe('关键页面联调', () => {
             buy_trigger_price: 21.1,
             buy_invalid_price: 20.2,
             buy_required_volume_ratio: 1.5,
+            recommended_order_pct: 0.2,
+            recommended_order_amount: 19215,
+            recommended_shares: 900,
+            recommended_lots: 9,
+            sizing_reference_price: 21.35,
           },
         ],
         observe_buy_points: [],
@@ -531,6 +537,10 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('买点分析')
     expect(wrapper.text()).toContain('机器人先锋')
     expect(wrapper.text()).toContain('主执行名单')
+    expect(wrapper.text()).toContain('标准')
+    expect(wrapper.text()).toContain('标准执行 / 先手仓约 20%')
+    expect(wrapper.text()).toContain('建议先买 900 股')
+    expect(wrapper.text()).toContain('19,215.00 元')
   })
 
   it('BuyPoint 页面会展示后端返回的真实失败原因', async () => {
@@ -784,6 +794,13 @@ describe('关键页面联调', () => {
             plan_position_pct: 0.5,
             increment_position_pct: 0.2,
             max_position_pct: 0.8,
+            recommended_position_pct: 0.5,
+            recommended_order_pct: 0.2,
+            recommended_order_amount: 19040,
+            recommended_shares: 700,
+            recommended_lots: 7,
+            sizing_reference_price: 27.2,
+            sizing_note: '按当前价 27.20 测算，并按 A 股 100 股整手取整；建议先买 700 股左右，预计占用 19040.00 元。',
             risk_control_action: '加仓失败先撤新增仓，不把舒服单拖成高波动重仓单。',
             exit_priority: '先撤新增仓',
           },
@@ -812,6 +829,8 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('标准加仓')
     expect(wrapper.text()).toContain('回踩确认')
     expect(wrapper.text()).toContain('50%')
+    expect(wrapper.text()).toContain('建议先买 700 股')
+    expect(wrapper.text()).toContain('19,040.00 元')
     expect(wrapper.text()).toContain('先撤新增仓')
   })
 

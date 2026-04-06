@@ -242,6 +242,8 @@
             <div class="section-header">{{ showAddDecisionSection ? '6）仓位建议' : '5）仓位建议' }}</div>
             <div class="strategy-pill" :class="actionBadgeClass">{{ positionAdvice?.suggestion || '-' }}</div>
             <div class="section-emphasis">{{ positionAdvice?.reason || '-' }}</div>
+            <div v-if="positionAdviceSizingSummary" class="section-note">{{ positionAdviceSizingSummary }}</div>
+            <div v-if="positionAdvice?.sizing_note" class="section-note">{{ positionAdvice?.sizing_note }}</div>
             <div class="section-note">错了看哪里失效：{{ positionAdvice?.invalidation_level || '-' }}</div>
             <div class="section-note">{{ positionAdvice?.invalidation_action || '-' }}</div>
           </section>
@@ -457,6 +459,17 @@ const currentAction = computed(() => {
 const formatPlanPct = (value) => {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
   return `${(Number(value) * 100).toFixed(0)}%`
+}
+const formatMoney = (value) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
+  return Number(value).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })
+}
+const formatShares = (value) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
+  return `${Number(value).toLocaleString('zh-CN')} 股`
 }
 const isActionableLevel = (value) => {
   const text = String(value || '').trim()
@@ -715,6 +728,21 @@ const orderExecutionSteps = computed(() => (
       note: card.note,
     }))
 ))
+const positionAdviceSizingSummary = computed(() => {
+  const shares = positionAdvice.value?.recommended_shares
+  const amount = positionAdvice.value?.recommended_order_amount
+  const referencePrice = positionAdvice.value?.sizing_reference_price
+  if (!shares || !amount || !referencePrice) return ''
+  const orderPct = positionAdvice.value?.recommended_order_pct
+  const targetPct = positionAdvice.value?.recommended_position_pct
+  const lots = positionAdvice.value?.recommended_lots
+  const pctBits = []
+  if (targetPct) pctBits.push(`目标单票约 ${formatPlanPct(targetPct)}`)
+  if (orderPct) pctBits.push(`本次下单约 ${formatPlanPct(orderPct)}`)
+  const pctText = pctBits.length ? `${pctBits.join('，')}；` : ''
+  const lotText = lots ? `，约 ${lots} 手` : ''
+  return `按当前价 ${Number(referencePrice).toFixed(2)} 测算：${pctText}建议先买 ${formatShares(shares)}${lotText}，预计占用 ${formatMoney(amount)} 元。`
+})
 
 watch(
   () => [props.modelValue, props.tsCode, props.tradeDate],
