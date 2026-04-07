@@ -39,12 +39,12 @@
             </div>
           </div>
           <div class="overview-main">
-            <div class="market-mode-chip" :class="envChipClass(buyData.market_env_tag)">
-              {{ buyData.market_env_tag }}
+            <div class="market-mode-chip" :class="envChipClass(displayEnvProfile)">
+              {{ displayEnvProfile }}
             </div>
             <div class="overview-copy">
-              <div class="overview-title">{{ envHeadline(buyData.market_env_tag) }}</div>
-              <div class="overview-desc">{{ envGuidance(buyData.market_env_tag) }}</div>
+              <div class="overview-title">{{ envHeadline(displayEnvProfile) }}</div>
+              <div class="overview-desc">{{ envGuidance(displayEnvProfile) }}</div>
             </div>
           </div>
 
@@ -67,7 +67,7 @@
           </div>
 
           <div class="overview-rules">
-            <div v-for="rule in envChecklist(buyData.market_env_tag)" :key="rule" class="rule-chip">
+            <div v-for="rule in envChecklist(displayEnvProfile)" :key="rule" class="rule-chip">
               {{ rule }}
             </div>
           </div>
@@ -105,7 +105,7 @@
             <section v-if="!availablePoints.length" class="no-trade-state">
               <div class="no-trade-kicker">今日不开新仓</div>
               <div class="no-trade-title">
-                {{ buyData.market_env_tag === '防守' ? '当前是防守环境，先处理旧仓和风险。' : '当前没有满足执行条件的开仓标的。' }}
+                {{ buyData.market_env_tag === '防守' ? '当前是防守环境，先处理旧仓和风险。' : displayEnvProfile === '弱中性' ? '当前环境偏弱，没有足够舒服的开仓条件。' : '当前没有满足执行条件的开仓标的。' }}
               </div>
               <div class="no-trade-copy">{{ buyFreshnessNote }}</div>
               <div class="no-trade-actions">
@@ -155,7 +155,7 @@
 	                </div>
 
                 <div class="signal-intent">
-                  {{ primaryActionLine(point, buyData.market_env_tag) }}
+                  {{ primaryActionLine(point, displayEnvProfile) }}
                 </div>
 	                <div v-if="buySizingLine(point)" :class="['signal-sizing', entryModeSizingClass(point)]">
 	                  {{ buySizingLine(point) }}
@@ -346,7 +346,7 @@
                   </div>
 
                   <div class="signal-intent signal-intent-watch">
-                    {{ primaryActionLine(point, buyData.market_env_tag) }}
+                    {{ primaryActionLine(point, displayEnvProfile) }}
                   </div>
                   <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (point.hard_filter_failed_count || 0) > 0 }">
                     {{ hardFilterLine(point) }}
@@ -413,7 +413,7 @@
 	                </div>
 
                 <div class="signal-intent signal-intent-watch">
-                  {{ observeActionLine(point, buyData.market_env_tag) }}
+                  {{ observeActionLine(point, displayEnvProfile) }}
                 </div>
                 <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (point.hard_filter_failed_count || 0) > 0 }">
                   {{ hardFilterLine(point) }}
@@ -543,7 +543,7 @@
                   <strong>{{ formatPrice(point.buy_current_price) }}</strong>
                   <span :class="priceClass(point.buy_current_change_pct)">{{ formatSignedPct(point.buy_current_change_pct) }}</span>
                 </div>
-                <div class="skip-reason">{{ skipReasonLine(point, buyData.market_env_tag) }}</div>
+                <div class="skip-reason">{{ skipReasonLine(point, displayEnvProfile) }}</div>
                 <div class="skip-actions">
                   <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                   <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
@@ -871,19 +871,30 @@ const scheduleReviewInsightLoad = () => {
   }, 180)
 }
 
+const displayEnvProfile = computed(() => buyData.value.market_env_profile || buyData.value.market_env_tag || '')
+
 const envChipClass = (tag) => {
-  if (tag === '进攻') return 'chip-attack'
-  if (tag === '中性') return 'chip-neutral'
+  if (['强进攻', '进攻', '中性偏强', '情绪修复'].includes(tag)) return 'chip-attack'
+  if (['中性偏谨慎', '弱中性', '中性'].includes(tag)) return 'chip-neutral'
   return 'chip-defense'
 }
 
 const envHeadline = (tag) => {
+  if (tag === '中性偏强') return '环境中性偏强，优先看主线确认和强势回踩'
+  if (tag === '中性偏谨慎') return '环境中性偏谨慎，只做低吸和回踩确认'
+  if (tag === '弱中性') return '环境偏弱，只保留最强分歧转强的观察位'
   if (tag === '进攻') return '环境偏进攻，优先看强势确认和突破延续'
   if (tag === '中性') return '环境中性，只做确认过的回踩承接'
   return '环境偏防守，只保留极少数轻仓试错机会'
 }
 
 const envGuidance = (tag) => {
+  if (buyData.value.market_headline && tag === displayEnvProfile.value) {
+    return buyData.value.market_subheadline || '先看市场节奏，再决定是观察还是执行。'
+  }
+  if (tag === '中性偏强') return '优先看主线和核心股的确认动作，观察票满足条件后可以更快转执行。'
+  if (tag === '中性偏谨慎') return '先看观察池，只有回踩承接和量能确认到位才转执行，避免一致性追高。'
+  if (tag === '弱中性') return '今天更适合少做，观察票也只保留最强核心方向，不把弱跟风当机会。'
   if (tag === '进攻') return '可买列表是今天优先跟盘的对象，先看触发价，再看量比和确认条件。'
   if (tag === '中性') return '先看观察池，只有在确认条件满足时再转为执行，避免盘中追高。'
   return '可买不代表正常开仓，只代表系统允许你对最强核心股做轻仓试错。'
@@ -1072,6 +1083,15 @@ const toggleCardDetails = (key) => {
 }
 
 const envChecklist = (tag) => {
+  if (tag === '中性偏强') {
+    return ['优先看主线核心确认', '确认后可转执行', '后排跟风不过度分散']
+  }
+  if (tag === '中性偏谨慎') {
+    return ['优先做低吸和回踩确认', '确认条件不齐不动手', '不做一致性追高']
+  }
+  if (tag === '弱中性') {
+    return ['只保留最强分歧转强', '普通新机会先放弃', '仓位比普通中性更小']
+  }
   if (tag === '进攻') {
     return ['先看强势确认', '触发价到了再看量能', '失效价破位立即放弃']
   }
@@ -1084,7 +1104,7 @@ const envChecklist = (tag) => {
 const primaryActionLine = (point, envTag) => {
   const trigger = formatPrice(point.buy_trigger_price)
   const invalid = formatPrice(point.buy_invalid_price)
-  const prefix = envTag === '防守' ? '轻仓试错' : '执行计划'
+  const prefix = envTag === '防守' ? '轻仓试错' : envTag === '中性偏谨慎' ? '低吸确认' : envTag === '弱中性' ? '观察优先' : '执行计划'
   return `${prefix}：到 ${trigger} 附近再看，跌回 ${invalid} 下方就放弃。`
 }
 
@@ -1207,12 +1227,21 @@ const observeActionLine = (point, envTag) => {
   if (envTag === '防守') {
     return '先观察，不抢先手；只有触发和确认都到位才考虑出手。'
   }
+  if (envTag === '弱中性') {
+    return '先观察，不抢先手；弱分化环境里只跟最强确认，不把普通观察票升级成执行票。'
+  }
+  if (envTag === '中性偏谨慎') {
+    return '先观察，不抢先手；只有回踩承接和量能确认都到位才考虑出手。'
+  }
   return '这只票先看触发，再等确认，不要把观察票当成已执行信号。'
 }
 
 const skipReasonLine = (point, envTag) => {
   if (envTag === '防守' && point.buy_comment) {
     return `${point.buy_comment}，今天不作为正常开仓对象。`
+  }
+  if (envTag === '弱中性' && point.buy_comment) {
+    return `${point.buy_comment}，当前环境只保留最强观察位。`
   }
   return point.buy_comment || point.buy_invalid_cond || '不符合执行条件'
 }

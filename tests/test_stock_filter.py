@@ -55,6 +55,17 @@ class TestStockFilter:
         return StockFilterService()
 
     @pytest.fixture
+    def sample_account(self):
+        return AccountInput(
+            total_asset=100000,
+            available_cash=40000,
+            total_position_ratio=0.3,
+            holding_count=1,
+            today_new_buy_count=0,
+            today_sell_count=0,
+        )
+
+    @pytest.fixture
     def mock_market_env_attack(self):
         """模拟进攻市场环境"""
         env = MagicMock()
@@ -71,6 +82,27 @@ class TestStockFilter:
         env.breakout_allowed = False
         env.risk_level = RiskLevel.HIGH
         return env
+
+    def test_global_trade_gate_shrinks_in_neutral_cautious_profile(self, service, sample_account):
+        env = MagicMock()
+        env.market_env_tag = MarketEnvTag.NEUTRAL
+        env.market_env_profile = "中性偏谨慎"
+
+        gate = service.build_global_trade_gate(env, sample_account, [])
+
+        assert gate.allow_new_positions is True
+        assert gate.account_pool_limit == 2
+        assert "中性偏谨慎" in gate.dominant_reason
+
+    def test_global_trade_gate_only_keeps_one_slot_in_weak_neutral_profile(self, service, sample_account):
+        env = MagicMock()
+        env.market_env_tag = MarketEnvTag.NEUTRAL
+        env.market_env_profile = "弱中性"
+
+        gate = service.build_global_trade_gate(env, sample_account, [])
+
+        assert gate.account_pool_limit == 1
+        assert "弱中性" in gate.dominant_reason
 
     @pytest.fixture
     def sample_stocks(self):
@@ -2189,6 +2221,72 @@ class TestStockFilter:
         assert output.why_this_pool
         assert isinstance(output.not_other_pools, list)
         assert output.pool_decision_summary
+
+    def test_account_execution_proximity_marks_near_retrace_reference(self, service):
+        stock = StockOutput(
+            ts_code="002501.SZ",
+            stock_name="近触发票",
+            sector_name="机器人",
+            close=10.12,
+            open=10.00,
+            high=10.25,
+            low=9.88,
+            pre_close=9.96,
+            avg_price=10.03,
+            change_pct=1.6,
+            amount=150000,
+            turnover_rate=6.5,
+            stock_score=80.0,
+            market_strength_score=78.0,
+            execution_opportunity_score=82.0,
+            account_entry_score=88.0,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            next_tradeability_tag=NextTradeabilityTag.RETRACE_CONFIRM,
+        )
+
+        service._annotate_execution_proximity(stock)
+
+        assert stock.execution_reference_price == 10.0
+        assert stock.execution_reference_gap_pct == -1.19
+        assert stock.execution_proximity_tag == "接近执行位"
+        assert "开盘价 10.00" in (stock.execution_proximity_note or "")
+
+    def test_account_execution_proximity_marks_deep_retrace_reference(self, service):
+        stock = StockOutput(
+            ts_code="002502.SZ",
+            stock_name="远触发票",
+            sector_name="机器人",
+            close=10.80,
+            open=10.00,
+            high=10.95,
+            low=9.92,
+            pre_close=9.98,
+            avg_price=10.18,
+            change_pct=8.2,
+            amount=220000,
+            turnover_rate=9.8,
+            stock_score=82.0,
+            market_strength_score=80.0,
+            execution_opportunity_score=84.0,
+            account_entry_score=87.0,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            next_tradeability_tag=NextTradeabilityTag.RETRACE_CONFIRM,
+        )
+
+        service._annotate_execution_proximity(stock)
+
+        assert stock.execution_reference_price == 10.0
+        assert stock.execution_reference_gap_pct == -7.41
+        assert stock.execution_proximity_tag == "待深回踩"
+        assert "深回踩参考" in (stock.execution_proximity_note or "")
 
     def test_holding_pool_contains_position_context(self, service, mock_market_env_attack):
         """

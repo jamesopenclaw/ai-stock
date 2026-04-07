@@ -102,6 +102,7 @@ class BuyPointService:
 
             buy_point = self._analyze_stock_buy_point(stock, market_env, account, review_bias_profile)
             buy_point = self._apply_display_quote(buy_point, stock, display_quote_map)
+            buy_point = self._downgrade_far_from_trigger_available(buy_point, stock)
             buy_point = self._apply_recommended_order_sizing(buy_point, stock, market_env, account)
             analyzed_count += 1
 
@@ -175,6 +176,53 @@ class BuyPointService:
         )
         return buy_point
 
+    def _downgrade_far_from_trigger_available(
+        self,
+        buy_point: BuyPointOutput,
+        stock: StockOutput,
+    ) -> BuyPointOutput:
+        """
+        可买列表强调“当前接近执行位”，不是“将来某个位置可买”。
+        对回踩/低吸型，如果现价离触发位仍明显偏远，就降回观察。
+        """
+        if buy_point.buy_signal_tag != BuySignalTag.CAN_BUY:
+            return buy_point
+        if stock.stock_pool_tag != StockPoolTag.ACCOUNT_EXECUTABLE:
+            return buy_point
+        if buy_point.buy_point_type not in {BuyPointType.RETRACE_SUPPORT, BuyPointType.LOW_SUCK}:
+            return buy_point
+        gap_pct = buy_point.buy_trigger_gap_pct
+        if gap_pct is None:
+            return buy_point
+        if gap_pct >= self._available_trigger_gap_floor_pct(stock.ts_code):
+            return buy_point
+
+        buy_point.buy_signal_tag = BuySignalTag.OBSERVE
+        if buy_point.buy_comment:
+            buy_point.buy_comment = f"{buy_point.buy_comment}，现价离触发位仍偏远，先等回到计划位附近再看"
+        else:
+            buy_point.buy_comment = "现价离触发位仍偏远，先等回到计划位附近再看"
+        buy_point.recommended_order_pct = None
+        buy_point.recommended_order_amount = None
+        buy_point.recommended_shares = None
+        buy_point.recommended_lots = None
+        buy_point.sizing_reference_price = None
+        buy_point.sizing_note = None
+        return buy_point
+
+    def _available_trigger_gap_floor_pct(self, ts_code: str) -> float:
+        """
+        可买列表要求当前价离触发位足够近。
+        返回的是 buy_trigger_gap_pct 的下限，单位为百分比。
+        例如 -1.5 代表当前价最多只能高出触发价约 1.5%。
+        """
+        code = str(ts_code or "").upper()
+        if code.endswith(".BJ"):
+            return -4.0
+        if code.startswith(("300", "301", "688")):
+            return -2.5
+        return -1.5
+
     def _apply_recommended_order_sizing(
         self,
         buy_point: BuyPointOutput,
@@ -230,6 +278,7 @@ class BuyPointService:
         return buy_point
 
     def _resolve_recommended_order_pct(self, stock: StockOutput, market_env) -> float:
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         entry_mode = str(getattr(stock, "account_entry_mode", "") or "")
         if entry_mode == "defense_trial":
             return 0.1
@@ -237,6 +286,12 @@ class BuyPointService:
             return 0.1 if market_env.market_env_tag != MarketEnvTag.ATTACK else 0.15
         if market_env.market_env_tag == MarketEnvTag.DEFENSE:
             return 0.1
+        if market_profile == "弱中性":
+            return 0.1
+        if market_profile == "中性偏谨慎":
+            return 0.12
+        if market_profile == "中性偏强":
+            return 0.18
         if market_env.market_env_tag == MarketEnvTag.NEUTRAL:
             return 0.15
         return 0.2
@@ -370,6 +425,7 @@ class BuyPointService:
 
     def _determine_buy_type(self, stock: StockOutput, market_env) -> BuyPointType:
         """确定买点类型"""
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         # 强势股 -> 突破
         if stock.stock_strength_tag == StockStrengthTag.STRONG:
             change_pct = float(stock.change_pct or 0)
@@ -381,6 +437,8 @@ class BuyPointService:
                 and stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE
             ):
                 return BuyPointType.BREAKTHROUGH
+            if market_profile in {"中性偏谨慎", "弱中性"}:
+                return BuyPointType.RETRACE_SUPPORT
             return BuyPointType.RETRACE_SUPPORT
 
         # 中等强度 -> 回踩承接
@@ -398,6 +456,7 @@ class BuyPointService:
         account: Optional[AccountInput]
     ) -> BuySignalTag:
         """确定买点信号"""
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         if stock.stock_pool_tag == StockPoolTag.HOLDING_PROCESS:
             return BuySignalTag.NOT_BUY
         if stock.stock_pool_tag == StockPoolTag.NOT_IN_POOL:
@@ -415,6 +474,11 @@ class BuyPointService:
                     return BuySignalTag.CAN_BUY
                 return BuySignalTag.OBSERVE
             if stock.stock_core_tag.value == "核心" and stock.stock_strength_tag == StockStrengthTag.STRONG:
+                return BuySignalTag.OBSERVE
+            return BuySignalTag.NOT_BUY
+
+        if market_profile == "弱中性":
+            if stock.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE and stock.stock_core_tag == StockCoreTag.CORE:
                 return BuySignalTag.OBSERVE
             return BuySignalTag.NOT_BUY
 
@@ -636,9 +700,12 @@ class BuyPointService:
 
     def _assess_risk(self, stock: StockOutput, market_env, buy_type: BuyPointType) -> RiskLevel:
         """评估风险等级"""
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         # 市场风险
         if market_env.market_env_tag == MarketEnvTag.DEFENSE:
             return RiskLevel.HIGH
+        if market_profile in {"中性偏谨慎", "弱中性"}:
+            return RiskLevel.HIGH if buy_type == BuyPointType.BREAKTHROUGH else RiskLevel.MEDIUM
         elif market_env.market_env_tag == MarketEnvTag.NEUTRAL:
             return RiskLevel.MEDIUM
 
@@ -660,6 +727,7 @@ class BuyPointService:
         account: Optional[AccountInput]
     ) -> str:
         """评估账户适合度"""
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         if not account:
             return "一般"
 
@@ -668,6 +736,10 @@ class BuyPointService:
             if stock.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE:
                 return "一般"
             return "不适合"
+        if market_profile == "弱中性":
+            return "一般" if stock.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE else "不适合"
+        if market_profile == "中性偏谨慎" and stock.stock_core_tag != StockCoreTag.CORE:
+            return "一般"
 
         # 资金或仓位硬约束
         if account.available_cash < AccountAdapterService.AVAILABLE_CASH_MIN:
@@ -685,6 +757,8 @@ class BuyPointService:
         if stock.stock_core_tag == StockCoreTag.CORE and stock.stock_strength_tag == StockStrengthTag.STRONG:
             # 还要看仓位
             if market_env.market_env_tag == MarketEnvTag.ATTACK:
+                return "适合"
+            if market_profile == "中性偏强":
                 return "适合"
             return "一般"
 

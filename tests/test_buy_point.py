@@ -169,6 +169,31 @@ class TestBuyPoint:
         assert buy_point.buy_account_fit == "一般"
         assert "防守试错" in buy_point.buy_comment
 
+    def test_weak_neutral_profile_blocks_regular_new_position(self, service, strong_stock):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+            market_env_profile = "弱中性"
+            breakout_allowed = False
+            risk_level = RiskLevel.MEDIUM
+
+        strong_stock.stock_pool_tag = StockPoolTag.MARKET_WATCH
+        buy_point = service._analyze_stock_buy_point(strong_stock, MockMarketEnv())
+
+        assert buy_point.buy_signal_tag == BuySignalTag.NOT_BUY
+
+    def test_neutral_cautious_profile_reduces_order_pct(self, service, strong_stock):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+            market_env_profile = "中性偏谨慎"
+            breakout_allowed = False
+            risk_level = RiskLevel.MEDIUM
+
+        pct = service._resolve_recommended_order_pct(strong_stock, MockMarketEnv())
+        risk = service._assess_risk(strong_stock, MockMarketEnv(), BuyPointType.RETRACE_SUPPORT)
+
+        assert pct == 0.12
+        assert risk == RiskLevel.MEDIUM
+
     # ========== 条件字段测试 ==========
 
     def test_trigger_condition_exists(self, service, strong_stock):
@@ -342,6 +367,91 @@ class TestBuyPoint:
 
         assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
         assert buy_point.buy_signal_tag == BuySignalTag.CAN_BUY
+
+    def test_far_from_trigger_available_point_downgrades_to_observe(self, service, medium_stock):
+        """
+        测试：回踩型可买票若现价离触发位过远，应降回观察列表
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        medium_stock.stock_tradeability_tag = StockTradeabilityTag.TRADABLE
+        medium_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+        medium_stock.open = 100.0
+        medium_stock.close = 103.0
+        medium_stock.pre_close = 99.6
+        medium_stock.high = 103.6
+        medium_stock.low = 99.8
+
+        response = service.analyze(
+            "2026-04-06",
+            stocks=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.1,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=MockMarketEnv(),
+            scored_stocks=[medium_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-04-06",
+                market_watch_pool=[],
+                account_executable_pool=[medium_stock],
+                holding_process_pool=[],
+                total_count=1,
+            ),
+        )
+
+        assert response.available_buy_points == []
+        assert len(response.observe_buy_points) == 1
+        assert response.observe_buy_points[0].buy_signal_tag == BuySignalTag.OBSERVE
+        assert "现价离触发位仍偏远" in response.observe_buy_points[0].buy_comment
+
+    def test_near_trigger_available_point_stays_in_available(self, service, medium_stock):
+        """
+        测试：回踩型可买票若现价已接近触发位，应继续留在可买列表
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        medium_stock.stock_tradeability_tag = StockTradeabilityTag.TRADABLE
+        medium_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+        medium_stock.open = 100.0
+        medium_stock.close = 101.0
+        medium_stock.pre_close = 99.6
+        medium_stock.high = 101.4
+        medium_stock.low = 99.8
+
+        response = service.analyze(
+            "2026-04-06",
+            stocks=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.1,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=MockMarketEnv(),
+            scored_stocks=[medium_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-04-06",
+                market_watch_pool=[],
+                account_executable_pool=[medium_stock],
+                holding_process_pool=[],
+                total_count=1,
+            ),
+        )
+
+        assert len(response.available_buy_points) == 1
+        assert response.observe_buy_points == []
+        assert response.available_buy_points[0].buy_signal_tag == BuySignalTag.CAN_BUY
 
     def test_buy_point_contains_current_price_and_gap(self, service, strong_stock):
         """
@@ -551,13 +661,15 @@ class TestBuyPoint:
         )
 
         assert response.total_count == 1
-        buy_point = response.available_buy_points[0]
+        assert response.available_buy_points == []
+        buy_point = response.observe_buy_points[0]
         assert buy_point.buy_current_price == 12.88
         assert buy_point.buy_current_change_pct == 11.13
         assert buy_point.buy_quote_time == "2026-03-24 10:31:00"
         assert buy_point.buy_data_source == "realtime_dc"
         assert buy_point.buy_trigger_gap_pct is not None
         assert buy_point.buy_invalid_gap_pct is not None
+        assert buy_point.buy_signal_tag == BuySignalTag.OBSERVE
 
 
 class TestBuyPointPRDRequirements:

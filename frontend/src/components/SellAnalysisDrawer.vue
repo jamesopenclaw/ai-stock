@@ -180,10 +180,10 @@
                 </div>
               </div>
             </div>
-            <div class="section-note">冲到哪里先兑现：{{ orderPlan?.take_profit_condition || '-' }}</div>
-            <div class="section-note">弱反抽到哪里减：{{ orderPlan?.rebound_condition || '-' }}</div>
-            <div class="section-note">跌破哪里不再幻想：{{ orderPlan?.stop_condition || '-' }}</div>
-            <div class="section-note">守住哪里还能继续看：{{ orderPlan?.hold_condition || '-' }}</div>
+            <div class="section-note">{{ takeProfitNoteLabel }}：{{ orderPlan?.take_profit_condition || '-' }}</div>
+            <div class="section-note">{{ reboundNoteLabel }}：{{ orderPlan?.rebound_condition || '-' }}</div>
+            <div class="section-note">{{ stopNoteLabel }}：{{ orderPlan?.stop_condition || '-' }}</div>
+            <div class="section-note">{{ holdNoteLabel }}：{{ orderPlan?.hold_condition || '-' }}</div>
           </section>
 
           <section class="analysis-section analysis-section-full">
@@ -299,51 +299,51 @@ const primaryOrderCardKey = computed(() => {
 const orderPlanSummary = computed(() => {
   const action = currentAction.value
   if (action === '清' && isActionableLevel(orderPlan.value?.priority_exit_price)) {
-    return `先看清仓区 ${normalizeLevelValue(orderPlan.value?.priority_exit_price)}`
+    return `最好先卖在 ${normalizeLevelValue(orderPlan.value?.priority_exit_price)}`
   }
   if (action === '清' && isActionableLevel(orderPlan.value?.rebound_sell_price)) {
-    return `先看反抽区 ${normalizeLevelValue(orderPlan.value?.rebound_sell_price)}`
+    return `卖不到优先区，就看反抽区 ${normalizeLevelValue(orderPlan.value?.rebound_sell_price)}`
   }
   if (action === '清' && isActionableLevel(orderPlan.value?.break_stop_price)) {
-    return `${normalizeLevelValue(orderPlan.value?.break_stop_price)} 是最后失效线`
+    return `最晚别拖破 ${normalizeLevelValue(orderPlan.value?.break_stop_price)}`
   }
   if (action === '减' && isActionableLevel(orderPlan.value?.proactive_take_profit_price)) {
-    return `先看兑现区 ${normalizeLevelValue(orderPlan.value?.proactive_take_profit_price)}`
+    return `最好先减在 ${normalizeLevelValue(orderPlan.value?.proactive_take_profit_price)}`
   }
-  if (action === '减' && isActionableLevel(orderPlan.value?.rebound_sell_price)) return '当前以反抽减仓和失守保护为主'
+  if (action === '减' && isActionableLevel(orderPlan.value?.rebound_sell_price)) return '先看反抽减仓位，再看失守保护位'
   if (action === '拿' && isActionableLevel(orderPlan.value?.observe_level)) {
-    return `先看观察位 ${normalizeLevelValue(orderPlan.value?.observe_level)}`
+    return `先盯守位 ${normalizeLevelValue(orderPlan.value?.observe_level)}`
   }
   return '先看启用中的价格位，再按顺序执行'
 })
 const orderPlanLeadTitle = computed(() => {
-  if (currentAction.value === '清') return '这不是“再等等”的票'
-  if (currentAction.value === '减') return '这票优先降风险，不必纠结最高点'
-  return '这票当前先看守位，再决定要不要动'
+  if (currentAction.value === '清') return '最好卖在前面，不要拖到破位'
+  if (currentAction.value === '减') return '先减在舒服的位置，不用死等最高点'
+  return '先盯守位，守不住再动手'
 })
 const orderPlanLeadCopy = computed(() => {
   if (currentAction.value === '清') {
     if (isActionableLevel(orderPlan.value?.priority_exit_price)) {
-      return `优先按清仓区处理；如果盘中只能给一次弱反抽机会，再参考反抽退出区。${normalizeLevelValue(orderPlan.value?.break_stop_price)} 只是最后底线。`
+      return `能卖在优先区就先卖，不要一路等到最后失效线；如果盘中只给一次弱反抽，再看反抽区借机走。`
     }
     if (isActionableLevel(orderPlan.value?.rebound_sell_price)) {
-      return `优先按反抽卖出区处理；${normalizeLevelValue(orderPlan.value?.break_stop_price)} 只是最后底线，不是建议继续死等到那个位置。`
+      return `如果没有更好的主动卖点，就盯反抽区先走；${normalizeLevelValue(orderPlan.value?.break_stop_price)} 只是最晚不能再拖的底线。`
     }
-    return `${normalizeLevelValue(orderPlan.value?.break_stop_price)} 是最后失效线，核心是提升退出效率，不是继续拖。`
+    return `${normalizeLevelValue(orderPlan.value?.break_stop_price)} 只是最晚不能再拖的位置，核心是早点退出，不是等它来提醒你。`
   }
   if (currentAction.value === '减') {
     if (isActionableLevel(orderPlan.value?.proactive_take_profit_price)) {
       if (currentPriceAboveReboundZone.value) {
-        return `先看主动兑现区。当前价已经高于旧的反抽区，反抽区只作为后续回落时的次级减仓参考。`
+        return `先看主动减仓区。当前价已经高于旧的反抽区，后面反抽区只当回落后的备选处理位。`
       }
-      return `先看主动兑现区；如果冲高不成，再回到反抽区和底线位继续执行。`
+      return `先看主动减仓区；如果冲高不成，再回到反抽区和底线位继续执行。`
     }
     if (currentPriceAboveReboundZone.value) {
-      return `当前价已经高于反抽区，这一带更像“回落后的参考区”，不是让你等股价掉回去才第一次减。`
+      return `当前价已经高于反抽区，这一带更像回落后的补处理区，不是让你等股价掉回去才第一次减。`
     }
-    return `优先看反抽减仓位，底线位只负责防止进一步恶化。`
+    return `优先看反抽减仓位，底线位只负责防止进一步恶化，不是第一减仓点。`
   }
-  return `只要继续守住观察位，才有继续拿的理由；一旦失守，就按退出线处理。`
+  return `只要继续守住观察位，才值得继续拿；一旦失守，就按退出线处理。`
 })
 const orderPlanLeadTone = computed(() => {
   if (currentAction.value === '清') return 'danger'
@@ -355,8 +355,8 @@ const orderPlanCards = computed(() => {
   return [
     {
       key: 'priority_exit',
-      label: '优先清仓价',
-      scene: '能直接处理就先走',
+      label: '最好先卖区',
+      scene: '能直接卖在这里就先走',
       value: normalizeLevelValue(orderPlan.value?.priority_exit_price),
       note: orderPlan.value?.priority_exit_condition || '当前没有明确的优先清仓区。',
       tone: 'danger',
@@ -368,8 +368,8 @@ const orderPlanCards = computed(() => {
     },
     {
       key: 'take_profit',
-      label: '主动兑现价',
-      scene: '强势冲高时先兑现',
+      label: '最好先减区',
+      scene: '冲高到这里更适合先减',
       value: normalizeLevelValue(orderPlan.value?.proactive_take_profit_price),
       note: orderPlan.value?.take_profit_condition || '当前没有明确的主动兑现触发条件。',
       tone: 'warm',
@@ -379,8 +379,8 @@ const orderPlanCards = computed(() => {
     },
     {
       key: 'rebound',
-      label: currentAction.value === '清' ? '反抽退出价' : '反抽卖出价',
-      scene: currentAction.value === '清' ? '弱反抽时借机退出' : '弱反抽时借机减仓',
+      label: currentAction.value === '清' ? '卖不到时看反抽区' : '减不到时看反抽区',
+      scene: currentAction.value === '清' ? '只给弱反抽时借机走' : '只给弱反抽时借机减',
       value: normalizeLevelValue(orderPlan.value?.rebound_sell_price),
       note: currentAction.value === '减' && currentPriceAboveReboundZone.value
         ? '这段区间已经落在当前价下方，更适合后续回落到该带但站不稳时再参考，不是让你现在等回去才第一次减。'
@@ -394,8 +394,8 @@ const orderPlanCards = computed(() => {
     },
     {
       key: 'stop',
-      label: currentAction.value === '清' ? '最后失效线' : '失守止损价',
-      scene: currentAction.value === '清' ? '如果还没处理，再破就不能拖' : '跌破后保护退出',
+      label: currentAction.value === '清' ? '最晚不能拖到这' : '失守就得保护退',
+      scene: currentAction.value === '清' ? '真到这里就别再拖' : '跌破后按保护动作走',
       value: normalizeLevelValue(orderPlan.value?.break_stop_price),
       note: orderPlan.value?.stop_condition || '当前没有明确的止损失效位。',
       tone: 'danger',
@@ -407,8 +407,8 @@ const orderPlanCards = computed(() => {
     },
     {
       key: 'observe',
-      label: '条件观察位',
-      scene: '守住才继续看',
+      label: '继续拿先看守位',
+      scene: '守住这里才值得继续看',
       value: normalizeLevelValue(orderPlan.value?.observe_level),
       note: orderPlan.value?.hold_condition || '当前不建议继续以观察为主。',
       tone: 'observe',
@@ -441,6 +441,22 @@ const orderExecutionSteps = computed(() => (
     title: `${card.label}：${card.value}`,
     note: card.note,
   }))
+))
+const takeProfitNoteLabel = computed(() => {
+  if (currentAction.value === '清') return '如果盘中冲高，哪里能先处理'
+  if (currentAction.value === '减') return '最好先减在哪'
+  return '如果盘中转强，哪里可以先兑现'
+})
+const reboundNoteLabel = computed(() => {
+  if (currentAction.value === '清') return '卖不到优先区时，退而求其次看哪'
+  if (currentAction.value === '减') return '如果只给弱反抽，优先看哪减'
+  return '如果只给弱反抽，哪里需要重新评估'
+})
+const stopNoteLabel = computed(() => (
+  currentAction.value === '清' ? '最晚不能拖到哪' : '跌破哪就不能再硬扛'
+))
+const holdNoteLabel = computed(() => (
+  currentAction.value === '清' ? '只有重新站回哪才值得再看' : '守住哪还能继续看'
 ))
 const actionBadgeClass = computed(() => {
   if (execution.value?.action === '清') return 'badge-pass'

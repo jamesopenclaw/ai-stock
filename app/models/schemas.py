@@ -87,9 +87,14 @@ class MarketEnvOutput(BaseModel):
     """市场环境输出"""
     trade_date: str
     market_env_tag: MarketEnvTag
+    market_env_profile: str = Field("", description="市场环境细分状态")
     breakout_allowed: bool
     risk_level: RiskLevel
     market_comment: str
+    market_headline: str = Field("", description="市场环境主标题")
+    market_subheadline: str = Field("", description="市场环境副标题")
+    trading_tempo_label: str = Field("", description="交易节奏标签")
+    dominant_factor_label: str = Field("", description="主导因子标签")
     # 详细评分
     index_score: float = Field(..., description="指数评分")
     sentiment_score: float = Field(..., description="情绪评分")
@@ -478,6 +483,10 @@ class StockOutput(BaseModel):
     account_entry_mode: Optional[str] = None
     pool_entry_reason: Optional[str] = None
     position_hint: Optional[str] = None
+    execution_reference_price: Optional[float] = None
+    execution_reference_gap_pct: Optional[float] = None
+    execution_proximity_tag: Optional[str] = None
+    execution_proximity_note: Optional[str] = None
     # LLM 辅助解释
     llm_plain_note: Optional[str] = None
     llm_risk_note: Optional[str] = None

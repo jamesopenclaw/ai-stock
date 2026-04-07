@@ -433,6 +433,7 @@ class StockFilterService:
         )
         total_position_ratio = float(account.total_position_ratio or 0.0) if account else 0.0
         cash_ok = bool(account and account.available_cash >= AccountAdapterService.AVAILABLE_CASH_MIN)
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         discipline_ok = bool(
             not account
             or (
@@ -472,6 +473,36 @@ class StockFilterService:
                 dominant_reason=reasons[0],
                 reasons=reasons,
                 account_pool_limit=1 if cash_ok else 0,
+            )
+
+        if market_profile == "弱中性":
+            reasons.append("市场弱中性，先压缩新开仓，只保留最强确认机会。")
+            return GlobalTradeGateOutput(
+                status=TradeGateStatus.TRIAL,
+                allow_new_positions=bool(cash_ok and discipline_ok and total_position_ratio < AccountAdapterService.POSITION_MEDIUM),
+                dominant_reason=reasons[0],
+                reasons=reasons,
+                account_pool_limit=1 if cash_ok else 0,
+            )
+
+        if market_profile == "中性偏谨慎":
+            reasons.append("市场中性偏谨慎，允许试错，但只做低吸或回踩确认。")
+            return GlobalTradeGateOutput(
+                status=TradeGateStatus.TRIAL,
+                allow_new_positions=bool(cash_ok and discipline_ok),
+                dominant_reason=reasons[0],
+                reasons=reasons,
+                account_pool_limit=2 if cash_ok else 0,
+            )
+
+        if market_profile == "中性偏强":
+            reasons.append("市场中性偏强，可围绕主线做确认后的试错。")
+            return GlobalTradeGateOutput(
+                status=TradeGateStatus.TRIAL,
+                allow_new_positions=bool(cash_ok),
+                dominant_reason=reasons[0],
+                reasons=reasons,
+                account_pool_limit=4 if cash_ok else 0,
             )
 
         reasons.append("环境与账户都不算极端，允许试错但先过账户过滤。")
@@ -539,6 +570,7 @@ class StockFilterService:
             account_clone.account_entry_mode = account_entry_mode
             account_clone.pool_entry_reason = account_reason
             account_clone.position_hint = account_position_hint
+            self._annotate_execution_proximity(account_clone)
             account_executable.append(account_clone)
 
         return self._select_visible_account_executable(
@@ -2255,6 +2287,125 @@ class StockFilterService:
         if stock.next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
             return "优先等回踩确认后执行"
         return "按计划仓位执行"
+
+    def _annotate_execution_proximity(self, stock: StockOutput) -> None:
+        reference_price, reference_label = self._estimate_execution_reference(stock)
+        if not reference_price:
+            stock.execution_reference_price = None
+            stock.execution_reference_gap_pct = None
+            stock.execution_proximity_tag = None
+            stock.execution_proximity_note = None
+            return
+
+        current_price = self._current_price(stock)
+        gap_pct = self._price_gap_pct(current_price, reference_price)
+        stock.execution_reference_price = reference_price
+        stock.execution_reference_gap_pct = gap_pct
+
+        proximity_tag, proximity_note = self._classify_execution_proximity(
+            stock,
+            reference_label,
+            reference_price,
+            gap_pct,
+        )
+        stock.execution_proximity_tag = proximity_tag
+        stock.execution_proximity_note = proximity_note
+
+    def _estimate_execution_reference(self, stock: StockOutput) -> tuple[Optional[float], str]:
+        if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            base = float(stock.high or stock.close or stock.pre_close or 0)
+            if base <= 0:
+                return None, "突破确认位"
+            return round(base * 1.002, 2), "突破确认位"
+        if stock.next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
+            base = float(stock.open or stock.avg_price or stock.pre_close or stock.low or 0)
+            if base <= 0:
+                return None, "回踩确认位"
+            label = self._nearest_retrace_anchor_label(stock, base)
+            return round(base, 2), label
+        if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK:
+            base = float(stock.low or stock.pre_close or stock.avg_price or 0)
+            if base <= 0:
+                return None, "低吸参考位"
+            return round(base, 2), "低吸参考位"
+        return None, "执行位"
+
+    def _nearest_retrace_anchor_label(self, stock: StockOutput, reference_price: float) -> str:
+        candidates = [
+            ("开盘价", stock.open),
+            ("前收价", stock.pre_close),
+            ("日内均价", stock.avg_price),
+            ("最低价", stock.low),
+        ]
+        valid = [
+            (label, float(price))
+            for label, price in candidates
+            if price is not None and float(price) > 0
+        ]
+        if not valid:
+            return "回踩确认位"
+        label, _ = min(valid, key=lambda item: abs(item[1] - reference_price))
+        return label
+
+    def _classify_execution_proximity(
+        self,
+        stock: StockOutput,
+        reference_label: str,
+        reference_price: float,
+        gap_pct: Optional[float],
+    ) -> tuple[Optional[str], Optional[str]]:
+        if gap_pct is None:
+            return None, None
+
+        if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            near_floor = self._breakthrough_gap_floor_pct(stock.ts_code)
+            if gap_pct >= 0:
+                return "已过确认位", f"当前价已站上{reference_label} {reference_price:.2f}，回买点页判断是否还能追。"
+            if gap_pct >= near_floor:
+                return "接近执行位", f"当前价距离{reference_label} {reference_price:.2f} 约 {abs(gap_pct):.2f}%，接近突破确认区。"
+            return "待突破", f"当前价距离{reference_label} {reference_price:.2f} 约 {abs(gap_pct):.2f}%，先等更接近再看。"
+
+        near_floor = self._retrace_gap_floor_pct(stock.ts_code)
+        if gap_pct >= near_floor:
+            return "接近执行位", f"当前价距离{reference_label} {reference_price:.2f} 约 {abs(gap_pct):.2f}%，已接近可观察执行区。"
+        if gap_pct <= self._deep_retrace_gap_floor_pct(stock.ts_code):
+            return "待深回踩", f"当前价高于{reference_label} {reference_price:.2f} 约 {abs(gap_pct):.2f}%，这个位置更像深回踩参考。"
+        wait_label = "待低吸" if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK else "待回踩"
+        action_label = "低吸参考位" if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK else reference_label
+        return wait_label, f"当前价高于{action_label} {reference_price:.2f} 约 {abs(gap_pct):.2f}%，先回买点页等触发。"
+
+    def _retrace_gap_floor_pct(self, ts_code: str) -> float:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return -4.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return -2.5
+        return -1.5
+
+    def _deep_retrace_gap_floor_pct(self, ts_code: str) -> float:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return -12.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return -8.0
+        return -6.0
+
+    def _breakthrough_gap_floor_pct(self, ts_code: str) -> float:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return -2.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return -1.5
+        return -1.0
+
+    def _current_price(self, stock: StockOutput) -> Optional[float]:
+        price = stock.close or stock.pre_close or stock.open
+        return round(float(price), 2) if price else None
+
+    def _price_gap_pct(self, current_price: Optional[float], target_price: Optional[float]) -> Optional[float]:
+        if not current_price or not target_price:
+            return None
+        return round((float(target_price) - float(current_price)) / float(current_price) * 100, 2)
 
     def _has_comfortable_account_entry(self, stock: StockOutput) -> tuple[bool, str, Optional[str]]:
         """账户可参与池必须对应相对舒服、可执行的买入位置。"""

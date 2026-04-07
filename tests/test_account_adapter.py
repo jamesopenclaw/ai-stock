@@ -119,6 +119,26 @@ class TestAccountAdapter:
         
         assert result is False
 
+    def test_new_position_cautious_in_neutral_cautious_profile(self, service):
+        mock_env = MagicMock()
+        mock_env.market_env_tag = MarketEnvTag.NEUTRAL
+        mock_env.market_env_profile = "中性偏谨慎"
+
+        result, action = service._judge_new_position(0.2, 1, mock_env, 0)
+
+        assert result is True
+        assert action == "谨慎执行"
+
+    def test_new_position_blocked_in_weak_neutral_profile(self, service):
+        mock_env = MagicMock()
+        mock_env.market_env_tag = MarketEnvTag.NEUTRAL
+        mock_env.market_env_profile = "弱中性"
+
+        result, action = service._judge_new_position(0.2, 1, mock_env, 0)
+
+        assert result is False
+        assert action == "谨慎执行"
+
     # ========== 优先动作测试 ==========
 
     def test_priority_action_sell_weak_in_high_pressure(self, service):
@@ -150,6 +170,16 @@ class TestAccountAdapter:
         
         # 低仓位时可建议买入
         assert "买入" in result or "开仓" in result or "建仓" in result or "可" in result
+
+    def test_priority_action_prefers_confirmation_in_neutral_strong_profile(self, service):
+        mock_env = MagicMock()
+        mock_env.market_env_tag = MarketEnvTag.NEUTRAL
+        mock_env.market_env_profile = "中性偏强"
+        holdings = []
+
+        result = service._determine_priority_action(0.3, 1, mock_env, holdings)
+
+        assert result == "等主线确认后开新仓"
 
 
 class TestAccountAdapterPRDRequirements:

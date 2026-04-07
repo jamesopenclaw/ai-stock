@@ -21,7 +21,7 @@
           <div class="hero-priority">{{ summary.priority_action }}</div>
           <div class="hero-tag-row">
             <span class="hero-chip">
-              <strong>市场</strong>{{ summary.market_env_tag || '-' }}
+              <strong>市场</strong>{{ marketEnvProfile || summary.market_env_tag || '-' }}
             </span>
             <span class="hero-chip">
               <strong>账户</strong>{{ summary.account_action_tag || '-' }}
@@ -71,11 +71,11 @@
           <div class="market-env-tag-wrap">
             <el-tag
               class="market-env-tag"
-              :type="getEnvTagType(marketEnv.market_env_tag)"
+              :type="getEnvTagType(marketEnvProfile)"
               effect="dark"
               size="large"
             >
-              {{ marketEnv.market_env_tag }}
+              {{ marketEnvProfile }}
             </el-tag>
           </div>
           <div class="market-env-headline">{{ dashboardMarketHeadline }}</div>
@@ -302,8 +302,8 @@ const getActionClass = (action) => {
 }
 
 const getEnvTagType = (tag) => {
-  if (tag === '进攻') return 'success'
-  if (tag === '中性') return 'warning'
+  if (['强进攻', '进攻', '中性偏强', '情绪修复'].includes(tag)) return 'success'
+  if (['中性偏谨慎', '弱中性', '中性'].includes(tag)) return 'warning'
   return 'danger'
 }
 
@@ -366,10 +366,12 @@ const holdingActions = computed(() => {
 })
 const buyCandidates = computed(() => (buyPoints.value?.available_buy_points || []).slice(0, 5))
 const holdingPreview = computed(() => holdingActions.value.slice(0, 5))
+const marketEnvProfile = computed(() => marketEnv.value?.market_env_profile || marketEnv.value?.market_env_tag || '-')
 const dashboardMarketHeadline = computed(() => {
   if (!marketEnv.value) return ''
-  if (marketEnv.value.market_env_tag === '进攻') return '环境允许主动找强，不必过度保守'
-  if (marketEnv.value.market_env_tag === '防守') return '优先控仓和处理旧仓，等更舒服的确认'
+  if (marketEnv.value.market_headline) return marketEnv.value.market_headline
+  if (marketEnvProfile.value === '进攻') return '环境允许主动找强，不必过度保守'
+  if (marketEnvProfile.value === '防守') return '优先控仓和处理旧仓，等更舒服的确认'
   return '环境分歧明显，今天更重节奏和确认'
 })
 const sectorNarrative = computed(() => {
@@ -407,10 +409,10 @@ const heroPulseCards = computed(() => [
     tone: Number(accountProfile.value?.total_position_ratio || 0) > 0.7 ? 'weak' : Number(accountProfile.value?.total_position_ratio || 0) > 0.4 ? 'balanced' : 'strong',
   },
   {
-    label: '主线方向',
-    value: leaderSector.value?.sector?.sector_name || '-',
-    copy: sectorNarrative.value || '等待主线板块结果。',
-    tone: Number(leaderSector.value?.sector?.sector_change_pct || 0) > 0 ? 'strong' : 'balanced',
+    label: '交易节奏',
+    value: marketEnv.value?.trading_tempo_label || (marketEnv.value?.breakout_allowed ? '可确认后做' : '先不追'),
+    copy: marketEnv.value?.market_subheadline || '等待市场环境结果。',
+    tone: ['可盯确认突破', '主线确认后参与'].includes(marketEnv.value?.trading_tempo_label) ? 'strong' : ['观望低吸', '等待确认'].includes(marketEnv.value?.trading_tempo_label) ? 'balanced' : 'weak',
   },
 ])
 const reviewHighlights = computed(() => {

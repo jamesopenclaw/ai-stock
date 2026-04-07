@@ -457,9 +457,12 @@ const DASHBOARD_CACHE_PREFIX = 'dashboard_snapshot_v2'
 const notificationAction = computed(() => String(route.query.notification_action || '').trim())
 const notificationTsCode = computed(() => String(route.query.ts_code || '').trim())
 const notificationStockName = computed(() => String(route.query.stock_name || '').trim())
+const sellEnvProfile = computed(() => sellData.value.market_env_profile || sellData.value.market_env_tag || '')
 
 const sellHeadline = computed(() => {
   if (sellData.value.sell_positions?.length) return '先处理 SOP 明确要求退出的持仓，再看减仓和继续观察的部分'
+  if (sellEnvProfile.value === '弱中性' && sellData.value.reduce_positions?.length) return '当前环境偏弱，先把减仓和收缩风险的动作处理掉'
+  if (sellEnvProfile.value === '中性偏谨慎' && sellData.value.reduce_positions?.length) return '当前环境偏谨慎，先把该减的仓位处理掉，再等结构确认'
   if (sellData.value.reduce_positions?.length) return '当前以防守和收缩风险为主，先把该减的仓位处理掉'
   return '当前没有必须退出的持仓，按 SOP 以持有观察为主'
 })
@@ -467,6 +470,8 @@ const sellAnalysisTradeDate = computed(() => sellData.value?.resolved_trade_date
 
 const sellGuidance = computed(() => {
   if (sellData.value.sell_positions?.length) return '本页已按卖点 SOP 的最终执行动作归类。卖出区代表优先退出，不要和减仓票混在一起处理。'
+  if (sellEnvProfile.value === '弱中性' && sellData.value.reduce_positions?.length) return '本页已按卖点 SOP 的最终执行动作归类。弱中性环境里，减仓区代表先收缩风险敞口。'
+  if (sellEnvProfile.value === '中性偏谨慎' && sellData.value.reduce_positions?.length) return '本页已按卖点 SOP 的最终执行动作归类。中性偏谨慎环境里，减仓区代表先防守再等结构修复。'
   if (sellData.value.reduce_positions?.length) return '本页已按卖点 SOP 的最终执行动作归类。减仓区代表先做防守，不等于整笔持仓已经结束。'
   return '本页已按卖点 SOP 的最终执行动作归类。持有观察区代表暂时不急着动，但仍要盯住后续处理条件。'
 })
@@ -474,6 +479,12 @@ const sellGuidance = computed(() => {
 const sellChecklist = computed(() => {
   if (sellData.value.sell_positions?.length) {
     return ['先清高优先级', '退出票优先执行', '别把减仓票当卖出票处理']
+  }
+  if (sellEnvProfile.value === '弱中性' && sellData.value.reduce_positions?.length) {
+    return ['环境偏弱先收缩', '板块走弱先减仓', '减仓后再看能否修复']
+  }
+  if (sellEnvProfile.value === '中性偏谨慎' && sellData.value.reduce_positions?.length) {
+    return ['先降风险敞口', '板块转弱先防守', '不要把减仓票拖成卖出票']
   }
   if (sellData.value.reduce_positions?.length) {
     return ['先把风险降下来', '强度下降先防守', '减仓后再看结构是否修复']

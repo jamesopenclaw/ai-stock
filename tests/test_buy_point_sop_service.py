@@ -650,6 +650,27 @@ def test_buy_point_sop_account_context_warns_same_sector_exposure_for_new_positi
     assert "已有同板块持仓" in advice.reason
 
 
+def test_buy_point_sop_market_profile_changes_entry_size_and_guidance():
+    market_env = SimpleNamespace(
+        market_env_tag=MarketEnvTag.NEUTRAL,
+        market_env_profile="中性偏谨慎",
+    )
+
+    suitability = buy_point_sop_service._market_suitability(
+        market_env.market_env_tag,
+        market_env.market_env_profile,
+    )
+    position_pct = buy_point_sop_service._resolve_entry_position_pct("轻仓试错", market_env)
+    market_state = buy_point_sop_service._resolve_market_state(
+        market_env.market_env_tag,
+        market_env.market_env_profile,
+    )
+
+    assert "低吸和回踩确认" in suitability
+    assert position_pct == 0.12
+    assert market_state == "谨慎分化市"
+
+
 def test_buy_point_sop_breakout_price_stays_above_low_absorb():
     target_input = SimpleNamespace(
         close=7.38,
@@ -771,6 +792,55 @@ def test_buy_point_sop_main_board_downgrades_same_retrace_distance():
         17.52,
         18.04,
     ) == 18.04
+
+
+def test_buy_point_sop_retrace_confirm_zone_stays_above_invalid_line():
+    target_input = SimpleNamespace(
+        close=18.12,
+        open=17.84,
+        high=18.36,
+        low=17.72,
+        vol_ratio=1.1,
+    )
+    stock = _sample_scored_stock()
+    stock.close = 18.12
+    stock.open = 17.84
+    stock.high = 18.36
+    stock.low = 17.72
+    stock.change_pct = 3.6
+
+    plan = buy_point_sop_service._build_order_plan(
+        target_input,
+        stock,
+        SimpleNamespace(
+            buy_point_type=BuyPointType.RETRACE_SUPPORT,
+            buy_trigger_cond="回踩承接再看",
+            buy_invalid_cond="跌破支撑放弃",
+            buy_invalid_price=17.48,
+        ),
+        SimpleNamespace(market_env_tag=MarketEnvTag.DEFENSE),
+        SimpleNamespace(
+            position_status="轻仓（仓位 13%）",
+            same_direction_exposure="暂无明显同方向重复暴露。",
+            current_use="新开仓",
+            account_conclusion="轻仓新开仓，可试错",
+        ),
+        SimpleNamespace(buy_point_level="C"),
+        SimpleNamespace(intraday_structure="回踩承接"),
+        SimpleNamespace(
+            ma5=17.78,
+            ma10=17.55,
+            ma20=17.26,
+            prev_high=17.05,
+            prev_low=16.96,
+            range_high_20d=17.05,
+            range_low_20d=16.12,
+        ),
+    )
+
+    assert _zone_low(plan.low_absorb_price) > float(plan.below_no_buy)
+    assert _zone_low(plan.retrace_confirm_price) > float(plan.below_no_buy)
+    assert _zone_low(plan.retrace_confirm_price) > 17.70
 
 
 @pytest.mark.asyncio

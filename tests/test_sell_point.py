@@ -517,6 +517,62 @@ class TestSellPoint:
         assert len(response.sell_positions) == 0
         assert response.hold_positions[0].sell_signal_tag == SellSignalTag.OBSERVE
 
+    def test_neutral_cautious_profile_reduces_when_sector_weak(self, service):
+        position = AccountPosition(
+            ts_code="002463.SZ",
+            stock_name="沪电股份",
+            holding_qty=200,
+            cost_price=86.45,
+            market_price=88.30,
+            pnl_pct=2.14,
+            holding_market_value=17660,
+            buy_date="2026-03-18",
+            can_sell_today=True,
+            holding_reason="板块主升跟随",
+        )
+
+        class NeutralCautiousEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+            market_env_profile = "中性偏谨慎"
+
+        class WeakSector:
+            sector_mainline_tag = SectorMainlineTag.TRASH
+            sector_tradeability_tag = SectorTradeabilityTag.NOT_RECOMMENDED
+
+        sell_point = service._analyze_position(position, NeutralCautiousEnv(), {"元器件": WeakSector()}, "元器件")
+        service._apply_sector_resonance_adjustment(
+            sell_point,
+            position,
+            "元器件",
+            {"元器件": WeakSector()},
+            NeutralCautiousEnv(),
+        )
+
+        assert sell_point.sell_signal_tag == SellSignalTag.REDUCE
+        assert "偏谨慎" in sell_point.sell_reason
+
+    def test_weak_neutral_profile_treats_weak_structure_as_reduce(self, service):
+        position = AccountPosition(
+            ts_code="002463.SZ",
+            stock_name="沪电股份",
+            holding_qty=200,
+            cost_price=86.45,
+            market_price=83.90,
+            pnl_pct=-2.95,
+            holding_market_value=16780,
+            buy_date="2026-03-18",
+            can_sell_today=True,
+            holding_reason="板块主升跟随",
+        )
+
+        class WeakNeutralEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+            market_env_profile = "弱中性"
+
+        sell_point = service._analyze_position(position, WeakNeutralEnv(), {}, "元器件")
+
+        assert sell_point.sell_signal_tag == SellSignalTag.REDUCE
+
     def test_invalid_reason_exits_even_without_large_loss(self, service):
         """
         测试：原买入逻辑失效时优先退出，不再依赖盈亏阈值

@@ -410,6 +410,11 @@ async def analyze_sell_point(
 
         payload = {
             "trade_date": result.trade_date,
+            "market_env_tag": market_env.market_env_tag.value,
+            "market_env_profile": getattr(market_env, "market_env_profile", "") or market_env.market_env_tag.value,
+            "market_headline": getattr(market_env, "market_headline", "") or "",
+            "market_subheadline": getattr(market_env, "market_subheadline", "") or "",
+            "trading_tempo_label": getattr(market_env, "trading_tempo_label", "") or "",
             "hold_positions": [p.model_dump() for p in result.hold_positions],
             "reduce_positions": [p.model_dump() for p in result.reduce_positions],
             "sell_positions": [p.model_dump() for p in result.sell_positions],
@@ -565,6 +570,10 @@ async def analyze_buy_point(
             data={
                 "trade_date": result.trade_date,
                 "market_env_tag": result.market_env_tag.value,
+                "market_env_profile": getattr(bundle_context_market_env, "market_env_profile", "") or result.market_env_tag.value,
+                "market_headline": getattr(bundle_context_market_env, "market_headline", "") or "",
+                "market_subheadline": getattr(bundle_context_market_env, "market_subheadline", "") or "",
+                "trading_tempo_label": getattr(bundle_context_market_env, "trading_tempo_label", "") or "",
                 "available_buy_points": [bp.model_dump() for bp in result.available_buy_points],
                 "observe_buy_points": [bp.model_dump() for bp in result.observe_buy_points],
                 "not_buy_points": [bp.model_dump() for bp in result.not_buy_points],
@@ -693,12 +702,19 @@ def _generate_summary(
     holdings
 ) -> DecisionSummary:
     """生成执行摘要"""
+    market_profile = str(getattr(market_env, "market_env_profile", "") or "")
 
     # 判断今天 action
     if not account_output.new_position_allowed:
         today_action = "少出手或不出手"
     elif market_env.market_env_tag.value == "进攻":
         today_action = "可适度出手"
+    elif market_profile == "中性偏强":
+        today_action = "等主线确认后出手"
+    elif market_profile == "中性偏谨慎":
+        today_action = "只做低吸或回踩确认"
+    elif market_profile == "弱中性":
+        today_action = "尽量少出手"
     elif market_env.market_env_tag.value == "中性":
         today_action = "谨慎出手"
     else:
@@ -718,6 +734,12 @@ def _generate_summary(
     # 判断哪些不碰
     if market_env.market_env_tag.value == "防守":
         avoid = "弱势股、杂毛股、跟风股"
+    elif market_profile == "中性偏强":
+        avoid = "后排跟风、无量突破"
+    elif market_profile == "中性偏谨慎":
+        avoid = "一致性追高、尾盘抢板"
+    elif market_profile == "弱中性":
+        avoid = "高位追涨、纯情绪接力"
     elif market_env.market_env_tag.value == "中性":
         avoid = "高位追涨、纯跟风"
     else:

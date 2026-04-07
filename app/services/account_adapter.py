@@ -142,10 +142,14 @@ class AccountAdapterService:
         today_new_buy_count: int
     ) -> tuple:
         """判断是否允许新开仓"""
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
+
         # 市场环境判断
         if market_env.market_env_tag == MarketEnvTag.DEFENSE:
             # 防守环境，不允许新开仓
             return (False, "不执行")
+        if market_profile == "弱中性":
+            return (False, "谨慎执行")
 
         # 仓位判断
         if position_ratio >= self.POSITION_HIGH:
@@ -163,6 +167,9 @@ class AccountAdapterService:
         if position_ratio >= self.POSITION_MEDIUM:
             return (False, "谨慎执行")
 
+        if market_profile == "中性偏谨慎":
+            return (True, "谨慎执行")
+
         return (True, "可执行")
 
     def _determine_priority_action(
@@ -173,6 +180,7 @@ class AccountAdapterService:
         holdings: List[AccountPosition]
     ) -> str:
         """确定优先动作"""
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         # 1. 有亏损持仓优先处理
         for h in holdings:
             if h.pnl_pct < -3:
@@ -194,6 +202,10 @@ class AccountAdapterService:
         # 5. 市场进攻可开新仓
         if market_env.market_env_tag == MarketEnvTag.ATTACK:
             return "可适度开新仓"
+        if market_profile == "中性偏强":
+            return "等主线确认后开新仓"
+        if market_profile in {"中性偏谨慎", "弱中性"}:
+            return "只做低吸或回踩确认"
 
         # 6. 默认观察
         return "保持现有仓位"
@@ -207,6 +219,7 @@ class AccountAdapterService:
     ) -> str:
         """生成说明"""
         comments = []
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
 
         # 仓位压力
         if position_pressure == "高":
@@ -220,7 +233,14 @@ class AccountAdapterService:
         if market_env.market_env_tag == MarketEnvTag.ATTACK:
             comments.append("市场进攻，可积极")
         elif market_env.market_env_tag == MarketEnvTag.NEUTRAL:
-            comments.append("市场中性，谨慎")
+            if market_profile == "中性偏强":
+                comments.append("市场中性偏强，可等主线确认")
+            elif market_profile == "中性偏谨慎":
+                comments.append("市场中性偏谨慎，优先低吸确认")
+            elif market_profile == "弱中性":
+                comments.append("市场弱中性，尽量少追价")
+            else:
+                comments.append("市场中性，谨慎")
         else:
             comments.append("市场防守，控制")
 

@@ -291,6 +291,59 @@ class TestMarketEnv:
         assert result.breakout_allowed is False, \
             f"中性+高炸板率时 breakout_allowed 应为 False, 实际: {result.breakout_allowed}"
 
+    def test_sentiment_score_balances_breadth_and_speculation(self, service):
+        """
+        测试：广度较强但接力偏弱时，情绪分不应被单项指标压到过低
+
+        验证点：应识别为中性，且评论明确提示“广度尚可、接力承压”
+        """
+        market_data = MarketEnvInput(
+            trade_date="2026-04-07",
+            index_sh=0.03,
+            index_sz=-0.20,
+            index_cyb=-0.46,
+            up_down_ratio={"up": 3645, "down": 1781},
+            limit_up_count=70,
+            limit_down_count=17,
+            broken_board_rate=37.5,
+            market_turnover=11000,
+            risk_appetite_tag="中性"
+        )
+
+        result = service.analyze(market_data)
+
+        assert result.market_env_tag == MarketEnvTag.NEUTRAL
+        assert 45 <= result.sentiment_score <= 55, \
+            f"情绪分应落在中性偏谨慎区间, 实际: {result.sentiment_score}"
+        assert result.market_env_profile == "中性偏谨慎"
+        assert result.market_headline == "可以盯盘，但优先低吸和回踩确认"
+        assert result.trading_tempo_label == "观望低吸"
+        assert result.dominant_factor_label == "广度强于接力"
+        assert "接力" in result.market_comment
+        assert ("广度" in result.market_comment or "多数个股" in result.market_comment)
+
+    def test_sentiment_score_is_smooth_near_limit_up_boundary(self, service):
+        """
+        测试：涨停家数临界点附近应平滑，不应出现明显跳变
+        """
+        base_kwargs = dict(
+            trade_date="2026-04-07",
+            index_sh=0.2,
+            index_sz=0.1,
+            index_cyb=0.0,
+            up_down_ratio={"up": 2400, "down": 1600},
+            limit_down_count=6,
+            broken_board_rate=16.0,
+            market_turnover=12000,
+            risk_appetite_tag="中性"
+        )
+
+        result_50 = service.analyze(MarketEnvInput(limit_up_count=50, **base_kwargs))
+        result_51 = service.analyze(MarketEnvInput(limit_up_count=51, **base_kwargs))
+
+        assert abs(result_51.sentiment_score - result_50.sentiment_score) < 1.0, \
+            "涨停家数 +1 不应造成情绪分明显跳变"
+
     # ========== risk_level 测试 ==========
 
     def test_risk_level_low_in_attack(self, service):

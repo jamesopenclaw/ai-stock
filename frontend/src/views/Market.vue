@@ -30,9 +30,9 @@
                 class="market-env-tag"
                 size="large"
                 effect="dark"
-                :type="getEnvType(marketEnv.market_env_tag)"
+                :type="getEnvType(displayEnvProfile)"
               >
-                {{ marketEnv.market_env_tag }}
+                {{ displayEnvProfile }}
               </el-tag>
               <div class="hero-headline">{{ marketHeadline }}</div>
               <div class="hero-subheadline">{{ marketSubheadline }}</div>
@@ -209,8 +209,8 @@ const getLocalDate = () => {
 }
 
 const getEnvType = (tag) => {
-  if (tag === '进攻') return 'success'
-  if (tag === '中性') return 'warning'
+  if (['强进攻', '进攻', '中性偏强', '情绪修复'].includes(tag)) return 'success'
+  if (['中性偏谨慎', '弱中性', '中性'].includes(tag)) return 'warning'
   return 'danger'
 }
 
@@ -363,8 +363,14 @@ const scoreCopy = (label, score) => {
   return `${label}偏弱，今天更适合先控风险`
 }
 
+const displayEnvProfile = computed(() => {
+  if (!marketEnv.value) return ''
+  return marketEnv.value.market_env_profile || marketEnv.value.market_env_tag || ''
+})
+
 const dominantSide = computed(() => {
   if (!marketEnv.value) return '-'
+  if (marketEnv.value.dominant_factor_label) return marketEnv.value.dominant_factor_label
   const indexScore = Number(marketEnv.value.index_score || 0)
   const sentimentScore = Number(marketEnv.value.sentiment_score || 0)
   const delta = Math.abs(indexScore - sentimentScore)
@@ -376,6 +382,7 @@ const marketCommentSections = computed(() => parseMarketComment(marketEnv.value?
 
 const marketHeadline = computed(() => {
   if (!marketEnv.value) return ''
+  if (marketEnv.value.market_headline) return marketEnv.value.market_headline
   const tag = marketEnv.value.market_env_tag
   if (tag === '进攻') return '可以做确认后的主动进攻'
   if (tag === '防守') return '先守住回撤，再等下一次舒服机会'
@@ -384,6 +391,7 @@ const marketHeadline = computed(() => {
 
 const marketSubheadline = computed(() => {
   if (!marketEnv.value) return ''
+  if (marketEnv.value.market_subheadline) return marketEnv.value.market_subheadline
   return `${dominantSide.value}，综合分 ${Number(marketEnv.value.overall_score || 0).toFixed(1)}`
 })
 
@@ -399,9 +407,9 @@ const heroInsights = computed(() => {
   return [
     {
       label: '交易节奏',
-      value: marketEnv.value.breakout_allowed ? '可盯确认突破' : '暂停追突破',
+      value: marketEnv.value.trading_tempo_label || (marketEnv.value.breakout_allowed ? '可盯确认突破' : '暂停追突破'),
       copy: marketEnv.value.breakout_allowed ? '更适合做确认后的主动出手。' : '以等确认、回踩承接和控仓为主。',
-      tone: marketEnv.value.breakout_allowed ? 'strong' : 'weak',
+      tone: ['可盯确认突破', '主线确认后参与'].includes(marketEnv.value.trading_tempo_label) || marketEnv.value.breakout_allowed ? 'strong' : ['观望低吸', '等待确认'].includes(marketEnv.value.trading_tempo_label) ? 'balanced' : 'weak',
     },
     {
       label: '风险等级',
@@ -412,8 +420,8 @@ const heroInsights = computed(() => {
     {
       label: '主导因子',
       value: dominantSide.value,
-      copy: '用于判断今天更该信指数，还是更该信情绪侧。',
-      tone: 'balanced',
+      copy: dominantSide.value === '广度强于接力' ? '多数个股有活跃度，但高位接力质量仍偏弱。' : '用于判断今天更该信指数，还是更该信情绪侧。',
+      tone: dominantSide.value === '广度强于接力' ? 'balanced' : 'balanced',
     },
     {
       label: '数据口径',

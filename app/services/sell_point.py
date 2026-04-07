@@ -256,6 +256,7 @@ class SellPointService:
         )
         sector_supportive = sector_supportive or dynamic_supportive
         sector_weak = sector_weak or dynamic_weak
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
 
         # 原买入逻辑失效时优先退出，这是最强约束。
         if reason_invalid:
@@ -323,9 +324,18 @@ class SellPointService:
                 sell_point.sell_point_type = SellPointType.REDUCE_POSITION
                 sell_point.sell_priority = SellPriority.MEDIUM
                 sell_point.reduce_reason_code = "env_weak"
-                sell_point.sell_reason = "板块走弱了，先降一点仓位更稳妥"
-                sell_point.sell_trigger_cond = "日内反弹无量时减仓"
-                sell_point.sell_comment = "先降风险敞口，等板块重新转强"
+                if market_profile == "中性偏谨慎":
+                    sell_point.sell_reason = "市场偏谨慎且板块走弱，先降一点仓位更稳妥"
+                    sell_point.sell_trigger_cond = "反弹无量或承接变差时减仓"
+                    sell_point.sell_comment = "先降风险敞口，等板块重新转强"
+                elif market_profile == "弱中性":
+                    sell_point.sell_reason = "市场弱中性且板块走弱，优先减仓收缩敞口"
+                    sell_point.sell_trigger_cond = "反弹不能续强时优先减仓"
+                    sell_point.sell_comment = "这类环境先保护仓位效率"
+                else:
+                    sell_point.sell_reason = "板块走弱了，先降一点仓位更稳妥"
+                    sell_point.sell_trigger_cond = "日内反弹无量时减仓"
+                    sell_point.sell_comment = "先降风险敞口，等板块重新转强"
 
     def _decision(
         self,
@@ -395,16 +405,20 @@ class SellPointService:
         )
         sector_supportive = sector_supportive or dynamic_supportive
         sector_weak = sector_weak or dynamic_weak
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         structure_strong = (
-            market_env.market_env_tag == MarketEnvTag.ATTACK
+            (market_env.market_env_tag == MarketEnvTag.ATTACK or market_profile == "中性偏强")
             and (sector_supportive or reason_strong)
             and not sector_weak
         )
         structure_weak = (
             sector_weak
             or (market_env.market_env_tag == MarketEnvTag.DEFENSE and not sector_supportive)
+            or (market_profile == "弱中性" and not sector_supportive)
         )
         if reason_tactical and market_env.market_env_tag == MarketEnvTag.DEFENSE:
+            structure_weak = True
+        if reason_tactical and market_profile == "中性偏谨慎":
             structure_weak = True
 
         # 0. 原始逻辑失效优先退出
@@ -464,7 +478,7 @@ class SellPointService:
             )
 
         # 3. 市场环境恶化且结构偏弱 -> 先减仓
-        if market_env.market_env_tag == MarketEnvTag.DEFENSE and pnl_pct < 0:
+        if (market_env.market_env_tag == MarketEnvTag.DEFENSE or market_profile == "弱中性") and pnl_pct < 0:
             if pnl_pct <= self.STOP_LOSS_PCT_STRICT or structure_weak:
                 return self._decision(
                     SellPointType.REDUCE_POSITION,
@@ -478,7 +492,7 @@ class SellPointService:
 
         # 4. 结构走弱后的止盈/减仓
         if pnl_pct >= self.STOP_PROFIT_PCT:
-            if structure_weak and market_env.market_env_tag == MarketEnvTag.DEFENSE and not sector_supportive:
+            if structure_weak and (market_env.market_env_tag == MarketEnvTag.DEFENSE or market_profile == "弱中性") and not sector_supportive:
                 return self._decision(
                     SellPointType.STOP_PROFIT,
                     SellSignalTag.SELL,

@@ -101,26 +101,31 @@
             <div class="summary-kicker">账户执行概览</div>
               <div class="overview-mini-stats overview-mini-stats-compact">
                 <div class="overview-mini-stat overview-mini-stat-account">
-                  <span class="overview-mini-label">标准执行</span>
-                  <strong class="overview-mini-value">{{ standardExecutionPool.length }}</strong>
+                  <span class="overview-mini-label">接近执行位</span>
+                  <strong class="overview-mini-value">{{ readyStandardExecutionPool.length }}</strong>
                   <span class="overview-mini-tip">优先看这里</span>
                 </div>
                 <div class="overview-mini-stat overview-mini-stat-market">
+                  <span class="overview-mini-label">待触发</span>
+                  <strong class="overview-mini-value">{{ waitingStandardExecutionPool.length }}</strong>
+                  <span class="overview-mini-tip">跟计划不急追</span>
+                </div>
+                <div class="overview-mini-stat overview-mini-stat-defense">
                   <span class="overview-mini-label">进攻试错</span>
                   <strong class="overview-mini-value">{{ aggressiveTrialPool.length }}</strong>
                   <span class="overview-mini-tip">仅小仓试错</span>
                 </div>
-                <div class="overview-mini-stat overview-mini-stat-defense">
+                <div class="overview-mini-stat overview-mini-stat-trend">
                   <span class="overview-mini-label">防守试错</span>
                   <strong class="overview-mini-value">{{ defenseTrialPool.length }}</strong>
                   <span class="overview-mini-tip">防守日极少数</span>
                 </div>
-                <div class="overview-mini-stat overview-mini-stat-trend">
-                  <span class="overview-mini-label">观察票</span>
-                  <strong class="overview-mini-value">{{ marketCount }}</strong>
-                  <span class="overview-mini-tip">先盯不先做</span>
-                </div>
                 <div class="overview-mini-stat overview-mini-stat-holding">
+                <span class="overview-mini-label">观察票</span>
+                <strong class="overview-mini-value">{{ marketCount }}</strong>
+                <span class="overview-mini-tip">先盯不先做</span>
+              </div>
+              <div class="overview-mini-stat overview-mini-stat-holding">
                 <span class="overview-mini-label">持仓处理</span>
                 <strong class="overview-mini-value">{{ holdingCount }}</strong>
                 <span class="overview-mini-tip">旧仓优先</span>
@@ -277,7 +282,7 @@
               <div>
                 <div class="section-kicker">模块 A</div>
                 <div class="section-title">账户可参与池</div>
-                <div class="priority-panel-desc">先看今天真的能动的票，再决定要不要回买点页确认。</div>
+                <div class="priority-panel-desc">先看今天通过账户准入的票，再决定要不要回买点页确认执行位。</div>
               </div>
               <el-button text type="primary" @click="activeTab = 'account'">查看详细清单</el-button>
             </div>
@@ -286,28 +291,34 @@
             </div>
             <div v-else class="execution-lane-stack">
               <div class="execution-dual-grid">
-              <section v-if="standardExecutionPool.length" class="execution-lane execution-lane-standard">
+              <section v-if="readyStandardExecutionPool.length" class="execution-lane execution-lane-standard">
                 <div class="lane-head">
                   <div class="lane-title-wrap">
-                    <div class="lane-title">标准执行</div>
-                    <div class="lane-caption">位置相对舒服，可按计划执行</div>
+                    <div class="lane-title">标准候选 · 接近执行位</div>
+                    <div class="lane-caption">已通过账户准入，且现价已靠近执行区，先看这一组</div>
                   </div>
-                  <span class="lane-badge">{{ standardExecutionPool.length }} 只</span>
+                  <span class="lane-badge">{{ readyStandardExecutionPool.length }} 只</span>
                 </div>
-                <article v-for="stock in standardExecutionPool" :key="`std-${stock.ts_code}`" class="action-card action-card-standard">
+                <article v-for="stock in readyStandardExecutionPool" :key="`std-${stock.ts_code}`" class="action-card action-card-standard">
                   <div class="action-card-top">
                     <div>
                       <div class="action-stock">{{ stock.stock_name }}</div>
                       <div class="action-meta">{{ stock.ts_code }} · {{ stock.sector_name || '无方向' }}</div>
                     </div>
-                    <span class="action-type-badge action-type-badge-standard">标准执行</span>
+                    <span class="action-type-badge action-type-badge-standard">标准候选</span>
                   </div>
                   <div class="action-state-row">
                     <span class="action-state-chip">{{ stock.stock_strength_tag || '强弱待定' }}</span>
                     <span class="action-state-chip">{{ stock.structure_state_tag || '结构待定' }}</span>
                     <span class="action-state-chip">{{ stock.direction_signal_tag || '稳定主线' }}</span>
+                    <span v-if="stock.execution_proximity_tag" class="action-state-chip" :class="executionProximityChipClass(stock)">
+                      {{ stock.execution_proximity_tag }}
+                    </span>
                   </div>
                   <div class="action-judgement">{{ executionJudgementLine(stock) }}</div>
+                  <div v-if="stock.execution_proximity_note" class="action-proximity" :class="executionProximityNoteClass(stock)">
+                    {{ stock.execution_proximity_note }}
+                  </div>
                   <div class="action-grid">
                     <div class="action-block">
                       <span class="action-block-label">执行方式</span>
@@ -318,7 +329,53 @@
                       <strong>{{ executionPositionLabel(stock) }}</strong>
                     </div>
                   </div>
-                  <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || stock.stock_comment || '满足账户准入。' }}</div>
+                  <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || stock.stock_comment || '已通过账户准入，仍要回买点页确认。' }}</div>
+                  <div class="action-risk">{{ executionRiskLine(stock) }}</div>
+                  <div class="stock-inline-actions">
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                  </div>
+                </article>
+              </section>
+
+              <section v-if="waitingStandardExecutionPool.length" class="execution-lane execution-lane-standard">
+                <div class="lane-head">
+                  <div class="lane-title-wrap">
+                    <div class="lane-title">标准候选 · 待触发</div>
+                    <div class="lane-caption">已经过准入，但现价离执行位还有距离，先按计划跟踪</div>
+                  </div>
+                  <span class="lane-badge">{{ waitingStandardExecutionPool.length }} 只</span>
+                </div>
+                <article v-for="stock in waitingStandardExecutionPool" :key="`std-wait-${stock.ts_code}`" class="action-card action-card-standard">
+                  <div class="action-card-top">
+                    <div>
+                      <div class="action-stock">{{ stock.stock_name }}</div>
+                      <div class="action-meta">{{ stock.ts_code }} · {{ stock.sector_name || '无方向' }}</div>
+                    </div>
+                    <span class="action-type-badge action-type-badge-standard">标准候选</span>
+                  </div>
+                  <div class="action-state-row">
+                    <span class="action-state-chip">{{ stock.stock_strength_tag || '强弱待定' }}</span>
+                    <span class="action-state-chip">{{ stock.structure_state_tag || '结构待定' }}</span>
+                    <span class="action-state-chip">{{ stock.direction_signal_tag || '稳定主线' }}</span>
+                    <span v-if="stock.execution_proximity_tag" class="action-state-chip" :class="executionProximityChipClass(stock)">
+                      {{ stock.execution_proximity_tag }}
+                    </span>
+                  </div>
+                  <div class="action-judgement">{{ executionJudgementLine(stock) }}</div>
+                  <div v-if="stock.execution_proximity_note" class="action-proximity" :class="executionProximityNoteClass(stock)">
+                    {{ stock.execution_proximity_note }}
+                  </div>
+                  <div class="action-grid">
+                    <div class="action-block">
+                      <span class="action-block-label">执行方式</span>
+                      <strong>{{ executionMethodLabel(stock) }}</strong>
+                    </div>
+                    <div class="action-block">
+                      <span class="action-block-label">仓位提示</span>
+                      <strong>{{ executionPositionLabel(stock) }}</strong>
+                    </div>
+                  </div>
+                  <div class="action-reason">{{ stock.pool_entry_reason || stock.why_this_pool || stock.stock_comment || '已通过账户准入，仍要回买点页确认。' }}</div>
                   <div class="action-risk">{{ executionRiskLine(stock) }}</div>
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
@@ -672,6 +729,9 @@
                           </el-tag>
                         </el-tooltip>
                         <el-tag size="small" :type="accountEntryTagType(stock)">{{ accountEntryTag(stock) }}</el-tag>
+                        <el-tag v-if="stock.execution_proximity_tag" size="small" :type="executionProximityTagType(stock)">
+                          {{ stock.execution_proximity_tag }}
+                        </el-tag>
                       </div>
                     </div>
 
@@ -685,6 +745,9 @@
 
                     <div class="signal-intent signal-intent-account">
                       {{ accountActionLine(stock) }}
+                    </div>
+                    <div v-if="stock.execution_proximity_note" class="execution-proximity-strip" :class="executionProximityStripClass(stock)">
+                      {{ stock.execution_proximity_note }}
                     </div>
                     <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (stock.hard_filter_failed_count || 0) > 0 }">
                       {{ hardFilterLine(stock) }}
@@ -713,6 +776,10 @@
                         <span class="quote-pair">
                           账户分
                           <strong>{{ formatScore(stock.account_entry_score) }}</strong>
+                        </span>
+                        <span v-if="stock.execution_reference_gap_pct !== null && stock.execution_reference_gap_pct !== undefined" class="quote-pair">
+                          距执行位
+                          <strong :class="executionGapClass(stock)">{{ formatSignedPct(stock.execution_reference_gap_pct) }}</strong>
                         </span>
                       </div>
                     </div>
@@ -772,14 +839,14 @@
                           <div class="panel-head">
                             <span class="panel-step">2</span>
                             <div>
-                              <div class="panel-title">仓位提示</div>
-                              <div class="panel-subtitle">执行前先按提示控制仓位</div>
-                            </div>
-                          </div>
-                          <div class="panel-body">
-                            <div class="condition-title">{{ stock.llm_risk_note || stock.position_hint || '按计划仓位执行，不要超配。' }}</div>
-                          </div>
-                        </section>
+                          <div class="panel-title">仓位提示</div>
+                          <div class="panel-subtitle">执行前先按提示控制仓位</div>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                            <div class="condition-title">{{ stock.execution_proximity_note || stock.llm_risk_note || stock.position_hint || '按计划仓位执行，不要超配。' }}</div>
+                      </div>
+                    </section>
                       </div>
                     </div>
 
@@ -1111,6 +1178,35 @@ const sortByFocusSector = (rows = []) => {
   return sorted
 }
 
+const executionProximityRank = (stock) => {
+  const tag = String(stock?.execution_proximity_tag || '')
+  if (tag === '接近执行位') return 0
+  if (tag === '已过确认位') return 1
+  if (tag === '待突破') return 2
+  if (tag === '待回踩' || tag === '待低吸') return 3
+  if (tag === '待深回踩') return 4
+  return 5
+}
+
+const compareAccountExecutionPriority = (a, b) => {
+  const modeDiff = (
+    (accountEntryMode(a) === 'standard' ? 0 : accountEntryMode(a) === 'aggressive_trial' ? 1 : 2) -
+    (accountEntryMode(b) === 'standard' ? 0 : accountEntryMode(b) === 'aggressive_trial' ? 1 : 2)
+  )
+  if (modeDiff !== 0) return modeDiff
+
+  const proximityDiff = executionProximityRank(a) - executionProximityRank(b)
+  if (proximityDiff !== 0) return proximityDiff
+
+  const accountScoreDiff = Number(b.account_entry_score || 0) - Number(a.account_entry_score || 0)
+  if (accountScoreDiff !== 0) return accountScoreDiff
+
+  const executionScoreDiff = Number(b.execution_opportunity_score || 0) - Number(a.execution_opportunity_score || 0)
+  if (executionScoreDiff !== 0) return executionScoreDiff
+
+  return Number(b.market_strength_score || 0) - Number(a.market_strength_score || 0)
+}
+
 const matchesReviewBucket = (stock) => {
   if (!reviewBucketFilter.value) return true
   return String(stock.candidate_bucket_tag || '').trim() === reviewBucketFilter.value
@@ -1119,7 +1215,7 @@ const matchesReviewBucket = (stock) => {
 const applyPoolFilters = (rows = []) => sortByFocusSector(rows).filter(matchesReviewBucket)
 
 const marketPool = computed(() => applyPoolFilters(poolsData.value.market_watch_pool || []))
-const accountPool = computed(() => applyPoolFilters(poolsData.value.account_executable_pool || []))
+const accountPool = computed(() => applyPoolFilters(poolsData.value.account_executable_pool || []).sort(compareAccountExecutionPriority))
 const focusMatches = computed(() => ({
   market: (poolsData.value.market_watch_pool || []).filter((stock) => matchesFocusSector(stock)).length,
   account: (poolsData.value.account_executable_pool || []).filter((stock) => matchesFocusSector(stock)).length,
@@ -1171,6 +1267,8 @@ const accountEntryMode = (stock) => {
 const isAggressiveTrialExecution = (stock) => accountEntryMode(stock) === 'aggressive_trial'
 const isDefenseTrialExecution = (stock) => accountEntryMode(stock) === 'defense_trial'
 const standardExecutionPool = computed(() => accountPool.value.filter((stock) => accountEntryMode(stock) === 'standard'))
+const readyStandardExecutionPool = computed(() => standardExecutionPool.value.filter((stock) => stock.execution_proximity_tag === '接近执行位'))
+const waitingStandardExecutionPool = computed(() => standardExecutionPool.value.filter((stock) => stock.execution_proximity_tag !== '接近执行位'))
 const aggressiveTrialPool = computed(() => accountPool.value.filter((stock) => isAggressiveTrialExecution(stock)))
 const defenseTrialPool = computed(() => accountPool.value.filter((stock) => isDefenseTrialExecution(stock)))
 
@@ -1181,7 +1279,7 @@ const getEnvTagType = (tag) => {
 }
 
 const marketEnvironmentHeadline = computed(() => {
-  if (todayMarketEnv.value.market_env_tag === '进攻') return '市场允许更主动，但依旧先分清标准执行和试错票。'
+  if (todayMarketEnv.value.market_env_tag === '进攻') return '市场允许更主动，但依旧先分清标准候选和试错票。'
   if (todayMarketEnv.value.market_env_tag === '防守') return '今天先控仓和处理旧仓，新开仓只看极少数确认机会。'
   return '市场处于中性切换期，优先看回踩确认，不要把观察票当执行票。'
 })
@@ -1238,7 +1336,8 @@ const executionGuidanceTitle = computed(() => {
   if (holdingCount.value) return '先处理持仓，再看新机会'
   if (globalTradeGate.value.status === '优先处理持仓，不建议新开') return '先处理持仓风险，不建议新开'
   if (globalTradeGate.value.status === '以防守为主') return '以防守为主，只保留极少数试错'
-  if (standardExecutionPool.value.length) return '优先做标准执行票'
+  if (readyStandardExecutionPool.value.length) return '优先看接近执行位的标准候选'
+  if (standardExecutionPool.value.length) return '先看标准候选里的待触发票'
   if (aggressiveTrialPool.value.length) return '允许小仓试错，但别当标准模式'
   if (defenseTrialPool.value.length) return '防守环境仅保留轻仓试错'
   return '今天以观察和跟踪为主'
@@ -1247,8 +1346,10 @@ const executionGuidanceTitle = computed(() => {
 const executionGuidanceCopy = computed(() => {
   if (holdingCount.value) return '旧仓优先级最高；先把卖、减、持处理清楚，再决定是否看新票。'
   if (globalTradeGate.value.dominant_reason) return globalTradeGate.value.dominant_reason
-  if (standardExecutionPool.value.length && !aggressiveTrialPool.value.length) return '今天有计划内机会，先看标准执行区，不要被观察池分散注意力。'
-  if (standardExecutionPool.value.length && aggressiveTrialPool.value.length) return '先做标准执行；进攻试错只给强化方向前排的小仓资格。'
+  if (readyStandardExecutionPool.value.length && !aggressiveTrialPool.value.length) return '今天有接近执行位的标准候选，优先看这批；其余待触发票先别急着算成当前机会。'
+  if (readyStandardExecutionPool.value.length && aggressiveTrialPool.value.length) return '先看接近执行位的标准候选；进攻试错只给强化方向前排的小仓资格，其他标准票仍要等触发。'
+  if (standardExecutionPool.value.length && !aggressiveTrialPool.value.length) return '今天有通过账户准入的标准候选，但大多还在待触发区，仍要回买点页确认，不要被观察池分散注意力。'
+  if (standardExecutionPool.value.length && aggressiveTrialPool.value.length) return '先看标准候选里的待触发票；进攻试错只给强化方向前排的小仓资格，两类都要回买点页确认执行位。'
   if (aggressiveTrialPool.value.length) return '今天没有太舒服的标准位，若要出手，只能在强化方向里做更快确认的试错仓。'
   if (defenseTrialPool.value.length) return '当前环境偏防守，只保留极少数最强核心股的轻仓试错资格，不要把它当进攻信号。'
   return '当前更适合先看观察池，等更清晰的确认条件。'
@@ -1259,7 +1360,7 @@ const executionEmptyStates = computed(() => {
   if (!standardExecutionPool.value.length) {
     states.push({
       key: 'standard',
-      title: '标准执行',
+      title: '标准候选',
       caption: '今天没有明确的计划内舒服位',
       reason: '当前账户可参与池更偏试错或防守保留，真正执行前更要依赖盘中确认。',
       tone: 'standard',
@@ -1271,7 +1372,7 @@ const executionEmptyStates = computed(() => {
       title: '进攻试错',
       caption: '当前没有需要额外放宽的小仓试错票',
       reason: standardExecutionPool.value.length
-        ? '今天已有更舒服的标准执行票，系统没有再额外放出高风险进攻试错。'
+        ? '今天已有通过账户准入的标准候选，系统没有再额外放出高风险进攻试错。'
         : '今天没有命中“方向强但位置不完美”的试错分支，先别硬找强行出手点。',
       tone: 'trial',
     })
@@ -1293,10 +1394,16 @@ const executionEmptyStates = computed(() => {
 const accountPoolGroups = computed(() => {
   return [
     {
-      key: 'standard',
-      title: '标准执行',
-      desc: '买点相对舒服，先按计划仓看回踩确认、低吸和标准突破。',
-      items: standardExecutionPool.value,
+      key: 'standard_ready',
+      title: '标准候选 · 接近执行位',
+      desc: '这批票既通过账户准入，当前价也已经靠近执行区，优先看这一组。',
+      items: readyStandardExecutionPool.value,
+    },
+    {
+      key: 'standard_waiting',
+      title: '标准候选 · 待触发',
+      desc: '这批票已通过账户准入，但现价离执行位还有距离，先跟计划，不要当成当前立刻可买。',
+      items: waitingStandardExecutionPool.value,
     },
     {
       key: 'aggressive_trial',
@@ -1414,7 +1521,7 @@ const overviewBadgeClass = computed(() => {
 const overviewTitle = computed(() => {
   if (globalTradeGate.value.status === '优先处理持仓，不建议新开') return '先处理旧仓风险，今天不建议新增仓位'
   if (holdingCount.value) return '已有仓位优先，先把该卖、该减、该持有的动作排清楚'
-  if (accountCount.value) return '当前有能执行的新标的，先看账户可参与池，再回到买点页确认'
+  if (accountCount.value) return '当前有通过账户准入的新标的，先看账户可参与池，再回到买点页确认'
   if (marketCount.value) return '当前更适合先观察市场最强结构，不要把观察票当成执行票'
   return '今天几类观察池都比较清淡，先等新的结构和账户信号'
 })
@@ -1435,7 +1542,7 @@ const overviewRules = computed(() => {
     return ['先处理旧仓，再考虑新开仓', '动作建议优先看高优先级', '证伪条件到了就不要拖']
   }
   if (accountCount.value) {
-    return ['先看进池理由', '仓位提示比题材更重要', '可参与不等于立刻追价']
+    return ['先看进池理由', '仓位提示比题材更重要', '通过账户准入不等于现价立刻可买']
   }
   return ['观察池只负责缩小盯盘范围', '先看最强结构，再看账户是否允许', '没有执行确认就不要急着动']
 })
@@ -1480,8 +1587,8 @@ const decisionSteps = computed(() => {
       title: '再看账户可参与',
       desc: '这批票已经通过账户准入，但真正执行还要回买点页等确认。',
       countLabel: `${accountCount.value} 只可参与`,
-      rule: '能做但别急追',
-      hint: '先看进池理由和仓位提示',
+      rule: '过准入但别急追',
+      hint: '先看进池理由，再回买点页看执行位',
     })
   }
   steps.push({
@@ -1502,7 +1609,7 @@ const decisionSteps = computed(() => {
 const focusSummary = computed(() => {
   if (!focusSector.value) return ''
   if (focusMatches.value.account) {
-    return `${focusSector.value} 已经有 ${focusMatches.value.account} 只进入账户可参与池，可以先看账户池，再去买点页确认。`
+    return `${focusSector.value} 已经有 ${focusMatches.value.account} 只进入账户可参与池，可以先看账户池，再去买点页确认执行位。`
   }
   if (focusMatches.value.market) {
     return `${focusSector.value} 目前更多停留在市场观察池，说明这条线还在观察期，先看板块一致性和量能。`
@@ -1525,13 +1632,13 @@ const topFocusItems = computed(() => {
   })
 
   if (accountPool.value.length) {
-    const stock = accountPool.value[0]
+    const stock = readyStandardExecutionPool.value[0] || accountPool.value[0]
     items.push({
       poolKey: 'account',
       ts_code: stock.ts_code,
       stock_name: stock.stock_name,
-      focus: stock.pool_entry_reason || stock.position_hint || stock.stock_comment || '等待买点确认',
-      meta: `可参与 / ${stock.candidate_bucket_tag || '未分层'} / ${formatSignedPct(stock.change_pct)}`,
+      focus: stock.execution_proximity_note || stock.pool_entry_reason || stock.position_hint || stock.stock_comment || '等待买点确认',
+      meta: `可参与 / ${stock.execution_proximity_tag || stock.candidate_bucket_tag || '未分层'} / ${formatSignedPct(stock.change_pct)}`,
       orderLabel: items.length ? '再看 ' : '先看 ',
     })
   } else if (marketPool.value.length) {
@@ -1609,6 +1716,47 @@ const pctClass = (value) => {
   return 'text-neutral'
 }
 
+const executionProximityTagType = (stock) => {
+  const tag = String(stock?.execution_proximity_tag || '')
+  if (tag === '接近执行位') return 'success'
+  if (tag === '已过确认位') return 'warning'
+  if (tag === '待回踩' || tag === '待低吸' || tag === '待突破') return 'info'
+  if (tag === '待深回踩') return 'danger'
+  return 'info'
+}
+
+const executionProximityChipClass = (stock) => {
+  const tag = String(stock?.execution_proximity_tag || '')
+  if (tag === '接近执行位') return 'action-state-chip-success'
+  if (tag === '已过确认位') return 'action-state-chip-warning'
+  if (tag === '待深回踩') return 'action-state-chip-danger'
+  return 'action-state-chip-info'
+}
+
+const executionProximityStripClass = (stock) => {
+  const tag = String(stock?.execution_proximity_tag || '')
+  if (tag === '接近执行位') return 'execution-proximity-strip-success'
+  if (tag === '已过确认位') return 'execution-proximity-strip-warning'
+  if (tag === '待深回踩') return 'execution-proximity-strip-danger'
+  return 'execution-proximity-strip-info'
+}
+
+const executionProximityNoteClass = (stock) => {
+  const tag = String(stock?.execution_proximity_tag || '')
+  if (tag === '接近执行位') return 'action-proximity-success'
+  if (tag === '已过确认位') return 'action-proximity-warning'
+  if (tag === '待深回踩') return 'action-proximity-danger'
+  return 'action-proximity-info'
+}
+
+const executionGapClass = (stock) => {
+  const tag = String(stock?.execution_proximity_tag || '')
+  if (tag === '接近执行位') return 'text-accent-success'
+  if (tag === '已过确认位') return 'text-accent-warning'
+  if (tag === '待深回踩') return 'text-accent-danger'
+  return 'text-accent-info'
+}
+
 const reviewBiasTagType = (label) => {
   if (label === '复盘加分') return 'success'
   if (label === '复盘降权') return 'danger'
@@ -1647,7 +1795,7 @@ const priorityTagType = (value) => {
 const accountEntryTag = (stock) => {
   if (accountEntryMode(stock) === 'defense_trial') return '防守试错'
   if (accountEntryMode(stock) === 'aggressive_trial') return '进攻试错'
-  return '满足准入'
+  return '通过准入'
 }
 
 const accountEntryTagType = (stock) => {
@@ -1692,11 +1840,11 @@ const marketActionLine = (stock) => stock.direction_signal_reason || stock.stock
 const marketFooterLine = (stock) => `${stock.stock_strength_tag || '中'}强度 / 市场分${formatScore(stock.market_strength_score)} / 执行分${formatScore(stock.execution_opportunity_score)}`
 const trendActionLine = (stock) => stock.direction_signal_reason || stock.why_this_pool || '这只票更适合盯结构和承接，不急着看日内最炸。'
 const trendFooterLine = (stock) => `${stock.structure_state_tag || '结构'} / ${stock.next_tradeability_tag || '待确认'} / 执行分${formatScore(stock.execution_opportunity_score)}`
-const accountActionLine = (stock) => stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但仍要等买点确认。'
+const accountActionLine = (stock) => stock.pool_entry_reason || stock.stock_comment || '这只票已通过账户准入，但现价是否能做仍要回买点页确认。'
 const accountFooterFlag = (stock) => {
   if (accountEntryMode(stock) === 'defense_trial') return '防守仓先行'
   if (accountEntryMode(stock) === 'aggressive_trial') return '试错仓先行'
-  return '等待买点页确认'
+  return '回买点页确认'
 }
 const holdingActionLine = (stock) => `${stock.sell_signal_tag || '观察'}：${stock.sell_reason || stock.sell_comment || '继续跟踪。'}`
 const holdingFooterFlag = (stock) => (stock.can_sell_today ? '今日可卖' : 'T+1锁定')
@@ -1741,7 +1889,7 @@ const executionMethodLabel = (stock) => {
 const executionPositionLabel = (stock) => {
   if (accountEntryMode(stock) === 'defense_trial') return '防守仓 / 更小仓'
   if (accountEntryMode(stock) === 'aggressive_trial') return '试错仓 / 小仓'
-  return '计划仓 / 正常仓'
+  return '计划仓 / 待确认'
 }
 
 const executionJudgementLine = (stock) => {
@@ -1751,7 +1899,7 @@ const executionJudgementLine = (stock) => {
   if (accountEntryMode(stock) === 'aggressive_trial') {
     return stock.why_not_executable_but_should_watch || '方向强度够，但位置不够舒服，只适合小仓试错。'
   }
-  return stock.pool_entry_reason || stock.stock_comment || '位置相对舒服，可按计划执行。'
+  return stock.pool_entry_reason || stock.stock_comment || '已通过账户准入，但是否当前可做仍要回买点页看触发位。'
 }
 
 const executionRiskLine = (stock) => (
@@ -1764,7 +1912,7 @@ const trialRiskLine = (stock) => (
   stock.miss_risk_note || (
     accountEntryMode(stock) === 'defense_trial'
       ? '风险提示：防守环境下只做轻仓确认，若承接转弱或环境继续恶化应更快撤退。'
-      : '风险提示：若次日不继续强化，容易直接回落；不可当成标准执行票重仓处理。'
+      : '风险提示：若次日不继续强化，容易直接回落；不可当成标准候选就直接重仓处理。'
   )
 )
 
@@ -2340,11 +2488,59 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.86);
 }
 
+.action-state-chip-success {
+  background: rgba(47, 207, 154, 0.18);
+  color: #cffff0;
+}
+
+.action-state-chip-warning {
+  background: rgba(255, 186, 82, 0.18);
+  color: #ffe1b0;
+}
+
+.action-state-chip-danger {
+  background: rgba(255, 120, 120, 0.16);
+  color: #ffd0d0;
+}
+
+.action-state-chip-info {
+  background: rgba(88, 176, 255, 0.14);
+  color: #dceeff;
+}
+
 .action-judgement,
 .watch-group-insight {
   font-size: 14px;
   line-height: 1.8;
   color: rgba(255, 255, 255, 0.9);
+}
+
+.action-proximity {
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.action-proximity-success {
+  color: #dffdf1;
+  background: rgba(30, 145, 103, 0.12);
+}
+
+.action-proximity-warning {
+  color: #ffe5ba;
+  background: rgba(214, 149, 45, 0.12);
+}
+
+.action-proximity-danger {
+  color: #ffd5d5;
+  background: rgba(191, 78, 78, 0.12);
+}
+
+.action-proximity-info {
+  color: #dceeff;
+  background: rgba(68, 116, 184, 0.12);
 }
 
 .action-grid {
@@ -3151,6 +3347,34 @@ onUnmounted(() => {
   border: 1px dashed rgba(255, 255, 255, 0.08);
 }
 
+.execution-proximity-strip {
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.execution-proximity-strip-success {
+  color: #dffdf1;
+  background: rgba(30, 145, 103, 0.12);
+}
+
+.execution-proximity-strip-warning {
+  color: #ffe5ba;
+  background: rgba(214, 149, 45, 0.12);
+}
+
+.execution-proximity-strip-danger {
+  color: #ffd5d5;
+  background: rgba(191, 78, 78, 0.12);
+}
+
+.execution-proximity-strip-info {
+  color: #dceeff;
+  background: rgba(68, 116, 184, 0.12);
+}
+
 .hard-filter-warn {
   color: #f3c24d;
   background: rgba(243, 194, 77, 0.08);
@@ -3389,6 +3613,22 @@ onUnmounted(() => {
 
 .text-neutral {
   color: var(--color-text-main);
+}
+
+.text-accent-success {
+  color: #35c48b;
+}
+
+.text-accent-warning {
+  color: #ffbf66;
+}
+
+.text-accent-danger {
+  color: #ff8f97;
+}
+
+.text-accent-info {
+  color: #7fb6ff;
 }
 
 @media (max-width: 1024px) {

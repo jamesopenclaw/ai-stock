@@ -358,12 +358,12 @@ describe('关键页面联调', () => {
     vi.useRealTimers()
   })
 
-  it('Pools 页面会把账户池拆成标准执行和进攻试错两栏', async () => {
+  it('Pools 页面会把账户池拆成接近执行位的标准候选和进攻试错两栏，并提示仍需回买点页确认', async () => {
     marketApi.getEnv.mockResolvedValue(makeResponse({
       market_env_tag: '进攻',
       breakout_allowed: true,
       risk_level: '低',
-      market_comment: '优先标准执行，强化方向允许小仓试错。',
+      market_comment: '优先标准候选，强化方向允许小仓试错。',
     }))
     stockApi.pools.mockResolvedValue(makeResponse({
       trade_date: '2026-03-28',
@@ -372,10 +372,28 @@ describe('关键页面联调', () => {
       account_executable_pool: [
         {
           ts_code: '000001.SZ',
-          stock_name: '标准执行票',
+          stock_name: '标准候选票',
           sector_name: '机器人',
           account_entry_mode: 'standard',
           pool_entry_reason: '交易性为可交易，且存在回踩确认位，可纳入账户可参与池。',
+          execution_reference_price: 10.0,
+          execution_reference_gap_pct: -1.19,
+          execution_proximity_tag: '接近执行位',
+          execution_proximity_note: '当前价距离开盘价 10.00 约 1.19%，已接近可观察执行区。',
+          next_tradeability_tag: '回踩确认',
+          stock_strength_tag: '强',
+          structure_state_tag: '修复',
+        },
+        {
+          ts_code: '000011.SZ',
+          stock_name: '待触发票',
+          sector_name: '机器人',
+          account_entry_mode: 'standard',
+          pool_entry_reason: '交易性为可交易，且存在回踩确认位，可纳入账户可参与池。',
+          execution_reference_price: 9.8,
+          execution_reference_gap_pct: -4.6,
+          execution_proximity_tag: '待回踩',
+          execution_proximity_note: '当前价高于开盘价 9.80 约 4.60%，先回买点页等触发。',
           next_tradeability_tag: '回踩确认',
           stock_strength_tag: '强',
           structure_state_tag: '修复',
@@ -399,19 +417,27 @@ describe('关键页面联调', () => {
     const { default: PoolsView } = await import('../src/views/Pools.vue')
     const wrapper = await mountView(PoolsView)
 
-    expect(wrapper.text()).toContain('标准执行')
+    expect(wrapper.text()).toContain('标准候选')
+    expect(wrapper.text()).toContain('标准候选 · 接近执行位')
+    expect(wrapper.text()).toContain('标准候选 · 待触发')
+    expect(wrapper.text()).toContain('接近执行位1')
+    expect(wrapper.text()).toContain('待触发1')
     expect(wrapper.text()).toContain('进攻试错')
-    expect(wrapper.text()).toContain('标准执行票')
+    expect(wrapper.text()).toContain('标准候选票')
+    expect(wrapper.text()).toContain('待触发票')
     expect(wrapper.text()).toContain('试错票')
     expect(wrapper.text()).toContain('回踩确认')
+    expect(wrapper.text()).toContain('可参与不代表立刻追价，仍要等买点页确认。')
+    expect(wrapper.text()).toContain('接近执行位')
+    expect(wrapper.text()).toContain('距执行位')
   })
 
-  it('Pools 页面优先按 account_entry_mode 区分标准执行和试错票', async () => {
+  it('Pools 页面优先按 account_entry_mode 区分标准候选和试错票', async () => {
     marketApi.getEnv.mockResolvedValue(makeResponse({
       market_env_tag: '进攻',
       breakout_allowed: true,
       risk_level: '低',
-      market_comment: '优先标准执行，强化方向允许小仓试错。',
+      market_comment: '优先标准候选，强化方向允许小仓试错。',
     }))
     stockApi.pools.mockResolvedValue(makeResponse({
       trade_date: '2026-03-28',
@@ -439,6 +465,58 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('进攻试错')
     expect(wrapper.text()).toContain('结构化试错票')
     expect(wrapper.text()).toContain('试错仓 / 小仓')
+  })
+
+  it('Pools 页面账户池会优先把接近执行位的标准候选排在待触发前面', async () => {
+    marketApi.getEnv.mockResolvedValue(makeResponse({
+      market_env_tag: '中性',
+      breakout_allowed: false,
+      risk_level: '中',
+      market_comment: '先看接近执行位的标准候选。',
+    }))
+    stockApi.pools.mockResolvedValue(makeResponse({
+      trade_date: '2026-03-28',
+      resolved_trade_date: '2026-03-28',
+      market_watch_pool: [],
+      account_executable_pool: [
+        {
+          ts_code: '000021.SZ',
+          stock_name: '待深回踩票',
+          sector_name: '机器人',
+          account_entry_mode: 'standard',
+          execution_proximity_tag: '待深回踩',
+          execution_proximity_note: '当前价高于开盘价 9.80 约 7.20%，这个位置更像深回踩参考。',
+          next_tradeability_tag: '回踩确认',
+          stock_strength_tag: '强',
+          structure_state_tag: '修复',
+          account_entry_score: 90,
+          execution_opportunity_score: 86,
+        },
+        {
+          ts_code: '000022.SZ',
+          stock_name: '接近执行票',
+          sector_name: '机器人',
+          account_entry_mode: 'standard',
+          execution_proximity_tag: '接近执行位',
+          execution_proximity_note: '当前价距离开盘价 10.00 约 1.00%，已接近可观察执行区。',
+          next_tradeability_tag: '回踩确认',
+          stock_strength_tag: '强',
+          structure_state_tag: '修复',
+          account_entry_score: 82,
+          execution_opportunity_score: 80,
+        },
+      ],
+      holding_process_pool: [],
+    }))
+    decisionApi.reviewStats.mockResolvedValue(makeResponse({ bucket_stats: [] }))
+
+    const { default: PoolsView } = await import('../src/views/Pools.vue')
+    const wrapper = await mountView(PoolsView)
+
+    const text = wrapper.text()
+    expect(text.indexOf('接近执行票')).toBeGreaterThan(-1)
+    expect(text.indexOf('待深回踩票')).toBeGreaterThan(-1)
+    expect(text.indexOf('接近执行票')).toBeLessThan(text.indexOf('待深回踩票'))
   })
 
   it('Pools 页面会把防守试错和进攻试错分开统计', async () => {
@@ -732,7 +810,11 @@ describe('关键页面联调', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(stockApi.buyAnalysis).toHaveBeenCalledWith('002025.SZ', '2026-03-30', { timeout: 90000 })
+    expect(stockApi.buyAnalysis).toHaveBeenCalledWith(
+      '002025.SZ',
+      '2026-03-30',
+      expect.objectContaining({ timeout: 90000 }),
+    )
     expect(wrapper.text()).toContain('获取买点分析失败: 目标股票不存在于候选上下文')
     expect(wrapper.text()).toContain('买点 SOP 加载失败')
     expect(messageError).toHaveBeenCalledWith('获取买点分析失败: 目标股票不存在于候选上下文')

@@ -421,7 +421,10 @@ class BuyPointSopService:
     ) -> BuyPointSopAccountContext:
         position_status = self._position_status(account.total_position_ratio, account.holding_count)
         current_use = "加仓" if direction_exposure.has_same_code else "新开仓"
-        market_suitability = self._market_suitability(market_env.market_env_tag)
+        market_suitability = self._market_suitability(
+            market_env.market_env_tag,
+            getattr(market_env, "market_env_profile", ""),
+        )
         holding_ok = True
         holding_reason = None
         same_code_holding = self._find_same_code_holding(target_code, holdings_list)
@@ -622,7 +625,10 @@ class BuyPointSopService:
             intraday_judgement,
             levels,
         )
-        market_state = self._resolve_market_state(market_env.market_env_tag)
+        market_state = self._resolve_market_state(
+            market_env.market_env_tag,
+            getattr(market_env, "market_env_profile", ""),
+        )
         account_tight = self._is_account_tight(account_context)
         low_absorb_ref = self._select_low_absorb_ref(
             price,
@@ -660,6 +666,16 @@ class BuyPointSopService:
                 structure_type,
                 retrace_confirm_ref,
             )
+        retrace_confirm_ref = self._normalize_retrace_confirm_ref_vs_invalid(
+            price,
+            target_input,
+            structure_type,
+            market_state,
+            account_tight,
+            retrace_confirm_ref,
+            low_absorb_ref,
+            invalid_price,
+        )
         give_up_ref = self._select_give_up_ref(
             price,
             levels,
@@ -1041,6 +1057,7 @@ class BuyPointSopService:
         return 0
 
     def _score_add_position_sector_sentiment(self, target_stock: StockOutput, market_env) -> int:
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         if market_env.market_env_tag == MarketEnvTag.DEFENSE:
             return 0
         if (
@@ -1049,6 +1066,12 @@ class BuyPointSopService:
             and target_stock.stock_core_tag in {StockCoreTag.CORE, StockCoreTag.FOLLOW}
         ):
             return 2
+        if market_profile == "中性偏强":
+            return 2 if target_stock.stock_strength_tag == StockStrengthTag.STRONG else 1
+        if market_profile == "中性偏谨慎":
+            return 1 if target_stock.stock_core_tag == StockCoreTag.CORE else 0
+        if market_profile == "弱中性":
+            return 0
         return 1 if market_env.market_env_tag == MarketEnvTag.NEUTRAL else 0
 
     def _score_add_position_account_risk(
@@ -1076,12 +1099,19 @@ class BuyPointSopService:
         return min(1.0, (market_price * holding_qty) / total_asset)
 
     def _resolve_entry_position_pct(self, suggestion: str, market_env) -> float:
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
         if suggestion == "中仓参与":
             return 0.3
         if suggestion != "轻仓试错":
             return 0.0
         if market_env.market_env_tag == MarketEnvTag.DEFENSE:
             return 0.1
+        if market_profile == "弱中性":
+            return 0.1
+        if market_profile == "中性偏谨慎":
+            return 0.12
+        if market_profile == "中性偏强":
+            return 0.18
         if market_env.market_env_tag == MarketEnvTag.NEUTRAL:
             return 0.15
         return 0.2
@@ -1186,11 +1216,17 @@ class BuyPointSopService:
             return f"中仓（仓位 {ratio:.0%}）"
         return f"轻仓（仓位 {ratio:.0%}）"
 
-    def _market_suitability(self, market_env_tag: MarketEnvTag) -> str:
+    def _market_suitability(self, market_env_tag: MarketEnvTag, market_env_profile: str = "") -> str:
         if market_env_tag == MarketEnvTag.ATTACK:
             return "市场允许主动试错，但仍要先等分时确认。"
         if market_env_tag == MarketEnvTag.DEFENSE:
             return "市场偏防守，只能低吸或回踩确认，不能追高。"
+        if market_env_profile == "中性偏强":
+            return "市场中性偏强，可以围绕主线做确认后的试错。"
+        if market_env_profile == "中性偏谨慎":
+            return "市场中性偏谨慎，只做低吸和回踩确认，不做一致性追价。"
+        if market_env_profile == "弱中性":
+            return "市场弱中性，只保留最强分歧转强机会。"
         return "市场中性，只做更舒服的确认位。"
 
     def _resolve_stage(self, target_stock: StockOutput, change_pct: float) -> str:
@@ -1333,11 +1369,17 @@ class BuyPointSopService:
             return "突破后回踩"
         return "趋势中继"
 
-    def _resolve_market_state(self, market_env_tag: MarketEnvTag) -> str:
+    def _resolve_market_state(self, market_env_tag: MarketEnvTag, market_env_profile: str = "") -> str:
         if market_env_tag == MarketEnvTag.ATTACK:
             return "强市"
         if market_env_tag == MarketEnvTag.DEFENSE:
             return "弱市"
+        if market_env_profile == "中性偏强":
+            return "偏强分化市"
+        if market_env_profile == "中性偏谨慎":
+            return "谨慎分化市"
+        if market_env_profile == "弱中性":
+            return "弱分化市"
         return "分化市"
 
     def _is_account_tight(self, account_context: BuyPointSopAccountContext) -> bool:
@@ -1458,6 +1500,59 @@ class BuyPointSopService:
         if code.startswith(("300", "301", "688")):
             return 0.88
         return 0.93
+
+    def _normalize_retrace_confirm_ref_vs_invalid(
+        self,
+        price: float,
+        target_input,
+        structure_type: str,
+        market_state: str,
+        account_tight: bool,
+        retrace_confirm_ref: Optional[float],
+        low_absorb_ref: Optional[float],
+        invalid_price: Optional[float],
+    ) -> Optional[float]:
+        """
+        回踩确认区不能落到失效不买线下方。
+        若冲突，优先回退到更近端的低吸位；仍不安全时，再把确认位抬到失效线上方。
+        """
+        if retrace_confirm_ref is None or invalid_price is None or invalid_price <= 0:
+            return retrace_confirm_ref
+
+        retrace_lower_pct, _ = self._retrace_buffer_pct(
+            structure_type,
+            market_state,
+            target_input,
+            account_tight,
+        )
+        retrace_zone_low = self._round_price(retrace_confirm_ref * (1 - retrace_lower_pct))
+        if retrace_zone_low is None or retrace_zone_low > invalid_price:
+            return retrace_confirm_ref
+
+        if low_absorb_ref is not None:
+            low_absorb_lower_pct, _ = self._low_absorb_buffer_pct(
+                structure_type,
+                market_state,
+                target_input,
+                account_tight,
+            )
+            low_absorb_zone_low = self._round_price(low_absorb_ref * (1 - low_absorb_lower_pct))
+            if low_absorb_zone_low is not None and low_absorb_zone_low > invalid_price:
+                return low_absorb_ref
+
+        if retrace_lower_pct >= 1:
+            return None
+
+        lifted_ref = self._round_price(invalid_price / (1 - retrace_lower_pct))
+        if lifted_ref is None:
+            return None
+        while self._round_price(lifted_ref * (1 - retrace_lower_pct)) <= invalid_price:
+            lifted_ref = self._round_price(lifted_ref + 0.01)
+            if lifted_ref is None:
+                return None
+            if price > 0 and lifted_ref >= price:
+                return None
+        return lifted_ref
 
     def _select_invalid_ref(
         self,
