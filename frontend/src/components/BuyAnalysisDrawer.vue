@@ -270,6 +270,7 @@ const props = defineProps({
   tsCode: { type: String, default: '' },
   stockName: { type: String, default: '' },
   tradeDate: { type: String, default: '' },
+  sourcePoolTag: { type: String, default: '' },
   currentPrice: { type: Number, default: null },
   currentChangePct: { type: Number, default: null }
 })
@@ -771,7 +772,10 @@ const loadData = async () => {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await stockApi.buyAnalysis(props.tsCode, displayTradeDate.value, { timeout: 90000 })
+    const res = await stockApi.buyAnalysis(props.tsCode, displayTradeDate.value, {
+      timeout: 90000,
+      sourcePoolTag: props.sourcePoolTag
+    })
     const payload = res.data || {}
     const responseCode = payload.code ?? 200
     if (responseCode !== 200) {

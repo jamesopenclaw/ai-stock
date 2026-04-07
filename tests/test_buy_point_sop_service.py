@@ -974,3 +974,115 @@ async def test_buy_point_sop_falls_back_when_target_input_and_scored_stock_missi
     assert result.basic_info.ts_code == "002463.SZ"
     assert result.basic_info.data_source == "fallback"
     assert result.basic_info.candidate_bucket_tag == ""
+
+
+@pytest.mark.asyncio
+async def test_buy_point_sop_prefers_source_pool_tag_from_pools_page(monkeypatch):
+    market_env = MarketEnvOutput(
+        trade_date="2026-04-03",
+        market_env_tag=MarketEnvTag.DEFENSE,
+        breakout_allowed=False,
+        risk_level=RiskLevel.MEDIUM,
+        market_comment="防守环境",
+        index_score=42,
+        sentiment_score=44,
+        overall_score=43,
+    )
+    target_input = SimpleNamespace(
+        ts_code="301172.SZ",
+        stock_name="君逸数码",
+        sector_name="软件服务",
+        close=27.05,
+        open=26.88,
+        high=27.33,
+        low=26.51,
+        pre_close=26.84,
+        change_pct=0.78,
+        turnover_rate=5.3,
+        amount=88000,
+        avg_price=26.91,
+        intraday_volume_ratio=1.4,
+        vol_ratio=1.2,
+        quote_time="2026-04-03 10:26:00",
+        data_source="realtime_sina",
+    )
+    context = SimpleNamespace(
+        trade_date="2026-04-03",
+        resolved_stock_trade_date="2026-04-03",
+        market_env=market_env,
+        realtime_market_env=market_env,
+        sector_scan=SimpleNamespace(),
+        stocks=[target_input],
+        holdings_list=[],
+        holdings=[],
+        account=SimpleNamespace(
+            total_asset=100000,
+            available_cash=80000,
+            total_position_ratio=0.08,
+            holding_count=1,
+            today_new_buy_count=0,
+        ),
+    )
+    scored_stock = _sample_scored_stock(pool_tag=StockPoolTag.NOT_IN_POOL)
+    scored_stock.ts_code = "301172.SZ"
+    scored_stock.stock_name = "君逸数码"
+    pools = StockPoolsOutput(
+        trade_date="2026-04-03",
+        total_count=0,
+    )
+    captured = {}
+
+    async def fake_build_context(*args, **kwargs):
+        return context
+
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.build_context",
+        fake_build_context,
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.merge_single_stock_into_context",
+        lambda trade_date, stocks, ts_code, candidate_source_tag="买点分析": (stocks, True),
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.decision_context_service.build_single_stock_input",
+        lambda *args, **kwargs: target_input,
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.stock_filter_service.filter_with_context",
+        lambda *args, **kwargs: [scored_stock],
+    )
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.stock_filter_service.classify_pools",
+        lambda *args, **kwargs: pools,
+    )
+    monkeypatch.setattr(
+        buy_point_sop_service,
+        "_load_history_payload",
+        lambda *args, **kwargs: (_history_rows(), "2026-04-03"),
+    )
+
+    def fake_analyze_stock_buy_point(stock, *_args, **_kwargs):
+        captured["pool_tag"] = stock.stock_pool_tag
+        signal = BuySignalTag.OBSERVE if stock.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE else BuySignalTag.NOT_BUY
+        return SimpleNamespace(
+            buy_signal_tag=signal,
+            buy_point_type=BuyPointType.RETRACE_SUPPORT,
+            buy_trigger_cond="回踩承接再看",
+            buy_confirm_cond="承接后重新放量",
+            buy_invalid_cond="跌破支撑放弃",
+            buy_invalid_price=26.17,
+        )
+
+    monkeypatch.setattr(
+        "app.services.buy_point_sop.buy_point_service._analyze_stock_buy_point",
+        fake_analyze_stock_buy_point,
+    )
+
+    result = await buy_point_sop_service.analyze(
+        "301172.SZ",
+        "2026-04-03",
+        preferred_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE.value,
+    )
+
+    assert captured["pool_tag"] == StockPoolTag.ACCOUNT_EXECUTABLE
+    assert result.daily_judgement.buy_point_level != "D"

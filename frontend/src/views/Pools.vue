@@ -937,6 +937,7 @@
       :ts-code="buyAnalysisStock.tsCode"
       :stock-name="buyAnalysisStock.stockName"
       :trade-date="buyAnalysisTradeDate"
+      :source-pool-tag="buyAnalysisStock.sourcePoolTag"
       :current-price="buyAnalysisStock.currentPrice"
       :current-change-pct="buyAnalysisStock.currentChangePct"
     />
@@ -980,7 +981,7 @@ const poolsData = ref({
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '观察型' })
 const buyAnalysisVisible = ref(false)
-const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentChangePct: null })
+const buyAnalysisStock = ref({ tsCode: '', stockName: '', sourcePoolTag: '', currentPrice: null, currentChangePct: null })
 const sellAnalysisVisible = ref(false)
 const sellAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentPnlPct: null })
 const reviewStatsData = ref(null)
@@ -1786,6 +1787,7 @@ const openBuyAnalysis = (stock) => {
   buyAnalysisStock.value = {
     tsCode: stock.ts_code,
     stockName: stock.stock_name || stock.ts_code,
+    sourcePoolTag: String(stock.stock_pool_tag || ''),
     currentPrice: stock.close ?? null,
     currentChangePct: stock.change_pct ?? null,
   }

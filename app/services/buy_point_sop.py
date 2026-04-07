@@ -73,6 +73,7 @@ class BuyPointSopService:
         ts_code: str,
         trade_date: str,
         account_id: Optional[str] = None,
+        preferred_pool_tag: Optional[str] = None,
     ) -> BuyPointSopResponse:
         normalized_code = normalize_ts_code(ts_code)
         context = await decision_context_service.build_context(
@@ -137,7 +138,9 @@ class BuyPointSopService:
             target_scored = self._build_fallback_scored_stock(target_input)
 
         target_scored.stock_pool_tag = pool_tag
+        analysis_pool_tag = self._resolve_preferred_pool_tag(preferred_pool_tag) or pool_tag
         analysis_stock = target_scored.model_copy(deep=True)
+        analysis_stock.stock_pool_tag = analysis_pool_tag
         if analysis_stock.stock_pool_tag == StockPoolTag.HOLDING_PROCESS:
             analysis_stock.stock_pool_tag = (
                 StockPoolTag.ACCOUNT_EXECUTABLE
@@ -248,6 +251,17 @@ class BuyPointSopService:
             position_advice=position_advice,
             execution=execution,
         )
+
+    def _resolve_preferred_pool_tag(self, preferred_pool_tag: Optional[str]) -> Optional[StockPoolTag]:
+        if not preferred_pool_tag:
+            return None
+        raw = str(preferred_pool_tag or "").strip()
+        if not raw:
+            return None
+        for item in StockPoolTag:
+            if raw in {item.name, item.value}:
+                return item
+        return None
 
     def _resolve_target_pool_stock(
         self,

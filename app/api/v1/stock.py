@@ -523,6 +523,7 @@ async def get_stock_checkup(
 async def get_stock_buy_analysis(
     ts_code: str,
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
+    source_pool_tag: Optional[str] = Query(None, description="来源池标签，来自三池页时用于保持解释语境一致"),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """获取单只股票的详细买点 SOP 分析。"""
@@ -535,6 +536,7 @@ async def get_stock_buy_analysis(
             ts_code,
             trade_date,
             account_id=account_id,
+            preferred_pool_tag=source_pool_tag,
         )
         return ApiResponse(data=result.model_dump(mode="json"))
     except Exception as e:

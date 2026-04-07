@@ -112,6 +112,59 @@ class TestSellPoint:
         
         assert sell_point.sell_signal_tag in [SellSignalTag.SELL, SellSignalTag.REDUCE]
 
+    def test_stop_loss_zone_prefers_reduce_before_clear(self, service):
+        """
+        测试：刚进入止损区时，不再一刀切直接清仓
+
+        验证点：轻微跌破止损阈值时，应先减仓防守，再看后续确认
+        """
+        position = AccountPosition(
+            ts_code="002675.SZ",
+            stock_name="东诚药业",
+            holding_qty=200,
+            cost_price=15.04,
+            market_price=14.14,
+            pnl_pct=-5.98,
+            holding_market_value=2828,
+            buy_date="2026-03-18",
+            can_sell_today=True,
+            holding_reason="修复仓",
+        )
+
+        class NeutralEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+
+        sell_point = service._analyze_position(position, NeutralEnv(), {})
+
+        assert sell_point.sell_signal_tag == SellSignalTag.REDUCE
+        assert sell_point.sell_point_type == SellPointType.REDUCE_POSITION
+        assert "止损区" in sell_point.sell_reason
+
+    def test_deep_stop_loss_still_sells(self, service):
+        """
+        测试：深度亏损时仍应直接卖出
+        """
+        position = AccountPosition(
+            ts_code="300750.SZ",
+            stock_name="宁德时代",
+            holding_qty=200,
+            cost_price=100.0,
+            market_price=91.5,
+            pnl_pct=-8.5,
+            holding_market_value=18300,
+            buy_date="2026-03-12",
+            can_sell_today=True,
+            holding_reason="赛道跟随",
+        )
+
+        class NeutralEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+
+        sell_point = service._analyze_position(position, NeutralEnv(), {})
+
+        assert sell_point.sell_signal_tag == SellSignalTag.SELL
+        assert sell_point.sell_point_type == SellPointType.STOP_LOSS
+
     # ========== 止盈测试 ==========
 
     def test_stop_profit_for_large_gain(self, service, profitable_position):

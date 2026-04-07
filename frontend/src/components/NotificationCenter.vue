@@ -122,7 +122,7 @@
               <div class="notification-meta">
                 <span>{{ categoryLabel(item.category) }}</span>
                 <span>{{ sourceLabel(item.data_source) }}</span>
-                <span>{{ formatLocalTime(item.updated_at) }}</span>
+                <span>{{ formatLocalTime(item.updated_at, { assumeUtc: true }) }}</span>
               </div>
               <div class="notification-actions">
                 <el-button type="primary" link @click="openNotification(item)">{{ item.action_label }}</el-button>

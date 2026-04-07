@@ -418,16 +418,28 @@ class SellPointService:
                 "买入逻辑被证伪，不再适合继续拿",
             )
 
-        # 1. 止损判断（优先）
+        deep_stop_loss = pnl_pct <= min(self.STOP_LOSS_PCT - 3, -8.0)
+
+        # 1. 止损判断（优先，但不再一刀切）
         if pnl_pct <= self.STOP_LOSS_PCT:
-            # 严重亏损 -> 止损
+            if deep_stop_loss or (structure_weak and market_env.market_env_tag == MarketEnvTag.DEFENSE and not sector_supportive):
+                return self._decision(
+                    SellPointType.STOP_LOSS,
+                    SellSignalTag.SELL,
+                    SellPriority.HIGH,
+                    f"亏损{pnl_pct:.1f}%，已进入深度止损区，优先退出",
+                    "反弹不能转强或继续走弱时直接卖出",
+                    f"当前亏损已经偏深，继续拖延容易更被动"
+                )
+
             return self._decision(
-                SellPointType.STOP_LOSS,
-                SellSignalTag.SELL,
+                SellPointType.REDUCE_POSITION,
+                SellSignalTag.REDUCE,
                 SellPriority.HIGH,
-                f"亏损{pnl_pct:.1f}%，触发止损",
-                f"收盘跌破成本价{abs(pnl_pct) + 2:.1f}%无法收回",
-                f"止损出局，亏损{pnl_pct:.1f}%"
+                f"亏损{pnl_pct:.1f}%，已进入止损区，先减仓防守",
+                "反弹不能转强或继续跌破承接时先减仓",
+                "先收缩风险敞口，再根据板块和承接决定是否继续退出",
+                "env_weak" if market_env.market_env_tag == MarketEnvTag.DEFENSE else "structure_loose",
             )
 
         # 2. T+1 约束处理

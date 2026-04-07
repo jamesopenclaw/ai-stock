@@ -278,7 +278,10 @@ export const stockApi = {
   ),
   detail: (tsCode, tradeDate) => api.get(`/stock/detail/${tsCode}`, { params: { trade_date: tradeDate } }),
   buyAnalysis: (tsCode, tradeDate, options = {}) => api.get(`/stock/buy-analysis/${encodeURIComponent(tsCode)}`, {
-    params: { trade_date: tradeDate },
+    params: {
+      trade_date: tradeDate,
+      source_pool_tag: options.sourcePoolTag
+    },
     timeout: options.timeout ?? 90000,
   }),
   sellAnalysis: (tsCode, tradeDate, options = {}) => api.get(`/stock/sell-analysis/${encodeURIComponent(tsCode)}`, {
