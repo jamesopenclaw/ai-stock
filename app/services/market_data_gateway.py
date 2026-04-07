@@ -93,9 +93,16 @@ class MarketDataGateway:
     def should_use_realtime_quote(self, trade_date: str) -> bool:
         return tushare_client._should_use_realtime_quote(trade_date)
 
+    def should_use_market_snapshot(self, trade_date: str) -> bool:
+        return tushare_client._should_use_market_snapshot(trade_date)
+
     def _should_use_realtime_quote(self, trade_date: str) -> bool:
         """兼容旧服务与测试直接访问私有方法。"""
         return self.should_use_realtime_quote(trade_date)
+
+    def _should_use_market_snapshot(self, trade_date: str) -> bool:
+        """兼容旧服务与测试直接访问私有方法。"""
+        return self.should_use_market_snapshot(trade_date)
 
     def fetch_realtime_quote_map(self, ts_codes: List[str]) -> Dict[str, Dict]:
         return tushare_client._fetch_realtime_quote_map(ts_codes)

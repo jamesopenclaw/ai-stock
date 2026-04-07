@@ -50,6 +50,9 @@ class TushareClient:
     """Tushare API 客户端"""
 
     SH_TZ = ZoneInfo("Asia/Shanghai")
+    REALTIME_SESSION_START = time(9, 15)
+    REALTIME_SESSION_END = time(15, 0)
+    EOD_DATA_READY_TIME = time(19, 0)
     REALTIME_CHUNK_SIZE = 50
     REALTIME_SOURCE = "sina"
     REALTIME_MARKET_CACHE_TTL_SECONDS = 20
@@ -120,7 +123,7 @@ class TushareClient:
         - 已配置 token
         - 请求日期等于上海时区今天
         - 交易日工作日
-        - 09:15 ~ 15:30
+        - 09:15 ~ 15:00
         时尝试实时覆盖。
         """
         if not self.token:
@@ -133,14 +136,35 @@ class TushareClient:
         if now.weekday() >= 5:
             return False
         current_time = now.time()
-        return time(9, 15) <= current_time <= time(15, 30)
+        return self.REALTIME_SESSION_START <= current_time <= self.REALTIME_SESSION_END
+
+    def _should_use_market_snapshot(self, trade_date: str) -> bool:
+        """
+        当前请求是否适合尝试市场状态快照。
+
+        用于市场环境页这类聚合指标：
+        - 09:15 ~ 15:00：盘中实时
+        - 15:00 ~ 19:00：收盘后快照
+        - 19:00 之后：改走稳定日线
+        """
+        if not self.token:
+            return False
+
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        now = self._now_sh()
+        if compact_trade_date != now.strftime("%Y%m%d"):
+            return False
+        if now.weekday() >= 5:
+            return False
+        current_time = now.time()
+        return self.REALTIME_SESSION_START <= current_time < self.EOD_DATA_READY_TIME
 
     def get_last_completed_trade_date(self, trade_date: str) -> str:
         """
         获取最近一个“已完成”的交易日。
 
         用于需要稳定日线输出的场景：
-        - 若请求的是今天且当前尚未收盘，则回退到上一交易日
+        - 若请求的是今天且当前尚未到日线稳定时间，则回退到上一交易日
         - 其他情况沿用最近开市日
         """
         compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
@@ -150,7 +174,7 @@ class TushareClient:
         if (
             compact_trade_date == now.strftime("%Y%m%d")
             and now.weekday() < 5
-            and now.time() < time(15, 30)
+            and now.time() < self.EOD_DATA_READY_TIME
         ):
             recent_dates = self._recent_open_dates(effective_trade_date, count=2)
             if len(recent_dates) >= 2:
@@ -926,8 +950,8 @@ class TushareClient:
         rows: List[Dict],
         trade_date: str,
     ) -> bool:
-        """对指数列表做盘中覆盖。"""
-        if not rows or not self._should_use_realtime_quote(trade_date):
+        """对指数列表做快照覆盖，兼容盘中与收盘后快照窗口。"""
+        if not rows or not self._should_use_market_snapshot(trade_date):
             return False
 
         quote_map = self._fetch_realtime_quote_map([row.get("ts_code", "") for row in rows])
@@ -1038,7 +1062,7 @@ class TushareClient:
 
     def _fetch_realtime_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
         """获取实时市场状态：新浪接口优先，网页/缓存次之，Tushare 扫描兜底。"""
-        if not self._should_use_realtime_quote(trade_date):
+        if not self._should_use_market_snapshot(trade_date):
             return None
 
         lock = getattr(self, "_realtime_market_fetch_lock", None)
@@ -1069,8 +1093,14 @@ class TushareClient:
                     if cached_age < self.REALTIME_MARKET_CACHE_TTL_SECONDS:
                         return cached_snapshot
 
+            page_snapshot = self._fetch_public_page_market_snapshot(trade_date)
+
             sina_overview_snapshot = self._fetch_sina_market_overview_snapshot(trade_date)
             if sina_overview_snapshot:
+                sina_overview_snapshot = self._apply_page_limit_stats_overlay(
+                    sina_overview_snapshot,
+                    page_snapshot,
+                )
                 self._realtime_market_state_cache = {
                     "trade_date": sina_overview_snapshot["data_trade_date"],
                     "fetched_at": now_ts,
@@ -1080,6 +1110,10 @@ class TushareClient:
 
             industry_snapshot = self._fetch_public_industry_market_snapshot(trade_date)
             if industry_snapshot:
+                industry_snapshot = self._apply_page_limit_stats_overlay(
+                    industry_snapshot,
+                    page_snapshot,
+                )
                 logger.warning("实时市场状态主源失败，已切换到同花顺行业页汇总兜底")
                 self._realtime_market_state_cache = {
                     "trade_date": industry_snapshot["data_trade_date"],
@@ -1103,6 +1137,10 @@ class TushareClient:
 
             legacy_snapshot = self._fetch_tushare_realtime_market_snapshot(trade_date)
             if legacy_snapshot:
+                legacy_snapshot = self._apply_page_limit_stats_overlay(
+                    legacy_snapshot,
+                    page_snapshot,
+                )
                 logger.warning("实时市场状态主源失败，已切换到 Tushare 全市场扫描兜底")
                 self._realtime_market_state_cache = {
                     "trade_date": legacy_snapshot["data_trade_date"],
@@ -1333,10 +1371,16 @@ class TushareClient:
         """
         获取日线类回退的起始交易日。
 
-        盘中实时窗口下，不再先打当天 daily/index_daily/limit_list_d，
+        当天日线未稳定前，不再先打当天 daily/index_daily/limit_list_d，
         而是直接从最近已完成交易日开始。
         """
-        if self._should_use_realtime_quote(trade_date):
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        now = self._now_sh()
+        if (
+            compact_trade_date == now.strftime("%Y%m%d")
+            and now.weekday() < 5
+            and now.time() < self.EOD_DATA_READY_TIME
+        ):
             return self.get_last_completed_trade_date(trade_date)
         return self._resolve_trade_date(trade_date)
 
@@ -1362,7 +1406,7 @@ class TushareClient:
             }
 
         try:
-            effective_trade_date = self.get_last_completed_trade_date(trade_date)
+            effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
             # 上证指数、深成指、创业板
             index_codes = ["000001.SH", "399001.SZ", "399006.SZ"]
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
@@ -1454,6 +1498,20 @@ class TushareClient:
                     "status": snapshot_status,
                     "is_stale": snapshot.get("is_stale", False),
                     "stale_from_quote_time": snapshot.get("stale_from_quote_time"),
+                }
+            page_snapshot = None
+            if self._should_use_market_snapshot(trade_date):
+                page_snapshot = self._fetch_public_page_market_snapshot(trade_date)
+            if page_snapshot and page_snapshot.get("limit_stats"):
+                return {
+                    "stats": page_snapshot["limit_stats"],
+                    "data_trade_date": page_snapshot["data_trade_date"],
+                    "used_mock": False,
+                    "quote_time": page_snapshot.get("quote_time"),
+                    "data_source": page_snapshot.get("data_source"),
+                    "status": page_snapshot.get("status", "live"),
+                    "is_stale": page_snapshot.get("is_stale", False),
+                    "stale_from_quote_time": page_snapshot.get("stale_from_quote_time"),
                 }
             if snapshot and snapshot_status == "unavailable":
                 return {

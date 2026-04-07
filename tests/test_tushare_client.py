@@ -4,7 +4,7 @@ Tushare 客户端测试
 import os
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, time
 import time as time_module
 
 import pandas as pd
@@ -782,9 +782,9 @@ def test_get_index_quote_with_meta_overlays_realtime_indexes():
     client = TushareClient.__new__(TushareClient)
     client.token = "test-token"
     client.pro = _FakePro()
-    client._resolve_trade_date = lambda d: "20260323"
+    client._resolve_eod_fallback_start_trade_date = lambda d: "20260323"
     client._recent_open_dates = lambda trade_date, count=5: ["20260320"]
-    client._should_use_realtime_quote = lambda d: True
+    client._should_use_market_snapshot = lambda d: True
     client._fetch_realtime_quote_map = lambda codes: {
         "000001.SH": {
             "close": 3877.14,
@@ -819,6 +819,63 @@ def test_get_index_quote_with_meta_overlays_realtime_indexes():
 
     assert payload["data_trade_date"] == "20260323"
     assert payload["rows"][0]["close"] == 3877.14
+    assert payload["rows"][0]["data_source"] == "realtime_sina"
+
+
+def test_get_index_quote_with_meta_overlays_indexes_during_post_close_window():
+    """15:00 到日线稳定前，指数应继续允许使用当天快照。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._resolve_eod_fallback_start_trade_date = lambda d: "20260403"
+    client._recent_open_dates = lambda trade_date, count=5: ["20260403"]
+    client._should_use_market_snapshot = lambda d: True
+    client.pro.index_daily = lambda ts_code=None, start_date=None, end_date=None: pd.DataFrame(
+        [
+            {
+                "trade_date": "20260403",
+                "close": 3880.10 if ts_code == "000001.SH" else 13352.90 if ts_code == "399001.SZ" else 3149.60,
+                "pct_chg": -1.00 if ts_code == "000001.SH" else -0.99 if ts_code == "399001.SZ" else -0.73,
+                "vol": 493000000 if ts_code == "000001.SH" else 585000000 if ts_code == "399001.SZ" else 162000000,
+                "amount": 71400000000 if ts_code == "000001.SH" else 94300000000 if ts_code == "399001.SZ" else 43400000000,
+            }
+        ]
+    )
+    client._fetch_realtime_quote_map = lambda codes: {
+        "000001.SH": {
+            "close": 3890.16,
+            "change_pct": 0.26,
+            "volume": 474000000,
+            "amount": 72400000000,
+            "trade_date": "20260407",
+            "quote_time": "2026-04-07 15:00:00",
+            "data_source": "realtime_sina",
+        },
+        "399001.SZ": {
+            "close": 13400.41,
+            "change_pct": 0.36,
+            "volume": 539000000,
+            "amount": 89000000000,
+            "trade_date": "20260407",
+            "quote_time": "2026-04-07 15:00:00",
+            "data_source": "realtime_sina",
+        },
+        "399006.SZ": {
+            "close": 3160.82,
+            "change_pct": 0.36,
+            "volume": 147000000,
+            "amount": 39400000000,
+            "trade_date": "20260407",
+            "quote_time": "2026-04-07 15:00:00",
+            "data_source": "realtime_sina",
+        },
+    }
+
+    payload = client.get_index_quote_with_meta("20260407")
+
+    assert payload["data_trade_date"] == "20260407"
+    assert payload["rows"][0]["trade_date"] == "20260407"
+    assert payload["rows"][0]["close"] == 3890.16
     assert payload["rows"][0]["data_source"] == "realtime_sina"
 
 
@@ -892,6 +949,37 @@ def test_get_limit_stats_with_meta_uses_realtime_snapshot():
     assert payload["data_source"] == "realtime_dc"
 
 
+def test_get_limit_stats_with_meta_uses_page_snapshot_during_post_close_window():
+    """15:00 到日线稳定前，涨跌停统计应允许使用收盘后快照。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._fetch_realtime_market_snapshot = lambda trade_date: None
+    client._should_use_market_snapshot = lambda d: True
+    client._fetch_public_page_market_snapshot = lambda trade_date: {
+        "data_trade_date": "20260407",
+        "quote_time": "2026-04-07 15:08:00",
+        "data_source": "realtime_page_cls",
+        "status": "live",
+        "is_stale": False,
+        "stale_from_quote_time": None,
+        "limit_stats": {
+            "limit_up_count": 74,
+            "limit_down_count": 11,
+            "broken_board_rate": 21.3,
+            "estimated": False,
+        },
+    }
+
+    payload = client.get_limit_stats_with_meta("20260407")
+
+    assert payload["stats"]["limit_up_count"] == 74
+    assert payload["stats"]["limit_down_count"] == 11
+    assert payload["stats"]["broken_board_rate"] == 21.3
+    assert payload["data_trade_date"] == "20260407"
+    assert payload["data_source"] == "realtime_page_cls"
+
+
 def test_get_up_down_ratio_with_meta_uses_daily_fallback():
     """非盘中场景应基于 daily.pct_chg 统计涨跌家数。"""
     client = TushareClient.__new__(TushareClient)
@@ -915,6 +1003,8 @@ def test_get_up_down_ratio_with_meta_skips_same_day_daily_during_intraday():
     client.pro = _FakePro()
     client._fetch_realtime_market_snapshot = lambda trade_date: None
     client._should_use_realtime_quote = lambda d: True
+    client._now_sh = lambda: datetime(2026, 3, 23, 10, 0, 0, tzinfo=TushareClient.SH_TZ)
+    client._resolve_trade_date = lambda d: "20260323"
     client.get_last_completed_trade_date = lambda d: "20260320"
     client._recent_open_dates = lambda trade_date, count=5: [trade_date]
 
@@ -924,12 +1014,72 @@ def test_get_up_down_ratio_with_meta_skips_same_day_daily_during_intraday():
     assert client.pro.daily_calls == [(None, None, None, "20260320")]
 
 
+def test_should_use_realtime_quote_stops_after_market_close():
+    """收盘后不应继续把当天视为盘中实时窗口。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._now_sh = lambda: datetime(2026, 4, 7, 15, 1, 0, tzinfo=TushareClient.SH_TZ)
+
+    assert client._should_use_realtime_quote("20260407") is False
+
+
+def test_get_last_completed_trade_date_uses_today_after_market_close():
+    """收盘后但日线未稳定前，仍应回退到前一交易日。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._now_sh = lambda: datetime(2026, 4, 7, 15, 1, 0, tzinfo=TushareClient.SH_TZ)
+    client._resolve_trade_date = lambda d: "20260407"
+
+    recent_open_dates_calls = []
+
+    def fake_recent_open_dates(trade_date, count=2):
+        recent_open_dates_calls.append((trade_date, count))
+        return ["20260407", "20260403"]
+
+    client._recent_open_dates = fake_recent_open_dates
+
+    assert client.get_last_completed_trade_date("20260407") == "20260403"
+    assert recent_open_dates_calls == [("20260407", 2)]
+
+
+def test_get_last_completed_trade_date_uses_today_after_eod_ready_time():
+    """日线稳定时间后，当天应被视为已完成交易日。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._now_sh = lambda: datetime(2026, 4, 7, 19, 1, 0, tzinfo=TushareClient.SH_TZ)
+    client._resolve_trade_date = lambda d: "20260407"
+
+    recent_open_dates_calls = []
+
+    def fake_recent_open_dates(trade_date, count=2):
+        recent_open_dates_calls.append((trade_date, count))
+        return ["20260407", "20260403"]
+
+    client._recent_open_dates = fake_recent_open_dates
+
+    assert client.get_last_completed_trade_date("20260407") == "20260407"
+    assert recent_open_dates_calls == []
+
+
+def test_resolve_eod_fallback_start_trade_date_uses_previous_trade_date_before_eod_ready():
+    """15:00 后到日线稳定前，日线类回退起点仍应是上一交易日。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._now_sh = lambda: datetime(2026, 4, 7, 16, 30, 0, tzinfo=TushareClient.SH_TZ)
+    client.get_last_completed_trade_date = lambda d: "20260403"
+    client._resolve_trade_date = lambda d: "20260407"
+
+    assert client._resolve_eod_fallback_start_trade_date("20260407") == "20260403"
+
+
 def test_get_sector_data_with_meta_skips_same_day_daily_during_intraday():
     """盘中行业板块回退应直接从上一已完成交易日开始。"""
     client = TushareClient.__new__(TushareClient)
     client.token = "test-token"
     client.pro = _FakePro()
     client._should_use_realtime_quote = lambda d: True
+    client._now_sh = lambda: datetime(2026, 3, 23, 10, 0, 0, tzinfo=TushareClient.SH_TZ)
+    client._resolve_trade_date = lambda d: "20260323"
     client.get_last_completed_trade_date = lambda d: "20260320"
     client._recent_open_dates = lambda trade_date, count=5: [trade_date]
     client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
@@ -1060,6 +1210,34 @@ def test_fetch_realtime_market_snapshot_prefers_sina_overview_provider():
     assert snapshot["data_source"] == "realtime_sina_overview"
     assert snapshot["status"] == "live"
     assert snapshot["up_down_ratio"] == {"up": 1189, "down": 4261, "flat": 110, "total": 5560}
+
+
+def test_fetch_realtime_market_snapshot_allows_post_close_window():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._realtime_market_state_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._realtime_market_cache = {"trade_date": "", "fetched_at": 0.0, "snapshot": None}
+    client._should_use_market_snapshot = lambda d: True
+    client._fetch_public_page_market_snapshot = lambda trade_date: None
+    client._fetch_sina_market_overview_snapshot = lambda trade_date: {
+        "market_turnover": 18234.56,
+        "up_down_ratio": {"up": 2301, "down": 2877, "flat": 201, "total": 5379},
+        "limit_stats": {"limit_up_count": 68, "limit_down_count": 9, "broken_board_rate": 17.4, "estimated": False},
+        "data_trade_date": "20260407",
+        "quote_time": "2026-04-07 15:06:00",
+        "data_source": "realtime_sina_overview",
+        "status": "live",
+        "is_stale": False,
+        "stale_from_quote_time": None,
+    }
+    client._fetch_public_industry_market_snapshot = lambda trade_date: None
+    client._fetch_tushare_realtime_market_snapshot = lambda trade_date: None
+
+    snapshot = client._fetch_realtime_market_snapshot("20260407")
+
+    assert snapshot is not None
+    assert snapshot["data_source"] == "realtime_sina_overview"
+    assert snapshot["data_trade_date"] == "20260407"
 
 
 def test_parse_ths_industry_rows():

@@ -111,7 +111,7 @@ class MarketEnvService:
         """
         compact_trade_date = trade_date.replace("-", "")
         effective_trade_date = compact_trade_date
-        if not self.client.should_use_realtime_quote(compact_trade_date):
+        if not self.client.should_use_market_snapshot(compact_trade_date):
             effective_trade_date = str(
                 self.client.get_last_completed_trade_date(compact_trade_date)
             ).replace("-", "")[:8] or compact_trade_date
@@ -120,10 +120,16 @@ class MarketEnvService:
         if cached:
             return cached
 
-        index_payload = self.client.get_index_quote_with_meta(effective_trade_date)
-        limit_payload = self.client.get_limit_stats_with_meta(effective_trade_date)
-        turnover_payload = self.client.get_market_turnover_with_meta(effective_trade_date)
-        up_down_payload = self.client.get_up_down_ratio_with_meta(effective_trade_date)
+        request_trade_date = (
+            compact_trade_date
+            if self.client.should_use_market_snapshot(compact_trade_date)
+            else effective_trade_date
+        )
+
+        index_payload = self.client.get_index_quote_with_meta(request_trade_date)
+        limit_payload = self.client.get_limit_stats_with_meta(request_trade_date)
+        turnover_payload = self.client.get_market_turnover_with_meta(request_trade_date)
+        up_down_payload = self.client.get_up_down_ratio_with_meta(request_trade_date)
 
         if any(
             payload.get("status") == "unavailable"
@@ -176,7 +182,7 @@ class MarketEnvService:
     def _cache_ttl_seconds(self, compact_trade_date: str, resolved_trade_date: str) -> int:
         if (
             compact_trade_date == self.client.now_trade_date().replace("-", "")
-            and self.client.should_use_realtime_quote(compact_trade_date)
+            and self.client.should_use_market_snapshot(compact_trade_date)
         ):
             return self.REALTIME_MARKET_ENV_CACHE_TTL_SECONDS
         if compact_trade_date != resolved_trade_date:

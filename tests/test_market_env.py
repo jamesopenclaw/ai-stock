@@ -44,6 +44,9 @@ class TestMarketEnv:
             def should_use_realtime_quote(self, trade_date):
                 return False
 
+            def should_use_market_snapshot(self, trade_date):
+                return False
+
             def get_last_completed_trade_date(self, trade_date):
                 assert trade_date == "20260331"
                 return "20260330"
@@ -85,6 +88,65 @@ class TestMarketEnv:
             ("limit", "20260330"),
             ("turnover", "20260330"),
             ("updown", "20260330"),
+        ]
+
+    def test_get_current_env_uses_today_snapshot_window_after_close(self, service, monkeypatch):
+        class StubGateway:
+            def __init__(self):
+                self.requested_dates = []
+
+            def now_trade_date(self):
+                return "2026-04-07"
+
+            def should_use_realtime_quote(self, trade_date):
+                return False
+
+            def should_use_market_snapshot(self, trade_date):
+                return True
+
+            def get_last_completed_trade_date(self, trade_date):
+                return "20260403"
+
+            def get_index_quote_with_meta(self, trade_date):
+                self.requested_dates.append(("index", trade_date))
+                return {
+                    "rows": [
+                        {"change_pct": 0.26},
+                        {"change_pct": 0.36},
+                        {"change_pct": 0.36},
+                    ],
+                    "data_trade_date": "20260407",
+                }
+
+            def get_limit_stats_with_meta(self, trade_date):
+                self.requested_dates.append(("limit", trade_date))
+                return {
+                    "stats": {"limit_up_count": 101, "limit_down_count": 18, "broken_board_rate": 36.9},
+                    "data_trade_date": "20260407",
+                }
+
+            def get_market_turnover_with_meta(self, trade_date):
+                self.requested_dates.append(("turnover", trade_date))
+                return {"market_turnover": 16000, "data_trade_date": "20260407"}
+
+            def get_up_down_ratio_with_meta(self, trade_date):
+                self.requested_dates.append(("updown", trade_date))
+                return {
+                    "up_down_ratio": {"up": 800, "down": 5200, "flat": 100, "total": 6100},
+                    "data_trade_date": "20260407",
+                }
+
+        gateway = StubGateway()
+        monkeypatch.setattr(service, "client", gateway)
+
+        result = service.get_current_env("2026-04-07")
+
+        assert result.trade_date == "2026-04-07"
+        assert gateway.requested_dates == [
+            ("index", "20260407"),
+            ("limit", "20260407"),
+            ("turnover", "20260407"),
+            ("updown", "20260407"),
         ]
 
     # ========== 市场环境判定测试 ==========
