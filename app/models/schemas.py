@@ -526,6 +526,9 @@ class StockPoolsOutput(BaseModel):
     sector_scan_trade_date: Optional[str] = Field(None, description="三池实际使用的板块扫描请求日")
     sector_scan_resolved_trade_date: Optional[str] = Field(None, description="三池实际使用的板块扫描数据日")
     snapshot_version: Optional[int] = Field(None, description="三池规则快照版本")
+    market_env: Optional[MarketEnvOutput] = Field(None, description="三池实际使用的市场环境")
+    mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="三池实际使用的主线板块摘要")
+    sub_mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="三池实际使用的次主线板块摘要")
     global_trade_gate: GlobalTradeGateOutput = Field(default_factory=lambda: GlobalTradeGateOutput(
         status=TradeGateStatus.TRIAL,
         allow_new_positions=True,
@@ -534,6 +537,7 @@ class StockPoolsOutput(BaseModel):
         account_pool_limit=3,
     ))
     market_watch_pool: List[StockOutput] = Field(default_factory=list, description="市场最强观察池")
+    market_watch_candidates: List[StockOutput] = Field(default_factory=list, description="市场观察候选全集")
     account_executable_pool: List[StockOutput] = Field(default_factory=list, description="账户可参与池")
     holding_process_pool: List[StockOutput] = Field(default_factory=list, description="持仓处理池")
     total_count: int

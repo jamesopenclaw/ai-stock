@@ -15,6 +15,10 @@ from app.models.schemas import (  # noqa: E402
     MarketEnvOutput,
     MarketEnvTag,
     RiskLevel,
+    SectorContinuityTag,
+    SectorMainlineTag,
+    SectorOutput,
+    SectorTradeabilityTag,
     StockContinuityTag,
     StockCoreTag,
     StockInput,
@@ -91,7 +95,7 @@ async def test_get_stock_pools_disables_llm_summary(monkeypatch):
         resolved_trade_date="2026-03-23",
         sector_scan_trade_date="2026-03-23",
         sector_scan_resolved_trade_date="2026-03-23",
-        snapshot_version=4,
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
         market_watch_pool=[],
         account_executable_pool=scored,
         holding_process_pool=[],
@@ -181,13 +185,27 @@ async def test_get_stock_pools_disables_llm_summary(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_stock_pools_radar_mode_returns_realtime_payload(monkeypatch):
+    candidates = [
+        StockOutput(
+            ts_code="000001.SZ",
+            stock_name="平安银行",
+            sector_name="银行",
+            change_pct=2.3,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+        )
+    ]
     pools = StockPoolsOutput(
         trade_date="2026-03-24",
         resolved_trade_date="2026-03-24",
         sector_scan_trade_date="2026-03-24",
         sector_scan_resolved_trade_date="2026-03-24",
-        snapshot_version=4,
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
         market_watch_pool=[],
+        market_watch_candidates=candidates,
         account_executable_pool=[],
         holding_process_pool=[],
         total_count=0,
@@ -206,6 +224,7 @@ async def test_get_stock_pools_radar_mode_returns_realtime_payload(monkeypatch):
         limit=50,
         refresh=False,
         mode="radar",
+        include_watch_candidates=True,
         force_llm_refresh=False,
     )
 
@@ -214,7 +233,77 @@ async def test_get_stock_pools_radar_mode_returns_realtime_payload(monkeypatch):
     assert response.data["is_realtime"] is True
     assert response.data["resolved_trade_date"] == "2026-03-24"
     assert response.data["radar_generated_at"]
+    assert response.data["market_watch_candidate_count"] == 1
+    assert response.data["market_watch_candidates"][0]["ts_code"] == "000001.SZ"
     assert len(compute_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_stock_pools_returns_snapshot_market_env_and_mainline(monkeypatch):
+    cached_pools = StockPoolsOutput(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_scan_trade_date="2026-03-24",
+        sector_scan_resolved_trade_date="2026-03-24",
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
+        market_env=MarketEnvOutput(
+            trade_date="2026-03-24",
+            market_env_tag=MarketEnvTag.NEUTRAL,
+            market_env_profile="中性偏强",
+            breakout_allowed=True,
+            risk_level=RiskLevel.MEDIUM,
+            market_comment="广度强于接力",
+            market_headline="可以盯主线，但先等确认再上",
+            market_subheadline="广度强于接力，综合分 62.7",
+            trading_tempo_label="主线确认后参与",
+            dominant_factor_label="广度强于接力",
+            index_score=61.8,
+            sentiment_score=63.3,
+            overall_score=62.7,
+        ),
+        mainline_sectors=[
+            SectorOutput(
+                sector_name="草甘膦",
+                sector_change_pct=6.02,
+                sector_score=100.0,
+                sector_strength_rank=1,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.CAUTION,
+                sector_rotation_tag="强化中",
+                sector_summary_reason="联动尚可，资金承接强，强化中",
+            )
+        ],
+        sub_mainline_sectors=[],
+        market_watch_pool=[],
+        account_executable_pool=[],
+        holding_process_pool=[],
+        total_count=0,
+    )
+
+    async def fake_get_snapshot(trade_date, candidate_limit):
+        assert trade_date == "2026-03-24"
+        assert candidate_limit == 100
+        return cached_pools
+
+    async def fake_resolve_snapshot_lookup_trade_date(_trade_date):
+        return "2026-03-24"
+
+    monkeypatch.setattr(stock.review_snapshot_service, "get_stock_pools_page_snapshot", fake_get_snapshot)
+    monkeypatch.setattr(stock, "resolve_snapshot_lookup_trade_date", fake_resolve_snapshot_lookup_trade_date)
+
+    response = await stock.get_stock_pools(
+        trade_date="2026-03-24",
+        limit=50,
+        refresh=False,
+        force_llm_refresh=False,
+    )
+
+    assert response.code == 200
+    assert response.data["market_env"]["market_env_profile"] == "中性偏强"
+    assert response.data["market_env"]["market_headline"] == "可以盯主线，但先等确认再上"
+    assert response.data["mainline_sectors"][0]["sector_name"] == "草甘膦"
+    assert response.data["mainline_sectors"][0]["sector_rotation_tag"] == "强化中"
 
 
 @pytest.mark.asyncio
@@ -224,7 +313,7 @@ async def test_get_stock_pools_prefers_saved_snapshot(monkeypatch):
         resolved_trade_date="2026-03-23",
         sector_scan_trade_date="2026-03-23",
         sector_scan_resolved_trade_date="2026-03-23",
-        snapshot_version=4,
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
         market_watch_pool=[],
         account_executable_pool=[],
         holding_process_pool=[],
@@ -269,7 +358,7 @@ async def test_get_stock_pools_invalidates_cache_when_sector_scan_trade_date_cha
         resolved_trade_date="2026-03-25",
         sector_scan_trade_date="2026-03-25",
         sector_scan_resolved_trade_date="2026-03-25",
-        snapshot_version=4,
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
         market_watch_pool=[],
         account_executable_pool=[],
         holding_process_pool=[],
@@ -319,7 +408,7 @@ async def test_get_stock_pools_invalidates_cache_when_sector_scan_trade_date_cha
         resolved_trade_date="2026-03-26",
         sector_scan_trade_date="2026-03-26",
         sector_scan_resolved_trade_date="2026-03-26",
-        snapshot_version=4,
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
         market_watch_pool=[],
         account_executable_pool=[],
         holding_process_pool=[],
@@ -432,7 +521,7 @@ async def test_get_stock_pools_invalidates_legacy_snapshot_without_version(monke
         resolved_trade_date="2026-03-25",
         sector_scan_trade_date="2026-03-25",
         sector_scan_resolved_trade_date="2026-03-25",
-        snapshot_version=4,
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
         market_watch_pool=[],
         account_executable_pool=[],
         holding_process_pool=[],

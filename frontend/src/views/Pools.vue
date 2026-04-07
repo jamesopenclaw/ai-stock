@@ -59,42 +59,148 @@
           :items="poolsFreshnessItems"
           :note="poolsFreshnessNote"
         />
-        <section class="command-center">
-          <article class="summary-card summary-card-market">
-            <div class="summary-kicker">市场环境</div>
-            <div class="summary-title-row">
-              <el-tag size="large" effect="dark" :type="getEnvTagType(todayMarketEnv.market_env_tag)">
-                {{ todayMarketEnv.market_env_tag }}
-              </el-tag>
-              <span class="summary-headline">{{ marketEnvironmentHeadline }}</span>
+        <section class="ops-toolbar">
+          <div class="ops-toolbar-main">
+            <div class="ops-toolbar-copy">
+              <div class="section-kicker">今日操作栏</div>
+              <div class="ops-toolbar-title">{{ operatorBarTitle }}</div>
+              <div class="ops-toolbar-desc">{{ operatorBarDesc }}</div>
             </div>
-            <div class="summary-copy">{{ marketEnvironmentCopy }}</div>
+            <div class="ops-toolbar-context">
+              <span class="ops-context-chip">{{ isRadarMode ? '实时雷达' : '稳定模式' }}</span>
+              <span class="ops-context-chip">{{ marketEnvironmentTagLabel }}</span>
+              <span v-if="primaryDirectionItems.length" class="ops-context-chip">
+                主线 {{ primaryDirectionItems[0].name }}
+              </span>
+              <span class="ops-context-chip">{{ globalTradeGate.status }}</span>
+            </div>
+          </div>
+          <div class="ops-toolbar-actions">
+            <button
+              v-for="step in decisionSteps"
+              :key="`ops-${step.key}`"
+              type="button"
+              class="ops-step-button"
+              :class="`ops-step-button-${step.tone}`"
+              @click="activateTab(step.tab, { scroll: true })"
+            >
+              <span class="ops-step-rank">{{ step.rank }}</span>
+              <span class="ops-step-copy">
+                <strong>{{ step.title }}</strong>
+                <em>{{ step.countLabel }}</em>
+              </span>
+            </button>
+            <el-button text type="primary" @click="router.push({ path: '/buy', query: focusSector ? { focus_sector: focusSector } : {} })">
+              去买点分析
+            </el-button>
+            <el-button text @click="goToSectors(focusSector)">
+              看板块扫描
+            </el-button>
+          </div>
+        </section>
+        <section class="command-center">
+          <article class="summary-card summary-card-decision">
+            <div class="summary-card-head">
+              <div>
+                <div class="summary-kicker">今日结论</div>
+                <div class="summary-title-row">
+                  <el-tag size="large" effect="dark" :type="globalTradeGate.allow_new_positions ? 'success' : 'danger'">
+                    {{ globalTradeGate.status }}
+                  </el-tag>
+                  <span class="summary-headline summary-headline-action">{{ executionGuidanceTitle }}</span>
+                </div>
+              </div>
+              <div v-if="primaryDecisionStep" class="decision-priority-pill">
+                <span>先做</span>
+                <strong>{{ primaryDecisionStep.title }}</strong>
+              </div>
+            </div>
+            <div class="summary-copy">{{ executionGuidanceCopy }}</div>
             <div class="summary-chip-row">
-              <span class="summary-chip"><strong>突破</strong>{{ todayMarketEnv.breakout_allowed ? '可确认后做' : '先不追' }}</span>
+              <span class="summary-chip">
+                <strong>环境</strong>{{ marketEnvironmentTagLabel }}
+              </span>
+              <span class="summary-chip">
+                <strong>节奏</strong>{{ todayMarketEnv.trading_tempo_label || (todayMarketEnv.breakout_allowed ? '确认后可做' : '先不追') }}
+              </span>
+              <span v-if="todayMarketEnv.dominant_factor_label" class="summary-chip">
+                <strong>主因</strong>{{ todayMarketEnv.dominant_factor_label }}
+              </span>
               <span class="summary-chip"><strong>风险</strong>{{ todayMarketEnv.risk_level }}</span>
+            </div>
+            <div class="decision-summary-grid">
+              <section class="decision-summary-panel">
+                <span class="decision-summary-label">市场环境</span>
+                <strong class="decision-summary-value">{{ marketEnvironmentHeadline }}</strong>
+                <div class="decision-summary-text">{{ marketEnvironmentCopy }}</div>
+              </section>
+              <section class="decision-summary-panel">
+                <span class="decision-summary-label">操作顺序</span>
+                <div class="decision-step-inline-list">
+                  <button
+                    v-for="step in decisionSteps"
+                    :key="`decision-inline-${step.key}`"
+                    type="button"
+                    class="decision-step-inline"
+                    :class="`decision-step-inline-${step.tone}`"
+                    @click="activateTab(step.tab, { scroll: true })"
+                  >
+                    <span class="decision-step-inline-rank">{{ step.rank }}</span>
+                    <span class="decision-step-inline-copy">
+                      <strong>{{ step.title }}</strong>
+                      <em>{{ step.countLabel }}</em>
+                    </span>
+                  </button>
+                </div>
+                <div class="decision-summary-text">{{ compactRuleSummary }}</div>
+              </section>
             </div>
           </article>
 
           <article class="summary-card summary-card-direction">
-            <div class="summary-kicker">今日主线</div>
-            <div class="direction-pills">
-              <span v-for="item in primaryDirectionItems" :key="`${item.name}-${item.state}`" class="direction-pill">
-                <strong>{{ item.name }}</strong>
-                <em>{{ item.state }}</em>
-              </span>
+            <div class="summary-card-head summary-card-head-direction">
+              <div>
+                <div class="summary-kicker">今日主线</div>
+                <div class="summary-headline">{{ directionHeadline }}</div>
+              </div>
+              <el-button text type="primary" @click="goToSectors()">
+                看板块扫描
+              </el-button>
             </div>
             <div class="summary-copy">{{ directionOverviewCopy }}</div>
-          </article>
-
-          <article class="summary-card summary-card-action">
-            <div class="summary-kicker">总闸门</div>
-            <div class="summary-title-row">
-              <el-tag size="large" effect="dark" :type="globalTradeGate.allow_new_positions ? 'success' : 'danger'">
-                {{ globalTradeGate.status }}
-              </el-tag>
-              <span class="summary-headline summary-headline-action">{{ executionGuidanceTitle }}</span>
+            <div v-if="primaryDirectionItems.length" class="direction-grid">
+              <button
+                v-for="(item, index) in primaryDirectionItems"
+                :key="`${item.name}-${item.state}`"
+                type="button"
+                :class="['direction-card', { 'direction-card-lead': index === 0 }]"
+                @click="goToSectors(item.name)"
+              >
+                <div class="direction-card-top">
+                  <strong>{{ item.name }}</strong>
+                  <span :class="['direction-card-change', pctClass(item.changePct)]">
+                    {{ formatSignedPct(item.changePct) }}
+                  </span>
+                </div>
+                <div class="direction-card-tags">
+                  <span class="direction-badge direction-badge-mainline">{{ item.mainlineTag }}</span>
+                  <span v-if="item.tier" class="direction-badge direction-badge-tier">{{ item.tier }}类</span>
+                  <span
+                    v-if="item.actionHint"
+                    :class="['direction-badge', directionActionBadgeClass(item.actionHint)]"
+                  >
+                    {{ item.actionHint }}
+                  </span>
+                  <span
+                    v-if="item.state"
+                    :class="['direction-badge', directionStateBadgeClass(item.state)]"
+                  >
+                    {{ item.state }}
+                  </span>
+                </div>
+                <div class="direction-card-copy">{{ item.reason }}</div>
+              </button>
             </div>
-            <div class="summary-copy">{{ executionGuidanceCopy }}</div>
           </article>
 
           <article class="summary-card summary-card-account">
@@ -151,129 +257,93 @@
               <el-button link type="primary" size="small" @click="clearFocusSector">清除方向</el-button>
             </div>
           </div>
-          <div class="overview-hero">
-            <div class="overview-main">
-              <div class="overview-badge" :class="overviewBadgeClass">
-                {{ overviewBadge }}
+          <section v-if="topFocusItems.length || reviewInsight || focusSector" class="decision-support-shell">
+            <div class="section-head section-head-support">
+              <div>
+                <div class="section-kicker">执行补充</div>
+                <div class="section-title">今天先盯谁，以及哪些信号该加权或降权</div>
               </div>
-              <div class="overview-copy">
-                <div class="overview-title">{{ overviewTitle }}</div>
-                <div class="overview-desc">{{ overviewDesc }}</div>
-              </div>
-            </div>
-            <aside class="overview-side">
-              <div class="overview-side-head">
-                <span class="section-kicker">快速判断</span>
-                <span class="overview-side-caption">{{ compactRuleSummary }}</span>
-              </div>
-              <div class="overview-mini-stats">
-                <div v-for="item in compactStatItems" :key="item.key" class="overview-mini-stat" :class="`overview-mini-stat-${item.key}`">
-                  <span class="overview-mini-label">{{ item.label }}</span>
-                  <strong class="overview-mini-value">{{ item.value }}</strong>
-                  <span class="overview-mini-tip">{{ item.tip }}</span>
-                </div>
-              </div>
-              <div class="overview-side-actions">
+              <div class="section-actions">
                 <el-button v-if="focusSector" text @click="router.push('/sectors')">回板块扫描</el-button>
                 <el-button text type="primary" @click="router.push({ path: '/buy', query: focusSector ? { focus_sector: focusSector } : {} })">
                   去买点分析
                 </el-button>
               </div>
-            </aside>
-          </div>
-
-          <div class="decision-rail">
-            <div class="section-head">
-              <div>
-                <div class="section-kicker">今日流程</div>
-                <div class="section-title">先按这个顺序处理三池</div>
-              </div>
             </div>
-            <div class="decision-rail-grid">
-              <article
-                v-for="step in decisionSteps"
-                :key="step.key"
-                class="decision-step-card"
-                :class="[`decision-step-card-${step.tone}`, { 'decision-step-card-active': activeTab === step.tab }]"
-              >
-                <div class="decision-step-head">
-                  <span class="decision-step-rank">{{ step.rank }}</span>
-                  <div class="decision-step-copy">
-                    <div class="decision-step-title">{{ step.title }}</div>
-                    <div class="decision-step-desc">{{ step.desc }}</div>
+            <div class="decision-support-grid">
+              <section v-if="topFocusItems.length" class="support-card support-card-focus">
+                <div class="support-card-head">
+                  <div>
+                    <div class="section-kicker">优先名单</div>
+                    <div class="section-title">今天先盯这些票</div>
                   </div>
                 </div>
-                <div class="decision-step-meta">
-                  <span class="decision-step-chip">{{ step.countLabel }}</span>
-                  <span class="decision-step-chip">{{ step.rule }}</span>
+                <div class="top-focus-list">
+                  <article v-for="item in topFocusItems" :key="`${item.poolKey}-${item.ts_code}`" class="top-focus-item">
+                    <span class="top-focus-rank">{{ item.rank }}</span>
+                    <div class="top-focus-content">
+                      <div class="top-focus-head">
+                        <div class="top-focus-main">
+                          <strong>{{ item.orderLabel }}{{ item.stock_name }}</strong>
+                          <span class="top-focus-meta">{{ item.meta }}</span>
+                        </div>
+                        <span class="top-focus-pool">{{ focusItemPoolLabel(item) }}</span>
+                      </div>
+                      <div class="top-focus-trigger">
+                        <span class="top-focus-trigger-label">重点</span>
+                        <span class="top-focus-trigger-text">{{ item.focus }}</span>
+                      </div>
+                      <div class="top-focus-actions">
+                        <el-button size="small" @click="openFocusAnalysis(item)">
+                          {{ item.poolKey === 'holding' ? '卖点详解' : '买点详解' }}
+                        </el-button>
+                        <el-button text size="small" @click="activateTab(focusItemTab(item), { scroll: true })">
+                          定位到{{ focusItemPoolLabel(item) }}
+                        </el-button>
+                      </div>
+                    </div>
+                  </article>
                 </div>
-                <div class="decision-step-actions">
-                  <el-button size="small" @click="activeTab = step.tab">查看这一池</el-button>
-                  <span class="decision-step-hint">{{ step.hint }}</span>
-                </div>
-              </article>
-            </div>
-          </div>
-          <div v-if="topFocusItems.length || reviewInsight || focusSector" class="decision-support-grid">
-            <section v-if="topFocusItems.length" class="support-card support-card-focus">
-              <div class="support-card-head">
-                <div>
-                  <div class="section-kicker">优先名单</div>
-                  <div class="section-title">今天先盯这些票</div>
-                </div>
-              </div>
-              <div class="top-focus-list">
-                <div v-for="item in topFocusItems" :key="`${item.poolKey}-${item.ts_code}`" class="top-focus-item">
-                  <span class="top-focus-rank">{{ item.rank }}</span>
-                  <div class="top-focus-main">
-                    <strong>{{ item.orderLabel }}{{ item.stock_name }}</strong>
-                    <span class="top-focus-meta">{{ item.meta }}</span>
-                  </div>
-                  <div class="top-focus-trigger">
-                    <span class="top-focus-trigger-label">重点</span>
-                    <span class="top-focus-trigger-text">{{ item.focus }}</span>
-                  </div>
-                </div>
-              </div>
-            </section>
+              </section>
 
-            <section v-if="reviewInsight || focusSector" class="support-card support-card-insight">
-              <div class="support-card-head">
-                <div>
-                  <div class="section-kicker">辅助判断</div>
-                  <div class="section-title">复盘和方向怎么影响今天</div>
-                </div>
-              </div>
-              <div v-if="focusSector" class="focus-hit-inline">
-                <div class="focus-hit-inline-title">{{ focusSector }} 当前命中</div>
-                <div class="focus-hit-inline-grid">
-                  <div class="focus-hit-inline-item">
-                    <span>账户池</span>
-                    <strong>{{ focusMatches.account }}</strong>
-                  </div>
-                  <div class="focus-hit-inline-item">
-                    <span>观察池</span>
-                    <strong>{{ focusMatches.market }}</strong>
+              <section v-if="reviewInsight || focusSector" class="support-card support-card-insight">
+                <div class="support-card-head">
+                  <div>
+                    <div class="section-kicker">辅助判断</div>
+                    <div class="section-title">复盘和方向怎么影响今天</div>
                   </div>
                 </div>
-                <div class="focus-hit-summary">{{ focusSummary }}</div>
-              </div>
-              <div v-if="reviewInsight" class="review-compact">
-                <div class="review-compact-row review-compact-row-do">
-                  <span class="review-compact-label">优先看</span>
-                  <span class="review-compact-text">{{ reviewInsight.doText }}</span>
+                <div v-if="focusSector" class="focus-hit-inline">
+                  <div class="focus-hit-inline-title">{{ focusSector }} 当前命中</div>
+                  <div class="focus-hit-inline-grid">
+                    <div class="focus-hit-inline-item">
+                      <span>账户池</span>
+                      <strong>{{ focusMatches.account }}</strong>
+                    </div>
+                    <div class="focus-hit-inline-item">
+                      <span>观察池</span>
+                      <strong>{{ focusMatches.market }}</strong>
+                    </div>
+                  </div>
+                  <div class="focus-hit-summary">{{ focusSummary }}</div>
                 </div>
-                <div class="review-compact-row review-compact-row-watch">
-                  <span class="review-compact-label">先观察</span>
-                  <span class="review-compact-text">{{ reviewInsight.watchText }}</span>
+                <div v-if="reviewInsight" class="review-compact">
+                  <div class="review-compact-row review-compact-row-do">
+                    <span class="review-compact-label">优先看</span>
+                    <span class="review-compact-text">{{ reviewInsight.doText }}</span>
+                  </div>
+                  <div class="review-compact-row review-compact-row-watch">
+                    <span class="review-compact-label">先观察</span>
+                    <span class="review-compact-text">{{ reviewInsight.watchText }}</span>
+                  </div>
+                  <div class="review-compact-row review-compact-row-avoid">
+                    <span class="review-compact-label">暂时少做</span>
+                    <span class="review-compact-text">{{ reviewInsight.avoidText }}</span>
+                  </div>
                 </div>
-                <div class="review-compact-row review-compact-row-avoid">
-                  <span class="review-compact-label">暂时少做</span>
-                  <span class="review-compact-text">{{ reviewInsight.avoidText }}</span>
-                </div>
-              </div>
-            </section>
-          </div>
+              </section>
+            </div>
+          </section>
         </div>
 
         <section class="priority-stack">
@@ -284,7 +354,7 @@
                 <div class="section-title">账户可参与池</div>
                 <div class="priority-panel-desc">先看今天通过账户准入的票，再决定要不要回买点页确认执行位。</div>
               </div>
-              <el-button text type="primary" @click="activeTab = 'account'">查看详细清单</el-button>
+              <el-button text type="primary" @click="activateTab('account', { scroll: true })">查看详细清单</el-button>
             </div>
             <div v-if="!accountPool.length" class="priority-empty">
               {{ accountEmptyReason }}
@@ -490,7 +560,7 @@
                 <div class="section-title">市场最强观察池</div>
                 <div class="priority-panel-desc">先看市场在围绕哪些方向交易，再决定哪些票值得继续盯。</div>
               </div>
-              <el-button text type="primary" @click="activeTab = 'market'">查看详细清单</el-button>
+              <el-button text type="primary" @click="activateTab('market', { scroll: true })">查看详细清单</el-button>
             </div>
             <div v-if="!marketDirectionGroups.length" class="priority-empty">当前没有需要重点盯的市场最强方向。</div>
             <div v-else class="watch-group-grid">
@@ -519,7 +589,7 @@
 
         </section>
 
-        <el-card class="detail-card">
+        <el-card ref="detailCardRef" class="detail-card">
           <template #header>
             <div class="priority-panel-head">
               <div>
@@ -1020,9 +1090,9 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { stockApi, decisionApi, marketApi } from '../api'
+import { stockApi, decisionApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
@@ -1033,6 +1103,7 @@ import { formatLocalDateTime, formatLocalTime } from '../utils/datetime'
 const loading = ref(false)
 const activeTab = ref('holding')
 const displayDate = ref('')
+const detailCardRef = ref(null)
 const poolsData = ref({
   market_watch_pool: [],
   account_executable_pool: [],
@@ -1040,6 +1111,9 @@ const poolsData = ref({
   resolved_trade_date: '',
   sector_scan_trade_date: '',
   sector_scan_resolved_trade_date: '',
+  market_env: null,
+  mainline_sectors: [],
+  sub_mainline_sectors: [],
   global_trade_gate: null,
   mode: 'stable',
   is_realtime: false,
@@ -1052,7 +1126,6 @@ const buyAnalysisStock = ref({ tsCode: '', stockName: '', sourcePoolTag: '', cur
 const sellAnalysisVisible = ref(false)
 const sellAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentPnlPct: null })
 const reviewStatsData = ref(null)
-const marketEnvData = ref(null)
 const loadError = ref('')
 const POOLS_TIMEOUT = 90000
 const REVIEW_STATS_TIMEOUT = 90000
@@ -1122,12 +1195,20 @@ const globalTradeGate = computed(() => poolsData.value.global_trade_gate || {
   account_pool_limit: 3,
 })
 const refreshButtonLoading = computed(() => loading.value || Boolean(poolsData.value.refresh_in_progress))
-const todayMarketEnv = computed(() => marketEnvData.value || {
+const todayMarketEnv = computed(() => poolsData.value.market_env || {
   market_env_tag: '中性',
+  market_env_profile: '',
   breakout_allowed: false,
   risk_level: '中',
   market_comment: '',
+  market_headline: '',
+  market_subheadline: '',
+  trading_tempo_label: '',
+  dominant_factor_label: '',
 })
+const marketEnvironmentTagLabel = computed(() => (
+  todayMarketEnv.value.market_env_profile || todayMarketEnv.value.market_env_tag || '中性'
+))
 const radarModeBanner = computed(() => {
   const generatedAt = poolsData.value.radar_generated_at
     ? `最新生成于 ${formatLocalDateTime(poolsData.value.radar_generated_at, { assumeUtc: true })}`
@@ -1279,58 +1360,98 @@ const getEnvTagType = (tag) => {
 }
 
 const marketEnvironmentHeadline = computed(() => {
+  if (todayMarketEnv.value.market_headline) return todayMarketEnv.value.market_headline
   if (todayMarketEnv.value.market_env_tag === '进攻') return '市场允许更主动，但依旧先分清标准候选和试错票。'
   if (todayMarketEnv.value.market_env_tag === '防守') return '今天先控仓和处理旧仓，新开仓只看极少数确认机会。'
   return '市场处于中性切换期，优先看回踩确认，不要把观察票当执行票。'
 })
 
 const marketEnvironmentCopy = computed(() => (
+  todayMarketEnv.value.market_subheadline ||
   todayMarketEnv.value.market_comment ||
   (todayMarketEnv.value.breakout_allowed
     ? '允许做确认后的主动出手，但更适合先做计划内执行。'
     : '更适合等确认、看承接和控制仓位。')
 ))
 
-const directionStateLabel = (stock) => {
-  if (stock?.direction_signal_tag) return stock.direction_signal_tag
-  if (stock?.sector_profile_tag === 'A类主线') return '稳定主线'
-  if (stock?.sector_profile_tag === 'B类次主线') return '次主线'
+const directionStateLabel = (sector) => {
+  if (sector?.sector_rotation_tag) return sector.sector_rotation_tag
+  if (sector?.sector_mainline_tag === '主线') return '稳定主线'
+  if (sector?.sector_mainline_tag === '次主线') return '次主线'
   return '观察中'
 }
 
-const groupedDirections = computed(() => {
-  const groups = new Map()
-  ;[...marketPool.value, ...accountPool.value].forEach((stock) => {
-    const name = String(stock.sector_name || '').trim()
-    if (!name) return
-    const current = groups.get(name) || { name, count: 0, items: [], top: null }
-    current.count += 1
-    current.items.push(stock)
-    if (!current.top || Number(stock.market_strength_score || 0) > Number(current.top.market_strength_score || 0)) {
-      current.top = stock
-    }
-    groups.set(name, current)
-  })
-  return [...groups.values()]
-    .sort((a, b) => (
-      Number(b.top?.market_strength_score || 0) - Number(a.top?.market_strength_score || 0) ||
-      b.count - a.count
-    ))
+const directionMainlineLabel = (sector) => {
+  if (sector?.sector_mainline_tag) return sector.sector_mainline_tag
+  return '主线'
+}
+
+const directionActionBadgeClass = (actionHint) => {
+  if (actionHint === '可执行') return 'direction-badge-action-success'
+  if (actionHint === '只观察') return 'direction-badge-action-warning'
+  return 'direction-badge-action-muted'
+}
+
+const directionStateBadgeClass = (state) => {
+  if (state === '强化中' || state === '盘中强化') return 'direction-badge-state-strong'
+  if (state === '切换中') return 'direction-badge-state-rotating'
+  if (state === '稳定主线') return 'direction-badge-state-stable'
+  if (state === '衰减中') return 'direction-badge-state-weakening'
+  return 'direction-badge-state-neutral'
+}
+
+const summarizedMainlineSectors = computed(() => {
+  const mainline = (poolsData.value.mainline_sectors || []).slice(0, 3)
+  if (mainline.length >= 3) return mainline
+  const strengtheningSubs = (poolsData.value.sub_mainline_sectors || [])
+    .filter((sector) => ['强化中', '切换中', '盘中强化', '稳定主线'].includes(directionStateLabel(sector)))
+    .slice(0, Math.max(0, 3 - mainline.length))
+  return [...mainline, ...strengtheningSubs]
 })
 
-const primaryDirectionItems = computed(() => groupedDirections.value.slice(0, 3).map((group) => ({
-  name: group.name,
-  state: directionStateLabel(group.top),
+const primaryDirectionItems = computed(() => summarizedMainlineSectors.value.map((sector) => ({
+  name: sector.sector_name,
+  changePct: Number(sector.sector_change_pct || 0),
+  state: directionStateLabel(sector),
+  mainlineTag: directionMainlineLabel(sector),
+  tier: String(sector.sector_tier || '').trim(),
+  actionHint: String(sector.sector_action_hint || '').trim(),
+  reason: sector.sector_summary_reason || sector.sector_rotation_reason || sector.sector_comment || '先盯联动是否延续，再决定要不要往执行层下钻。',
 })))
 
-const directionOverviewCopy = computed(() => {
-  if (!primaryDirectionItems.value.length) return '当前没有足够清晰的主执行方向，优先看账户和持仓约束。'
-  const strengthening = primaryDirectionItems.value.filter((item) => ['强化中', '切换中', '盘中强化'].includes(item.state))
-  if (strengthening.length) {
-    return `优先看 ${primaryDirectionItems.value[0].name}，同时留意 ${strengthening.map((item) => item.name).join('、')} 的强化延续。`
-  }
-  return `今天先围绕 ${primaryDirectionItems.value.map((item) => item.name).join('、')} 这些方向做取舍。`
+const directionHeadline = computed(() => {
+  const lead = primaryDirectionItems.value[0]
+  if (!lead) return '按正式板块扫描判断主线'
+  const suffix = primaryDirectionItems.value.length > 1 ? `，带看 ${primaryDirectionItems.value.length} 个方向` : ''
+  return `${lead.name} 领看${suffix}`
 })
+
+const directionOverviewCopy = computed(() => {
+  const mainline = poolsData.value.mainline_sectors || []
+  const leadSector = mainline[0]
+  const secondaryNames = primaryDirectionItems.value.slice(1).map((item) => item.name)
+  if (leadSector?.sector_summary_reason) {
+    if (!secondaryNames.length) return leadSector.sector_summary_reason
+    return `${leadSector.sector_summary_reason}；同时留意 ${secondaryNames.join('、')}。`
+  }
+  if (leadSector?.sector_comment) {
+    if (!secondaryNames.length) return leadSector.sector_comment
+    return `${leadSector.sector_comment}；同时留意 ${secondaryNames.join('、')}。`
+  }
+  if (!primaryDirectionItems.value.length) return '当前没有足够清晰的主线板块，优先看账户和持仓约束。'
+  if (secondaryNames.length) return `优先看 ${primaryDirectionItems.value[0].name}，同时留意 ${secondaryNames.join('、')}。`
+  return `今天先围绕 ${primaryDirectionItems.value[0].name} 这个方向做取舍。`
+})
+
+const goToSectors = (sectorName = '') => {
+  if (sectorName) {
+    router.push({ path: '/sectors', query: { focus_sector: sectorName } })
+    return
+  }
+  router.push('/sectors')
+}
+
+const primaryDecisionStep = computed(() => decisionSteps.value[0] || null)
 
 const executionGuidanceTitle = computed(() => {
   if (holdingCount.value) return '先处理持仓，再看新机会'
@@ -1506,18 +1627,6 @@ const reviewInsight = computed(() => {
   }
 })
 
-const overviewBadge = computed(() => {
-  if (holdingCount.value) return '先处理持仓'
-  if (accountCount.value) return '看可参与'
-  return '先看观察池'
-})
-
-const overviewBadgeClass = computed(() => {
-  if (holdingCount.value) return 'badge-holding'
-  if (accountCount.value) return 'badge-account'
-  return 'badge-market'
-})
-
 const overviewTitle = computed(() => {
   if (globalTradeGate.value.status === '优先处理持仓，不建议新开') return '先处理旧仓风险，今天不建议新增仓位'
   if (holdingCount.value) return '已有仓位优先，先把该卖、该减、该持有的动作排清楚'
@@ -1533,6 +1642,9 @@ const overviewDesc = computed(() => {
   if (marketCount.value) return '观察池的任务是帮你缩小盯盘范围，先看方向、板块和量能，不要直接下单。'
   return '当前没有明显需要处理的仓位，也没有通过准入的新标的，适合保持节奏。'
 })
+
+const operatorBarTitle = computed(() => overviewTitle.value)
+const operatorBarDesc = computed(() => compactRuleSummary.value || overviewDesc.value)
 
 const overviewRules = computed(() => {
   if (globalTradeGate.value.status === '优先处理持仓，不建议新开') {
@@ -1555,12 +1667,6 @@ const clearReviewFilter = () => {
 }
 
 const compactRuleSummary = computed(() => overviewRules.value.slice(0, 2).join(' · '))
-
-const compactStatItems = computed(() => [
-  { key: 'holding', label: '持仓处理', value: holdingCount.value, tip: '先清旧仓动作' },
-  { key: 'account', label: '账户可参与', value: accountCount.value, tip: '能做但仍要确认' },
-  { key: 'market', label: '市场观察', value: marketCount.value, tip: '看方向样本' },
-])
 
 const decisionSteps = computed(() => {
   const steps = []
@@ -1606,6 +1712,36 @@ const decisionSteps = computed(() => {
   return steps.slice(0, 3)
 })
 
+const activateTab = async (tab, options = {}) => {
+  activeTab.value = tab
+  if (!options.scroll) return
+  await nextTick()
+  const target = detailCardRef.value?.$el || detailCardRef.value
+  if (!target || typeof target.scrollIntoView !== 'function') return
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+const focusItemTab = (item) => {
+  if (item?.poolKey === 'holding') return 'holding'
+  if (item?.poolKey === 'account') return 'account'
+  return 'market'
+}
+
+const focusItemPoolLabel = (item) => {
+  if (item?.poolKey === 'holding') return '持仓处理池'
+  if (item?.poolKey === 'account') return '账户可参与池'
+  return '市场观察池'
+}
+
+const openFocusAnalysis = (item) => {
+  if (!item?.stock) return
+  if (item.poolKey === 'holding') {
+    openSellAnalysis(item.stock)
+    return
+  }
+  openBuyAnalysis(item.stock)
+}
+
 const focusSummary = computed(() => {
   if (!focusSector.value) return ''
   if (focusMatches.value.account) {
@@ -1623,6 +1759,7 @@ const topFocusItems = computed(() => {
   holdingPool.value.slice(0, 2).forEach((stock) => {
     items.push({
       poolKey: 'holding',
+      stock,
       ts_code: stock.ts_code,
       stock_name: stock.stock_name,
       focus: stock.sell_trigger_cond || stock.sell_reason || stock.sell_comment || '继续跟踪盘中变化',
@@ -1635,6 +1772,7 @@ const topFocusItems = computed(() => {
     const stock = readyStandardExecutionPool.value[0] || accountPool.value[0]
     items.push({
       poolKey: 'account',
+      stock,
       ts_code: stock.ts_code,
       stock_name: stock.stock_name,
       focus: stock.execution_proximity_note || stock.pool_entry_reason || stock.position_hint || stock.stock_comment || '等待买点确认',
@@ -1645,6 +1783,7 @@ const topFocusItems = computed(() => {
     const stock = marketPool.value[0]
     items.push({
       poolKey: 'market',
+      stock,
       ts_code: stock.ts_code,
       stock_name: stock.stock_name,
       focus: stock.stock_comment || stock.stock_falsification_cond || '先看板块和量能',
@@ -1952,22 +2091,9 @@ const openSellAnalysis = (stock) => {
   sellAnalysisVisible.value = true
 }
 
-const loadMarketEnv = async (options = {}) => {
-  try {
-    const tradeDate = getLocalDate()
-    const res = await marketApi.getEnv(tradeDate, { timeout: POOLS_TIMEOUT, refresh: Boolean(options.refresh) })
-    marketEnvData.value = res.data?.data || null
-  } catch (_error) {
-    marketEnvData.value = null
-  }
-}
-
 const handleRefresh = async () => {
   stopRadarAutoRefresh()
-  await Promise.all([
-    loadData({ refresh: true }),
-    loadMarketEnv({ refresh: true }),
-  ])
+  await loadData({ refresh: true })
 }
 
 const clearFocusSector = () => {
@@ -1995,6 +2121,9 @@ const loadData = async (options = {}) => {
       resolved_trade_date: '',
       sector_scan_trade_date: '',
       sector_scan_resolved_trade_date: '',
+      market_env: null,
+      mainline_sectors: [],
+      sub_mainline_sectors: [],
       refresh_in_progress: false,
       refresh_requested: false,
       stale_snapshot: false,
@@ -2052,7 +2181,6 @@ onMounted(() => {
   displayDate.value = getLocalDate()
   loadData()
   loadReviewInsight()
-  loadMarketEnv()
 })
 
 watch(poolMode, async (nextMode) => {
@@ -2116,9 +2244,10 @@ onUnmounted(() => {
 
 .command-center {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1.3fr) minmax(300px, 0.95fr);
   gap: 14px;
   margin-bottom: 18px;
+  align-items: stretch;
 }
 
 .summary-card {
@@ -2132,22 +2261,139 @@ onUnmounted(() => {
     linear-gradient(155deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
 }
 
-.summary-card-market {
+.ops-toolbar {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(113, 170, 255, 0.12);
   background:
-    radial-gradient(circle at top right, rgba(57, 181, 74, 0.16), transparent 36%),
-    linear-gradient(155deg, rgba(12, 61, 28, 0.85), rgba(12, 27, 19, 0.96));
+    radial-gradient(circle at top right, rgba(103, 165, 255, 0.14), transparent 36%),
+    linear-gradient(145deg, rgba(18, 25, 42, 0.95), rgba(13, 17, 29, 0.98));
+}
+
+.ops-toolbar-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ops-toolbar-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.ops-toolbar-title {
+  font-size: 1.08rem;
+  font-weight: 800;
+  line-height: 1.35;
+  color: #fff;
+}
+
+.ops-toolbar-desc {
+  max-width: 900px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.ops-toolbar-context,
+.ops-toolbar-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ops-context-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ops-step-button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.ops-step-button:hover,
+.ops-step-button:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(145, 196, 255, 0.24);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ops-step-button-holding {
+  box-shadow: inset 0 0 0 1px rgba(243, 157, 86, 0.1);
+}
+
+.ops-step-button-account {
+  box-shadow: inset 0 0 0 1px rgba(47, 207, 154, 0.1);
+}
+
+.ops-step-button-market {
+  box-shadow: inset 0 0 0 1px rgba(103, 165, 255, 0.1);
+}
+
+.ops-step-rank {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #587cff, #78b0ff);
+}
+
+.ops-step-copy {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.ops-step-copy strong {
+  font-size: 13px;
+  color: #fff;
+}
+
+.ops-step-copy em {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  font-style: normal;
+}
+
+.summary-card-decision {
+  background:
+    radial-gradient(circle at top right, rgba(255, 187, 92, 0.18), transparent 36%),
+    radial-gradient(circle at bottom left, rgba(54, 194, 117, 0.14), transparent 34%),
+    linear-gradient(155deg, rgba(65, 39, 12, 0.92), rgba(24, 29, 18, 0.98));
 }
 
 .summary-card-direction {
   background:
     radial-gradient(circle at top right, rgba(80, 156, 255, 0.18), transparent 36%),
     linear-gradient(155deg, rgba(14, 42, 77, 0.9), rgba(12, 24, 46, 0.97));
-}
-
-.summary-card-action {
-  background:
-    radial-gradient(circle at top right, rgba(255, 165, 0, 0.18), transparent 38%),
-    linear-gradient(155deg, rgba(87, 47, 10, 0.9), rgba(43, 24, 9, 0.98));
 }
 
 .summary-card-account {
@@ -2161,6 +2407,38 @@ onUnmounted(() => {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.66);
+}
+
+.summary-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.summary-card-head-direction :deep(.el-button) {
+  padding-inline: 0;
+  color: #9cc7ff;
+}
+
+.decision-priority-pill {
+  display: grid;
+  gap: 2px;
+  min-width: 112px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.decision-priority-pill span {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.decision-priority-pill strong {
+  font-size: 14px;
+  color: #fff;
 }
 
 .summary-title-row {
@@ -2215,6 +2493,236 @@ onUnmounted(() => {
 .direction-pill em {
   font-style: normal;
   color: rgba(255, 255, 255, 0.64);
+}
+
+.direction-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.direction-card {
+  appearance: none;
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding: 14px;
+  text-align: left;
+  border-radius: 16px;
+  border: 1px solid rgba(129, 180, 255, 0.14);
+  background:
+    radial-gradient(circle at top right, rgba(109, 171, 255, 0.14), transparent 40%),
+    rgba(255, 255, 255, 0.04);
+  color: inherit;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.direction-card-lead {
+  grid-column: 1 / -1;
+}
+
+.direction-card:hover,
+.direction-card:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(150, 201, 255, 0.28);
+  background:
+    radial-gradient(circle at top right, rgba(109, 171, 255, 0.2), transparent 40%),
+    rgba(255, 255, 255, 0.06);
+}
+
+.direction-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.direction-card-top strong {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.direction-card-change {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.direction-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.direction-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.direction-badge-mainline {
+  background: rgba(95, 170, 255, 0.16);
+  color: #d6e8ff;
+}
+
+.direction-badge-tier {
+  background: rgba(255, 193, 102, 0.16);
+  color: #ffe2af;
+}
+
+.direction-badge-action-success {
+  background: rgba(54, 194, 117, 0.18);
+  color: #cffff0;
+}
+
+.direction-badge-action-warning {
+  background: rgba(255, 188, 84, 0.18);
+  color: #ffe1ae;
+}
+
+.direction-badge-action-muted {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.direction-badge-state-strong {
+  background: rgba(76, 180, 255, 0.18);
+  color: #d9eeff;
+}
+
+.direction-badge-state-rotating {
+  background: rgba(184, 133, 255, 0.18);
+  color: #ead8ff;
+}
+
+.direction-badge-state-stable {
+  background: rgba(83, 214, 147, 0.18);
+  color: #d4ffe8;
+}
+
+.direction-badge-state-weakening {
+  background: rgba(255, 132, 132, 0.16);
+  color: #ffd6d6;
+}
+
+.direction-badge-state-neutral {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.direction-card-copy {
+  font-size: 13px;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.decision-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.decision-summary-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.decision-summary-label {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.decision-summary-value {
+  font-size: 18px;
+  line-height: 1.4;
+  color: #fff;
+}
+
+.decision-summary-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.decision-step-inline-list {
+  display: grid;
+  gap: 10px;
+}
+
+.decision-step-inline {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+  color: inherit;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.decision-step-inline:hover,
+.decision-step-inline:focus-visible {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.decision-step-inline-holding {
+  box-shadow: inset 0 0 0 1px rgba(243, 157, 86, 0.1);
+}
+
+.decision-step-inline-account {
+  box-shadow: inset 0 0 0 1px rgba(47, 207, 154, 0.1);
+}
+
+.decision-step-inline-market {
+  box-shadow: inset 0 0 0 1px rgba(103, 165, 255, 0.1);
+}
+
+.decision-step-inline-rank {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #f39d56, #ffbf66);
+}
+
+.decision-step-inline-copy {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.decision-step-inline-copy strong {
+  font-size: 13px;
+  color: #fff;
+}
+
+.decision-step-inline-copy em {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  font-style: normal;
 }
 
 .priority-stack {
@@ -2720,43 +3228,6 @@ onUnmounted(() => {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.overview-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
-  gap: 14px;
-  align-items: stretch;
-}
-
-.overview-main {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 18px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.overview-side {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.overview-side-head {
-  display: grid;
-  gap: 6px;
-}
-
-.overview-side-caption {
-  font-size: 12px;
-  color: var(--color-text-sec);
-  line-height: 1.5;
-}
-
 .overview-mini-stats {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2803,14 +3274,6 @@ onUnmounted(() => {
   line-height: 1;
 }
 
-.overview-side-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .section-head {
   display: flex;
   align-items: flex-end;
@@ -2831,145 +3294,13 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
-.decision-rail {
+.section-head-support {
+  margin-bottom: 2px;
+}
+
+.decision-support-shell {
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.decision-rail-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.decision-step-card {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.decision-step-card-active {
-  box-shadow: inset 0 0 0 1px rgba(104, 158, 255, 0.22);
-}
-
-.decision-step-card-holding {
-  box-shadow: inset 0 0 0 1px rgba(243, 157, 86, 0.12);
-}
-
-.decision-step-card-account {
-  box-shadow: inset 0 0 0 1px rgba(47, 207, 154, 0.12);
-}
-
-.decision-step-card-trend {
-  box-shadow: inset 0 0 0 1px rgba(198, 140, 255, 0.12);
-}
-
-.decision-step-card-market {
-  box-shadow: inset 0 0 0 1px rgba(103, 165, 255, 0.12);
-}
-
-.decision-step-head {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.decision-step-rank {
-  width: 30px;
-  height: 30px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, #f1606c, #ff8f72);
-}
-
-.decision-step-copy {
-  display: grid;
-  gap: 4px;
-}
-
-.decision-step-title {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.decision-step-desc {
-  line-height: 1.55;
-  color: var(--color-text-sec);
-  font-size: 13px;
-}
-
-.decision-step-meta,
-.decision-step-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.decision-step-chip {
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--color-text-main);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.decision-step-hint {
-  font-size: 12px;
-  color: var(--color-text-sec);
-}
-
-.overview-badge {
-  min-width: 124px;
-  padding: 16px 18px;
-  border-radius: 18px;
-  font-size: 1.1rem;
-  font-weight: 800;
-  text-align: center;
-  letter-spacing: 0.05em;
-  color: #fff;
-}
-
-.badge-holding {
-  background: linear-gradient(135deg, #cc6b28, #f39d56);
-}
-
-.badge-account {
-  background: linear-gradient(135deg, #1d8b6f, #2fcf9a);
-}
-
-.badge-trend {
-  background: linear-gradient(135deg, #9c6cf5, #c68cff);
-}
-
-.badge-market {
-  background: linear-gradient(135deg, #4f76d9, #67a5ff);
-}
-
-.overview-copy {
-  display: grid;
-  gap: 8px;
-}
-
-.overview-title {
-  font-size: 1.05rem;
-  font-weight: 700;
-}
-
-.overview-desc {
-  color: var(--color-text-sec);
-  line-height: 1.6;
+  gap: 14px;
 }
 
 .focus-context {
@@ -2998,7 +3329,7 @@ onUnmounted(() => {
 
 .decision-support-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  grid-template-columns: minmax(0, 1.22fr) minmax(320px, 0.78fr);
   gap: 14px;
 }
 
@@ -3011,6 +3342,11 @@ onUnmounted(() => {
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+.support-card-focus,
+.support-card-insight {
+  align-content: start;
+}
+
 .support-card-head {
   display: flex;
   align-items: flex-end;
@@ -3020,19 +3356,19 @@ onUnmounted(() => {
 
 .top-focus-list {
   display: grid;
-  gap: 8px;
+  gap: 12px;
 }
 
 .top-focus-item {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) minmax(240px, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr);
   gap: 12px;
-  align-items: stretch;
+  align-items: flex-start;
 }
 
 .top-focus-rank {
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
@@ -3042,14 +3378,49 @@ onUnmounted(() => {
   background: linear-gradient(135deg, #f1606c, #ff8f72);
 }
 
+.top-focus-content {
+  display: grid;
+  gap: 10px;
+}
+
+.top-focus-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
 .top-focus-main,
 .top-focus-trigger {
   display: grid;
   gap: 4px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.top-focus-main {
+  flex: 1;
+}
+
+.top-focus-main strong {
+  font-size: 1.05rem;
+  line-height: 1.35;
+  color: #fff;
+}
+
+.top-focus-pool {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #cfe3ff;
+  background: rgba(95, 142, 255, 0.12);
+  border: 1px solid rgba(126, 171, 255, 0.16);
 }
 
 .top-focus-meta,
@@ -3061,6 +3432,14 @@ onUnmounted(() => {
 .top-focus-trigger-text {
   line-height: 1.55;
   color: var(--color-text-main);
+}
+
+.top-focus-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .focus-hit-inline {
@@ -3148,39 +3527,54 @@ onUnmounted(() => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .overview-hero,
+  .summary-card-decision {
+    grid-column: 1 / -1;
+  }
+
+  .direction-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .decision-support-grid,
-  .decision-rail-grid,
   .focus-hit-inline-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 900px) {
+  .ops-toolbar-main,
+  .ops-toolbar-actions,
+  .ops-toolbar-context {
+    align-items: flex-start;
+  }
+
   .command-center,
   .execution-dual-grid,
   .watch-group-grid,
   .trend-preview-grid,
-  .overview-hero,
   .decision-support-grid,
-  .overview-main,
   .top-focus-item {
     grid-template-columns: 1fr;
   }
 
-  .overview-main {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
   .overview-mini-stats,
-  .decision-rail-grid,
+  .direction-grid,
+  .decision-summary-grid,
   .focus-hit-inline-grid {
     grid-template-columns: 1fr;
   }
 
+  .direction-card-lead {
+    grid-column: auto;
+  }
+
   .top-focus-item {
     display: grid;
+  }
+
+  .top-focus-head,
+  .top-focus-actions {
+    justify-content: flex-start;
   }
 }
 
@@ -3635,7 +4029,6 @@ onUnmounted(() => {
   .action-card-top,
   .watch-group-head,
   .priority-panel-head,
-  .overview-main,
   .signal-card-header,
   .signal-footer {
     flex-direction: column;

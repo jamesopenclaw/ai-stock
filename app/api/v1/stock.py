@@ -32,7 +32,7 @@ from app.core.security import AuthenticatedAccount, get_current_account
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-STOCK_POOLS_SNAPSHOT_VERSION = 4
+STOCK_POOLS_SNAPSHOT_VERSION = 6
 _stock_pools_refresh_tasks: dict[str, asyncio.Task] = {}
 RADAR_POOLS_CACHE_TTL_SECONDS = 20
 _radar_stock_pools_cache: dict[str, dict] = {}
@@ -76,6 +76,19 @@ def _cache_radar_result(trade_date: str, candidate_limit: int, result, account_i
     }
 
 
+def _summarize_sector_list(sectors, limit: int = 5):
+    if not sectors:
+        return []
+    return list(sectors[:limit])
+
+
+def _attach_stock_pools_context_snapshot(result, *, market_env=None, sector_scan=None):
+    result.market_env = market_env
+    result.mainline_sectors = _summarize_sector_list(getattr(sector_scan, "mainline_sectors", []), 5)
+    result.sub_mainline_sectors = _summarize_sector_list(getattr(sector_scan, "sub_mainline_sectors", []), 3)
+    return result
+
+
 def _serialize_stock_pools_result(
     result,
     *,
@@ -83,12 +96,16 @@ def _serialize_stock_pools_result(
     refresh_requested: bool = False,
     stale_snapshot: bool = False,
     mode: str = "stable",
+    include_watch_candidates: bool = False,
 ):
-    return {
+    payload = {
         "trade_date": result.trade_date,
         "resolved_trade_date": result.resolved_trade_date,
         "sector_scan_trade_date": result.sector_scan_trade_date,
         "sector_scan_resolved_trade_date": result.sector_scan_resolved_trade_date,
+        "market_env": result.market_env.model_dump() if getattr(result, "market_env", None) else None,
+        "mainline_sectors": [sector.model_dump() for sector in getattr(result, "mainline_sectors", [])],
+        "sub_mainline_sectors": [sector.model_dump() for sector in getattr(result, "sub_mainline_sectors", [])],
         "global_trade_gate": result.global_trade_gate.model_dump(),
         "market_watch_pool": [s.model_dump() for s in result.market_watch_pool],
         "account_executable_pool": [s.model_dump() for s in result.account_executable_pool],
@@ -108,6 +125,11 @@ def _serialize_stock_pools_result(
         "is_realtime": mode == "radar",
         "radar_generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S") if mode == "radar" else None,
     }
+    if include_watch_candidates:
+        candidates = [s.model_dump() for s in getattr(result, "market_watch_candidates", [])]
+        payload["market_watch_candidates"] = candidates
+        payload["market_watch_candidate_count"] = len(candidates)
+    return payload
 
 
 async def _compute_stock_pools_result(
@@ -127,6 +149,11 @@ async def _compute_stock_pools_result(
     result.sector_scan_trade_date = bundle.context.sector_scan_trade_date
     result.sector_scan_resolved_trade_date = bundle.context.sector_scan_resolved_trade_date
     result.snapshot_version = STOCK_POOLS_SNAPSHOT_VERSION
+    _attach_stock_pools_context_snapshot(
+        result,
+        market_env=bundle.context.market_env,
+        sector_scan=bundle.context.sector_scan,
+    )
     sell_analysis = sell_point_service.analyze(
         trade_date,
         bundle.context.holdings,
@@ -185,6 +212,11 @@ async def _compute_radar_stock_pools_result(
     result.sector_scan_trade_date = trade_date
     result.sector_scan_resolved_trade_date = getattr(sector_scan, "resolved_trade_date", None) or trade_date
     result.snapshot_version = STOCK_POOLS_SNAPSHOT_VERSION
+    _attach_stock_pools_context_snapshot(
+        result,
+        market_env=market_env,
+        sector_scan=sector_scan,
+    )
     sell_analysis = sell_point_service.analyze(
         trade_date,
         account_context.holdings,
@@ -309,6 +341,7 @@ async def get_stock_pools(
     limit: int = Query(100, description="候选股数量限制", ge=1, le=500),
     refresh: bool = Query(False, description="是否强制重新计算三池结果并覆盖快照"),
     mode: str = Query("stable", description="三池模式：stable 稳定快照，radar 实时雷达"),
+    include_watch_candidates: bool = Query(False, description="是否返回观察候选全集，仅用于排查"),
     force_llm_refresh: bool = Query(False, description="保留字段，三池页当前不再触发 LLM"),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
@@ -358,6 +391,7 @@ async def get_stock_pools(
                     refresh_requested=False,
                     stale_snapshot=False,
                     mode="radar",
+                    include_watch_candidates=include_watch_candidates,
                 )
             )
 
@@ -389,6 +423,7 @@ async def get_stock_pools(
                         refresh_requested=started,
                         stale_snapshot=not cache_valid,
                         mode="stable",
+                        include_watch_candidates=include_watch_candidates,
                     )
                 )
 
@@ -398,6 +433,9 @@ async def get_stock_pools(
                     "resolved_trade_date": "",
                     "sector_scan_trade_date": expected_sector_scan_trade_date,
                     "sector_scan_resolved_trade_date": "",
+                    "market_env": None,
+                    "mainline_sectors": [],
+                    "sub_mainline_sectors": [],
                     "global_trade_gate": {
                         "status": "允许试错",
                         "allow_new_positions": True,
@@ -434,6 +472,7 @@ async def get_stock_pools(
                     refresh_requested=False,
                     stale_snapshot=False,
                     mode="stable",
+                    include_watch_candidates=include_watch_candidates,
                 )
             )
 
@@ -456,6 +495,7 @@ async def get_stock_pools(
                 refresh_requested=False,
                 stale_snapshot=False,
                 mode="stable",
+                include_watch_candidates=include_watch_candidates,
             )
         )
     except Exception as e:

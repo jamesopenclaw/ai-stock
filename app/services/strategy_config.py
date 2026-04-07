@@ -37,10 +37,10 @@ class StockFilterStrategyConfig:
     defense_trial_min_score: float = 85.0
     pure_emotion_amount_max: float = 100000.0
     high_volatility_pct: float = 8.0
-    market_watch_limit: int = 8
-    market_watch_per_sector_limit: int = 3
+    market_watch_limit: int = 12
+    market_watch_per_sector_limit: int = 4
     account_executable_limit: int = 5
-    sector_representative_limit: int = 4
+    sector_representative_limit: int = 6
 
 
 @dataclass(frozen=True)

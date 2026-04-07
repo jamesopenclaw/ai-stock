@@ -262,6 +262,12 @@ class StockFilterService:
             allowed_new_pool_profiles,
             allowed_new_pool_sectors,
         )
+        execution_priority_codes = self._select_account_executable_candidate_codes(
+            scored_stocks,
+            holding_codes,
+            allowed_new_pool_profiles,
+            allowed_new_pool_sectors,
+        )
         holding_process = self.build_holding_process_pool(
             holding_codes,
             scored_by_code,
@@ -275,20 +281,25 @@ class StockFilterService:
             account,
             holding_process,
         )
-        market_watch = self.build_market_watch_pool(
+        market_watch_candidates = self._build_market_watch_candidates(
             scored_stocks,
             holding_codes,
             allowed_new_pool_profiles,
             allowed_new_pool_sectors,
             representative_codes,
+            execution_priority_codes,
             account,
             market_env,
             holding_profile,
             global_trade_gate,
             review_bias_profile=review_bias_profile,
         )
+        market_watch = self._select_visible_market_watch(
+            market_watch_candidates,
+            allowed_sector_names=allowed_new_pool_sectors,
+        )
         account_executable = self.build_account_executable_pool(
-            market_watch,
+            market_watch_candidates,
             holding_codes,
             account,
             market_env,
@@ -302,6 +313,7 @@ class StockFilterService:
             resolved_trade_date=None,
             global_trade_gate=global_trade_gate,
             market_watch_pool=market_watch,
+            market_watch_candidates=market_watch_candidates,
             account_executable_pool=account_executable,
             holding_process_pool=holding_process,
             total_count=(
@@ -354,13 +366,14 @@ class StockFilterService:
         holding_process.sort(key=self._holding_process_sort_key)
         return holding_process
 
-    def build_market_watch_pool(
+    def _build_market_watch_candidates(
         self,
         scored_stocks: List[StockOutput],
         holding_codes: set[str],
         allowed_profiles: set[SectorProfileTag],
         allowed_sector_names: set[str],
         representative_codes: set[str],
+        execution_priority_codes: set[str],
         account: Optional[AccountInput],
         market_env,
         holding_profile: Dict,
@@ -368,7 +381,7 @@ class StockFilterService:
         *,
         review_bias_profile: Optional[Dict] = None,
     ) -> List[StockOutput]:
-        """观察池只回答市场最强和值得盯的票。"""
+        """观察池候选全集：先回答“值得盯谁”，再由展示层截断。"""
         market_watch: List[StockOutput] = []
         for stock in scored_stocks:
             normalized_code = normalize_ts_code(stock.ts_code)
@@ -378,7 +391,11 @@ class StockFilterService:
             if not is_holding:
                 if not self._allows_new_pool_entry(stock, allowed_profiles, allowed_sector_names):
                     continue
-                if representative_codes and normalized_code not in representative_codes:
+                if (
+                    representative_codes
+                    and normalized_code not in representative_codes
+                    and normalized_code not in execution_priority_codes
+                ):
                     continue
 
             account_ok, account_reason, _, _ = self._evaluate_account_pool_candidate(
@@ -410,6 +427,37 @@ class StockFilterService:
                 )
             )
 
+        return market_watch
+
+    def build_market_watch_pool(
+        self,
+        scored_stocks: List[StockOutput],
+        holding_codes: set[str],
+        allowed_profiles: set[SectorProfileTag],
+        allowed_sector_names: set[str],
+        representative_codes: set[str],
+        execution_priority_codes: set[str],
+        account: Optional[AccountInput],
+        market_env,
+        holding_profile: Dict,
+        global_trade_gate: GlobalTradeGateOutput,
+        *,
+        review_bias_profile: Optional[Dict] = None,
+    ) -> List[StockOutput]:
+        """观察池只回答市场最强和值得盯的票。"""
+        market_watch = self._build_market_watch_candidates(
+            scored_stocks,
+            holding_codes,
+            allowed_profiles,
+            allowed_sector_names,
+            representative_codes,
+            execution_priority_codes,
+            account,
+            market_env,
+            holding_profile,
+            global_trade_gate,
+            review_bias_profile=review_bias_profile,
+        )
         return self._select_visible_market_watch(
             market_watch,
             allowed_sector_names=allowed_sector_names,
@@ -2432,12 +2480,22 @@ class StockFilterService:
                     "分歧/修复段仍有确认承接位，可纳入账户可参与池。",
                     "优先等回踩确认或分歧转强后执行",
                 )
-            if float(stock.change_pct or 0) > 6.5:
+            change_pct = float(stock.change_pct or 0)
+            turnover_rate = float(stock.turnover_rate or 0)
+            if change_pct > 7.2:
                 return False, "需要突破确认，但当日涨幅已偏大，不算舒服买点。", None
-            if float(stock.turnover_rate or 0) >= 15:
+            if change_pct > 6.5 and turnover_rate >= 8:
+                return False, "需要突破确认，当前涨幅已偏大且换手开始抬升，更像加速追价。", None
+            if turnover_rate >= 15:
                 return False, "需要突破确认，但换手偏高，追价舒适度不足。", None
             if self._has_upper_shadow_risk(stock):
                 return False, "盘中上影偏长，突破承接一般，不算舒服买点。", None
+            if change_pct > 6.5:
+                return (
+                    True,
+                    "突破延续但换手仍可控，可纳入账户可参与池。",
+                    "只做分时确认，不做加速追高",
+                )
             return (
                 True,
                 "突破位距离尚可，且承接没有明显走坏，可纳入账户可参与池。",
