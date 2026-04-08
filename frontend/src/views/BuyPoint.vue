@@ -124,9 +124,22 @@
                 </div>
                 <div class="available-group-meta">总可买 {{ availablePoints.length }} 只</div>
               </div>
-	            <div class="signal-grid">
+              <div class="type-group-stack">
+                <section
+                  v-for="group in primaryAvailableGroups"
+                  :key="`primary-${group.key}`"
+                  class="type-group"
+                >
+                  <div class="type-group-head">
+                    <div>
+                      <div class="type-group-title">{{ group.title }}</div>
+                      <div class="type-group-desc">{{ group.desc }}</div>
+                    </div>
+                    <div class="type-group-meta">{{ group.items.length }} 只</div>
+                  </div>
+                  <div class="signal-grid">
 		              <article
-		                v-for="point in primaryAvailablePoints"
+		                v-for="point in group.items"
 		                :key="point.ts_code"
 		                :class="['signal-card', 'signal-card-buy', entryModeCardClass(point), { 'signal-card-focused': matchesFocusSector(point) }]"
 	              >
@@ -313,7 +326,9 @@
                   </div>
                 </div>
               </article>
-            </div>
+                  </div>
+                </section>
+              </div>
               <div v-if="backupAvailablePoints.length" class="available-group-head available-group-head-secondary">
                 <div>
                   <div class="available-group-title">备选可买</div>
@@ -321,9 +336,22 @@
                 </div>
                 <div class="available-group-meta">{{ backupAvailablePoints.length }} 只</div>
               </div>
-              <div v-if="backupAvailablePoints.length" class="signal-grid signal-grid-secondary">
+              <div v-if="backupAvailablePoints.length" class="type-group-stack type-group-stack-secondary">
+                <section
+                  v-for="group in backupAvailableGroups"
+                  :key="`backup-${group.key}`"
+                  class="type-group type-group-secondary"
+                >
+                  <div class="type-group-head">
+                    <div>
+                      <div class="type-group-title">{{ group.title }}</div>
+                      <div class="type-group-desc">{{ group.desc }}</div>
+                    </div>
+                    <div class="type-group-meta">{{ group.items.length }} 只</div>
+                  </div>
+                  <div class="signal-grid signal-grid-secondary">
 	                <article
-	                  v-for="point in backupAvailablePoints"
+	                  v-for="point in group.items"
 	                  :key="`backup-${point.ts_code}`"
 	                  :class="['signal-card', 'signal-card-watch', entryModeCardClass(point)]"
 	                >
@@ -375,6 +403,8 @@
                     </div>
                   </div>
                 </article>
+                  </div>
+                </section>
               </div>
             </template>
           </el-tab-pane>
@@ -384,12 +414,25 @@
               <span>观察 <em class="tab-count">{{ observePoints.length }}</em></span>
             </template>
             <el-empty v-if="!observePoints.length" description="暂无观察标的" />
-            <div v-else class="signal-grid">
-              <article
-                v-for="point in observePoints"
-                :key="point.ts_code"
-                :class="['signal-card', 'signal-card-watch', { 'signal-card-focused': matchesFocusSector(point) }]"
+            <div v-else class="type-group-stack">
+              <section
+                v-for="group in observeGroups"
+                :key="`observe-${group.key}`"
+                class="type-group"
               >
+                <div class="type-group-head">
+                  <div>
+                    <div class="type-group-title">{{ group.title }}</div>
+                    <div class="type-group-desc">{{ group.desc }}</div>
+                  </div>
+                  <div class="type-group-meta">{{ group.items.length }} 只</div>
+                </div>
+                <div class="signal-grid">
+                  <article
+                    v-for="point in group.items"
+                    :key="point.ts_code"
+                    :class="['signal-card', 'signal-card-watch', { 'signal-card-focused': matchesFocusSector(point) }]"
+                  >
                 <div class="signal-card-header">
                   <div>
                     <div class="signal-stock">{{ point.stock_name }}</div>
@@ -522,6 +565,8 @@
                   </div>
                 </div>
               </article>
+                </div>
+              </section>
             </div>
           </el-tab-pane>
 
@@ -611,6 +656,25 @@ const notificationAction = computed(() => String(route.query.notification_action
 const notificationTsCode = computed(() => String(route.query.ts_code || '').trim())
 const notificationStockName = computed(() => String(route.query.stock_name || '').trim())
 const focusOnly = ref(false)
+const BUY_POINT_GROUP_ORDER = ['突破', '回踩承接', '低吸', '修复转强']
+const BUY_POINT_GROUP_META = {
+  突破: {
+    title: '突破确认',
+    desc: '这组更看放量站稳和分时确认，不做提前抢跑。',
+  },
+  回踩承接: {
+    title: '回踩承接',
+    desc: '这组重点等回踩确认，不把现价附近直接当执行位。',
+  },
+  低吸: {
+    title: '低吸试错',
+    desc: '这组更偏靠近支撑试错，拉高后不追。',
+  },
+  修复转强: {
+    title: '修复转强',
+    desc: '这组先看关键位修复，再决定能否从观察转执行。',
+  },
+}
 
 const matchesFocusSector = (point) => {
   if (!focusSector.value) return false
@@ -635,6 +699,39 @@ const applyPageFilters = (points = []) => sortByFocusSector(points).filter(match
 const availablePoints = computed(() => applyPageFilters(buyData.value.available_buy_points || []))
 const observePoints = computed(() => applyPageFilters(buyData.value.observe_buy_points || []))
 const notBuyPoints = computed(() => applyPageFilters(buyData.value.not_buy_points || []))
+
+const normalizeBuyPointType = (value) => String(value || '').trim() || '其他'
+
+const buyPointTypeRank = (value) => {
+  const normalized = normalizeBuyPointType(value)
+  const index = BUY_POINT_GROUP_ORDER.indexOf(normalized)
+  return index >= 0 ? index : BUY_POINT_GROUP_ORDER.length
+}
+
+const buyPointGroupMeta = (value) => BUY_POINT_GROUP_META[normalizeBuyPointType(value)] || {
+  title: normalizeBuyPointType(value),
+  desc: '这组机会较少，执行前先回到卡片里的触发和确认条件。',
+}
+
+const groupBuyPoints = (points = []) => {
+  const grouped = new Map()
+  for (const point of points) {
+    const key = normalizeBuyPointType(point?.buy_point_type)
+    if (!grouped.has(key)) grouped.set(key, [])
+    grouped.get(key).push(point)
+  }
+  return [...grouped.entries()]
+    .sort((a, b) => buyPointTypeRank(a[0]) - buyPointTypeRank(b[0]))
+    .map(([key, items]) => {
+      const meta = buyPointGroupMeta(key)
+      return {
+        key,
+        title: meta.title,
+        desc: meta.desc,
+        items,
+      }
+    })
+}
 
 const reviewSourceLabel = computed(() => reviewSnapshotTypeLabel(reviewSourceFilter.value))
 
@@ -683,6 +780,10 @@ const backupAvailablePoints = computed(() => {
   const selectedCodes = new Set(primaryAvailablePoints.value.map((point) => point.ts_code))
   return availablePoints.value.filter((point) => !selectedCodes.has(point.ts_code))
 })
+
+const primaryAvailableGroups = computed(() => groupBuyPoints(primaryAvailablePoints.value))
+const backupAvailableGroups = computed(() => groupBuyPoints(backupAvailablePoints.value))
+const observeGroups = computed(() => groupBuyPoints(observePoints.value))
 
 const reviewSnapshotTypeLabel = (value) => {
   if (value === 'buy_available') return '买点-可买'
@@ -1719,6 +1820,54 @@ watch(
   font-size: 12px;
   color: var(--color-text-sec);
   white-space: nowrap;
+}
+
+.type-group-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.type-group-stack-secondary {
+  margin-top: 0;
+}
+
+.type-group {
+  display: grid;
+  gap: 12px;
+}
+
+.type-group-secondary {
+  gap: 10px;
+}
+
+.type-group-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.type-group-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.type-group-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-sec);
+}
+
+.type-group-meta {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-text-sec);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .signal-grid {

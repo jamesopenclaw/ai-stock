@@ -239,6 +239,101 @@ async def test_get_stock_pools_radar_mode_returns_realtime_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_compute_radar_stock_pools_result_prefers_today_sources(monkeypatch):
+    account_context = type(
+        "AccountContext",
+        (),
+        {
+            "holdings_list": [],
+            "holdings": [],
+            "account": AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.1,
+                holding_count=0,
+                today_new_buy_count=0,
+            ),
+        },
+    )()
+    market_env = MarketEnvOutput(
+        trade_date="2026-03-24",
+        market_env_tag=MarketEnvTag.NEUTRAL,
+        index_score=60,
+        sentiment_score=58,
+        overall_score=59,
+        breakout_allowed=True,
+        risk_level=RiskLevel.MEDIUM,
+        market_comment="可观察",
+    )
+    sector_scan = type(
+        "SectorScan",
+        (),
+        {
+            "resolved_trade_date": "2026-03-24",
+            "mainline_sectors": [],
+            "sub_mainline_sectors": [],
+        },
+    )()
+    pools = StockPoolsOutput(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_scan_trade_date="2026-03-24",
+        sector_scan_resolved_trade_date="2026-03-24",
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
+        market_watch_pool=[],
+        account_executable_pool=[],
+        holding_process_pool=[],
+        total_count=0,
+    )
+
+    async def fake_build_account_context(*args, **kwargs):
+        return account_context
+
+    scan_calls = []
+    candidate_calls = []
+
+    def fake_scan(*args, **kwargs):
+        scan_calls.append(kwargs.get("prefer_today"))
+        return sector_scan
+
+    def fake_get_candidate_stocks(*args, **kwargs):
+        candidate_calls.append(kwargs.get("prefer_today"))
+        return [], "2026-03-24"
+
+    monkeypatch.setattr(
+        stock.decision_context_service,
+        "build_account_context",
+        fake_build_account_context,
+    )
+    monkeypatch.setattr(stock.market_env_service, "get_current_env", lambda *_args, **_kwargs: market_env)
+    monkeypatch.setattr(stock.sector_scan_service, "scan", fake_scan)
+    monkeypatch.setattr(
+        stock.decision_context_service,
+        "get_candidate_stocks",
+        fake_get_candidate_stocks,
+    )
+    monkeypatch.setattr(stock.stock_filter_service, "filter_with_context", lambda *args, **kwargs: [])
+    async def fake_get_review_bias_profile_safe(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        stock.review_snapshot_service,
+        "get_review_bias_profile_safe",
+        fake_get_review_bias_profile_safe,
+    )
+    monkeypatch.setattr(stock.stock_filter_service, "classify_pools", lambda *args, **kwargs: pools)
+    monkeypatch.setattr(stock.sell_point_service, "analyze", lambda *args, **kwargs: None)
+    monkeypatch.setattr(stock.stock_filter_service, "attach_sell_analysis", lambda stock_pools, sell_analysis: stock_pools)
+
+    result = await stock._compute_radar_stock_pools_result("2026-03-24", 50)
+
+    assert result.resolved_trade_date == "2026-03-24"
+    assert result.sector_scan_resolved_trade_date == "2026-03-24"
+    assert scan_calls == [True]
+    assert candidate_calls == [True]
+
+
+@pytest.mark.asyncio
 async def test_get_stock_pools_returns_snapshot_market_env_and_mainline(monkeypatch):
     cached_pools = StockPoolsOutput(
         trade_date="2026-03-24",

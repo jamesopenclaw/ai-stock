@@ -590,6 +590,34 @@ describe('关键页面联调', () => {
             recommended_lots: 9,
             sizing_reference_price: 21.35,
           },
+          {
+            ts_code: '688001.SH',
+            stock_name: '突破龙头',
+            sector_name: '机器人',
+            stock_pool_tag: '账户可参与池',
+            account_entry_mode: 'aggressive_trial',
+            candidate_bucket_tag: '强趋势延续',
+            candidate_source_tag: '机器人',
+            buy_point_type: '突破',
+            buy_risk_level: '中',
+            buy_account_fit: '适合',
+            buy_trigger_cond: '放量突破 33.50',
+            buy_confirm_cond: '量比放大；突破后不回落',
+            buy_invalid_cond: '跌回 32.40 下方',
+            buy_comment: '强势突破后可跟随',
+            buy_current_price: 33.2,
+            buy_current_change_pct: 5.6,
+            buy_trigger_gap_pct: 0.9,
+            buy_invalid_gap_pct: -2.4,
+            buy_trigger_price: 33.5,
+            buy_invalid_price: 32.4,
+            buy_required_volume_ratio: 1.2,
+            recommended_order_pct: 0.15,
+            recommended_order_amount: 9960,
+            recommended_shares: 300,
+            recommended_lots: 3,
+            sizing_reference_price: 33.2,
+          },
         ],
         observe_buy_points: [],
         not_buy_points: [],
@@ -615,8 +643,11 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('买点分析')
     expect(wrapper.text()).toContain('机器人先锋')
     expect(wrapper.text()).toContain('主执行名单')
+    expect(wrapper.text()).toContain('突破确认')
+    expect(wrapper.text()).toContain('回踩承接')
     expect(wrapper.text()).toContain('标准')
     expect(wrapper.text()).toContain('标准执行 / 先手仓约 20%')
+    expect(wrapper.text()).toContain('进攻试错 / 先手仓约 15%')
     expect(wrapper.text()).toContain('建议先买 900 股')
     expect(wrapper.text()).toContain('19,215.00 元')
   })

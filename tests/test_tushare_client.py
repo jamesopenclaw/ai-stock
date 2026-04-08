@@ -362,6 +362,56 @@ class _FallbackStockListPro(_FakePro):
         return pd.DataFrame()
 
 
+class _RadarStockListPro(_FallbackStockListPro):
+    def daily(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
+        self.daily_calls.append((ts_code, start_date, end_date, trade_date))
+        if trade_date == "20260323":
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "002475.SZ",
+                        "trade_date": "20260323",
+                        "close": 38.00,
+                        "pct_chg": 8.80,
+                        "vol": 420000,
+                        "amount": 760000,
+                        "high": 38.50,
+                        "low": 35.60,
+                        "open": 35.90,
+                        "pre_close": 34.93,
+                    }
+                ]
+            )
+        return super().daily(ts_code=ts_code, start_date=start_date, end_date=end_date, trade_date=trade_date)
+
+    def daily_basic(self, ts_code=None, trade_date=None, fields=None):
+        self.daily_basic_calls.append((ts_code, trade_date, fields))
+        if trade_date == "20260323":
+            rows = [
+                {
+                    "ts_code": "002475.SZ",
+                    "turnover_rate": 21.2,
+                    "volume_ratio": 4.6,
+                }
+            ]
+            if ts_code:
+                rows = [row for row in rows if row["ts_code"] == ts_code]
+            return pd.DataFrame(rows)
+        return super().daily_basic(ts_code=ts_code, trade_date=trade_date, fields=fields)
+
+    def limit_list_d(self, trade_date=None, limit_type=None):
+        if trade_date == "20260323" and limit_type == "U":
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "002475.SZ",
+                        "theme": "消费电子",
+                    }
+                ]
+            )
+        return super().limit_list_d(trade_date=trade_date, limit_type=limit_type)
+
+
 def test_resolve_trade_date_uses_short_cache():
     """同一自然日反复解析交易日时，应命中本地缓存，避免重复查 trade_cal。"""
     client = TushareClient.__new__(TushareClient)
@@ -426,6 +476,87 @@ def test_get_expanded_stock_list_overlays_realtime_prices():
     assert target["close"] == 36.12
     assert target["quote_time"] == "2026-03-23 09:36:11"
     assert target["data_source"] == "realtime_sina"
+
+
+def test_get_expanded_stock_list_prefers_today_when_requested():
+    """雷达模式请求时，应优先使用当天可用的 daily 候选基座。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _RadarStockListPro()
+    client._resolve_trade_date = lambda d: "20260323"
+    client._should_use_realtime_quote = lambda d: False
+    client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._expanded_stock_list_cache = {}
+
+    payload = client.get_expanded_stock_list_with_meta(
+        "20260323",
+        top_gainers=20,
+        prefer_today=True,
+    )
+
+    assert payload["data_trade_date"] == "20260323"
+    assert client.pro.daily_calls[0][3] == "20260323"
+    target = next(row for row in payload["rows"] if row["ts_code"] == "002475.SZ")
+    assert target["change_pct"] == 8.8
+    assert target["sector_name"] == "消费电子"
+
+
+def test_get_expanded_stock_list_prefers_public_realtime_aggregate_when_available(monkeypatch):
+    """雷达模式盘中应优先使用公开实时聚合候选，而不是日线回退。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FallbackStockListPro()
+    client.REALTIME_CANDIDATE_MIN_TOTAL = 1
+    client._resolve_trade_date = lambda d: "20260323"
+    client._should_use_realtime_quote = lambda d: True
+    client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_basic_snapshot_cache = {
+        "fetched_at": time_module.time(),
+        "mapping": {
+            "002475.SZ": {"stock_name": "立讯精密", "industry": "消费电子"},
+        },
+    }
+    client._expanded_stock_list_cache = {}
+    client._realtime_market_source_cooldowns = {}
+    client._infer_intraday_volume_ratio = lambda *args, **kwargs: 3.4
+    client._get_ths_concept_names_for_stock = lambda code: ["AI 硬件"] if code == "002475.SZ" else []
+    client._now_sh = lambda: datetime(2026, 3, 23, 10, 7, 5)
+
+    payload = {
+        "data": {
+            "diff": [
+                {
+                    "f12": "002475",
+                    "f14": "立讯精密",
+                    "f2": 36.12,
+                    "f3": 10.02,
+                    "f5": 1860000,
+                    "f6": 67000000,
+                    "f8": 12.6,
+                    "f15": 36.30,
+                    "f16": 34.00,
+                    "f17": 34.10,
+                    "f18": 32.83,
+                }
+            ]
+        }
+    }
+    monkeypatch.setattr("app.data.tushare_client.httpx.get", lambda *args, **kwargs: _FakeJsonResponse(payload))
+
+    result = client.get_expanded_stock_list_with_meta(
+        "20260323",
+        top_gainers=20,
+        prefer_today=True,
+    )
+
+    assert result["data_trade_date"] == "20260323"
+    target = result["rows"][0]
+    assert target["ts_code"] == "002475.SZ"
+    assert target["data_source"] == "realtime_em"
+    assert "涨幅前列" in target["candidate_source_tag"]
+    assert "涨停入选" in target["candidate_source_tag"]
+    assert "量比异动" in target["candidate_source_tag"]
 
 
 def test_get_expanded_stock_list_with_meta_uses_cache_for_same_request():

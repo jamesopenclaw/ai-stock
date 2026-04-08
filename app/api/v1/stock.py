@@ -179,12 +179,14 @@ async def _compute_radar_stock_pools_result(
         trade_date,
         limit_output=False,
         market_env=market_env,
+        prefer_today=True,
     )
     stocks, resolved_stock_trade_date = decision_context_service.get_candidate_stocks(
         trade_date,
         top_gainers=candidate_limit,
         holdings_list=account_context.holdings_list,
         include_holdings=True,
+        prefer_today=True,
     )
     scored_stocks = stock_filter_service.filter_with_context(
         trade_date,

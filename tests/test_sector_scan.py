@@ -575,7 +575,7 @@ class TestSectorScan:
         monkeypatch.setattr(
             service,
             "_get_sector_data",
-            lambda _trade_date: {
+            lambda _trade_date, prefer_today=False: {
                 "rows": [
                     {"sector_name": "火力发电", "sector_change_pct": 1.15, "sector_source_type": "industry"},
                 ],
@@ -596,7 +596,7 @@ class TestSectorScan:
         monkeypatch.setattr(
             service,
             "_get_sector_data",
-            lambda _trade_date: {
+            lambda _trade_date, prefer_today=False: {
                 "rows": [
                     {"sector_name": "火力发电", "sector_change_pct": 1.15, "sector_source_type": "industry"},
                 ],
@@ -612,6 +612,81 @@ class TestSectorScan:
         assert result.sector_data_mode == "industry_only"
         assert result.concept_data_status == "missing_theme"
         assert result.concept_data_message == "涨停列表未提供 theme 字段，无法按题材聚合"
+
+    def test_get_sector_data_prefers_today_primary_date_when_radar_mode(self, service, monkeypatch):
+        """
+        测试：雷达模式下若当天题材主线可用，应优先以当天作为板块实际日。
+        """
+        monkeypatch.setattr(
+            service.client,
+            "get_sector_data_with_meta",
+            lambda trade_date, prefer_today=False: {
+                "rows": [
+                    {"sector_name": "银行", "sector_change_pct": 0.8},
+                ],
+                "data_trade_date": "20260320",
+                "used_mock": False,
+            },
+        )
+
+        concept_calls = []
+
+        def fake_get_concept(trade_date, prefer_today=False):
+            concept_calls.append((trade_date, prefer_today))
+            return {
+                "rows": [
+                    {"sector_name": "AI 应用", "sector_change_pct": 4.3},
+                ],
+                "data_trade_date": "20260323",
+                "status": "ok",
+                "message": "same-day concept available",
+            }
+
+        monkeypatch.setattr(
+            service.client,
+            "get_concept_sectors_from_limitup_with_meta",
+            fake_get_concept,
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_limitup_industry_sectors_with_meta",
+            lambda trade_date, prefer_today=False: {
+                "rows": [],
+                "data_trade_date": trade_date,
+                "status": "empty",
+                "message": "unused",
+            },
+        )
+
+        payload = service._get_sector_data("20260323", prefer_today=True)
+
+        assert payload["data_trade_date"] == "20260323"
+        assert payload["sector_data_mode"] == "hybrid"
+        assert concept_calls == [("20260323", True)]
+
+    def test_get_sector_data_prefers_sina_hot_sector_when_available(self, service, monkeypatch):
+        """雷达模式盘中优先使用新浪热门板块，而不是等待日线行业数据。"""
+        monkeypatch.setattr(service.client, "_should_use_realtime_quote", lambda trade_date: True)
+        monkeypatch.setattr(
+            service.client,
+            "get_sina_hot_sector_boards",
+            lambda trade_date, limit=20, refresh=True: {
+                "resolved_trade_date": "2026-03-23",
+                "concept_boards": [
+                    {"sector_name": "AI 应用", "sector_change_pct": 5.1, "sector_source_type": "concept"},
+                ],
+                "industry_boards": [
+                    {"sector_name": "消费电子", "sector_change_pct": 3.8, "sector_source_type": "industry"},
+                ],
+            },
+        )
+
+        payload = service._get_sector_data("20260323", prefer_today=True)
+
+        assert payload["data_trade_date"] == "20260323"
+        assert payload["sector_data_mode"] == "realtime_hot_sector"
+        assert payload["concept_data_status"] == "realtime_hot_sector"
+        assert payload["rows"][0]["sector_name"] == "AI 应用"
 
     def test_get_leader_returns_proxy_stocks(self, service, monkeypatch):
         """
@@ -716,7 +791,7 @@ class TestSectorScan:
         monkeypatch.setattr(
             service.client,
             "get_sector_data_with_meta",
-            lambda _trade_date: {
+            lambda _trade_date, prefer_today=False: {
                 "rows": [
                     {"sector_name": "电力", "sector_change_pct": 0.88},
                     {"sector_name": "化工", "sector_change_pct": 0.52},
@@ -728,7 +803,7 @@ class TestSectorScan:
         monkeypatch.setattr(
             service.client,
             "get_concept_sectors_from_limitup_with_meta",
-            lambda _trade_date: {
+            lambda _trade_date, prefer_today=False: {
                 "rows": [],
                 "data_trade_date": "20260323",
                 "status": "missing_theme",
@@ -738,7 +813,7 @@ class TestSectorScan:
         monkeypatch.setattr(
             service.client,
             "get_limitup_industry_sectors_with_meta",
-            lambda _trade_date: {
+            lambda _trade_date, prefer_today=False: {
                 "rows": [
                     {"sector_name": "电力", "sector_change_pct": 10.02, "stock_count": 2},
                 ],
@@ -762,7 +837,7 @@ class TestSectorScan:
         monkeypatch.setattr(
             service.client,
             "get_sector_data_with_meta",
-            lambda _trade_date: {
+            lambda _trade_date, prefer_today=False: {
                 "rows": [
                     {"sector_name": "电力", "sector_change_pct": 0.88},
                 ],
@@ -773,7 +848,7 @@ class TestSectorScan:
         monkeypatch.setattr(
             service.client,
             "get_concept_sectors_from_limitup_with_meta",
-            lambda _trade_date: {
+            lambda _trade_date, prefer_today=False: {
                 "rows": [],
                 "data_trade_date": "20260323",
                 "status": "ths_error",
@@ -783,7 +858,7 @@ class TestSectorScan:
         monkeypatch.setattr(
             service.client,
             "get_limitup_industry_sectors_with_meta",
-            lambda _trade_date: {
+            lambda _trade_date, prefer_today=False: {
                 "rows": [
                     {"sector_name": "电力", "sector_change_pct": 4.20, "stock_count": 3},
                 ],

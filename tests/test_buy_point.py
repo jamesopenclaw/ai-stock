@@ -26,6 +26,7 @@ from app.models.schemas import (
     BuyPointOutput,
     BuyPointType,
     BuySignalTag,
+    NextTradeabilityTag,
     RiskLevel,
     MarketEnvTag,
     StockPoolsOutput,
@@ -233,6 +234,39 @@ class TestBuyPoint:
         assert "触发价" in buy_point.buy_trigger_cond
         assert "当日高点" in buy_point.buy_trigger_cond
         assert "%" not in buy_point.buy_trigger_cond
+
+    def test_core_breakthrough_candidate_keeps_breakthrough_type_in_neutral(self, service):
+        """
+        测试：高质量突破候选在中性环境里，不应被一律压回回踩承接
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+            breakout_allowed = True
+            risk_level = RiskLevel.MEDIUM
+
+        stock = StockOutput(
+            ts_code="300024.SZ",
+            stock_name="机器人先锋",
+            sector_name="机器人",
+            change_pct=8.2,
+            close=33.2,
+            pre_close=30.68,
+            open=31.1,
+            high=33.4,
+            low=30.9,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            next_tradeability_tag=NextTradeabilityTag.BREAKTHROUGH,
+            stock_falsification_cond="跌回前高下方",
+            stock_comment="强确认",
+        )
+
+        buy_point = service._analyze_stock_buy_point(stock, MockMarketEnv())
+
+        assert buy_point.buy_point_type == BuyPointType.BREAKTHROUGH
 
     def test_retrace_support_conditions_use_stock_specific_price_levels(self, service, medium_stock):
         """

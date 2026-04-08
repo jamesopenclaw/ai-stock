@@ -16,6 +16,7 @@ from app.models.schemas import (
     StockStrengthTag,
     StockCoreTag,
     StockTradeabilityTag,
+    NextTradeabilityTag,
     AccountInput,
     StockPoolTag,
     StockPoolsOutput,
@@ -426,15 +427,26 @@ class BuyPointService:
     def _determine_buy_type(self, stock: StockOutput, market_env) -> BuyPointType:
         """确定买点类型"""
         market_profile = str(getattr(market_env, "market_env_profile", "") or "")
+        change_pct = float(stock.change_pct or 0)
+        breakout_type_ceiling = self._breakthrough_type_ceiling_pct(stock.ts_code)
+        breakout_quality_ok = (
+            market_env.breakout_allowed
+            and stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE
+            and stock.stock_core_tag == StockCoreTag.CORE
+            and 4.0 <= change_pct <= breakout_type_ceiling
+            and not self._has_upper_shadow_risk(stock)
+        )
         # 强势股 -> 突破
         if stock.stock_strength_tag == StockStrengthTag.STRONG:
-            change_pct = float(stock.change_pct or 0)
+            if (
+                stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
+                and breakout_quality_ok
+                and market_env.market_env_tag in {MarketEnvTag.ATTACK, MarketEnvTag.NEUTRAL}
+            ):
+                return BuyPointType.BREAKTHROUGH
             if (
                 market_env.market_env_tag == MarketEnvTag.ATTACK
-                and market_env.breakout_allowed
-                and 5 <= change_pct < 7
-                and stock.stock_core_tag == StockCoreTag.CORE
-                and stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE
+                and breakout_quality_ok
             ):
                 return BuyPointType.BREAKTHROUGH
             if market_profile in {"中性偏谨慎", "弱中性"}:
@@ -687,6 +699,21 @@ class BuyPointService:
     def _current_change_pct(self, stock: StockOutput) -> Optional[float]:
         """返回最新可用涨跌幅。"""
         return round(stock.change_pct, 2) if stock.change_pct is not None else None
+
+    def _breakthrough_type_ceiling_pct(self, ts_code: Optional[str]) -> float:
+        code = normalize_ts_code(ts_code or "")
+        if code.endswith(".BJ"):
+            return 14.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return 8.8
+        return 7.4
+
+    def _has_upper_shadow_risk(self, stock: StockOutput) -> bool:
+        intraday_range = float((stock.high or 0) - (stock.low or 0))
+        if intraday_range <= 0:
+            return False
+        upper_shadow = float((stock.high or 0) - max(float(stock.open or 0), float(stock.close or 0)))
+        return upper_shadow / intraday_range >= 0.35
 
     def _price_gap_pct(self, current_price: Optional[float], target_price: Optional[float]) -> Optional[float]:
         """返回当前价到目标价的相对距离。"""

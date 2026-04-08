@@ -112,11 +112,13 @@ class DecisionContextService:
         top_gainers: int,
         holdings_list: Optional[List[dict]] = None,
         include_holdings: bool = False,
+        prefer_today: bool = False,
     ) -> tuple[List[StockInput], Optional[str]]:
         """获取候选股，并按需将持仓并入候选池。"""
         stock_payload = market_data_gateway.get_expanded_stock_list_with_meta(
             trade_date,
             top_gainers=top_gainers,
+            prefer_today=prefer_today,
         )
         stock_list = stock_payload.get("rows") or []
         resolved_trade_date = stock_payload.get("data_trade_date")

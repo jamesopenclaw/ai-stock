@@ -49,10 +49,12 @@ class MarketDataGateway:
         trade_date: str,
         *,
         top_gainers: int,
+        prefer_today: bool = False,
     ) -> Dict:
         return tushare_client.get_expanded_stock_list_with_meta(
             str(trade_date).replace("-", ""),
             top_gainers=top_gainers,
+            prefer_today=prefer_today,
         )
 
     def get_index_quote(self, trade_date: str) -> List[Dict]:
@@ -73,21 +75,39 @@ class MarketDataGateway:
     def get_sector_data(self, trade_date: str) -> List[Dict]:
         return tushare_client.get_sector_data(str(trade_date).replace("-", ""))
 
-    def get_sector_data_with_meta(self, trade_date: str) -> Dict:
-        return tushare_client.get_sector_data_with_meta(str(trade_date).replace("-", ""))
+    def get_sector_data_with_meta(self, trade_date: str, *, prefer_today: bool = False) -> Dict:
+        return tushare_client.get_sector_data_with_meta(
+            str(trade_date).replace("-", ""),
+            prefer_today=prefer_today,
+        )
 
-    def get_concept_sectors_from_limitup_with_meta(self, trade_date: str) -> Dict:
+    def get_concept_sectors_from_limitup_with_meta(self, trade_date: str, *, prefer_today: bool = False) -> Dict:
         return tushare_client.get_concept_sectors_from_limitup_with_meta(
-            str(trade_date).replace("-", "")
+            str(trade_date).replace("-", ""),
+            prefer_today=prefer_today,
         )
 
     def get_concept_sectors_from_limitup(self, trade_date: str) -> List[Dict]:
         payload = self.get_concept_sectors_from_limitup_with_meta(trade_date)
         return payload.get("rows") or []
 
-    def get_limitup_industry_sectors_with_meta(self, trade_date: str) -> Dict:
+    def get_limitup_industry_sectors_with_meta(self, trade_date: str, *, prefer_today: bool = False) -> Dict:
         return tushare_client.get_limitup_industry_sectors_with_meta(
-            str(trade_date).replace("-", "")
+            str(trade_date).replace("-", ""),
+            prefer_today=prefer_today,
+        )
+
+    def get_sina_hot_sector_boards(
+        self,
+        trade_date: str,
+        *,
+        limit: int = 5,
+        refresh: bool = False,
+    ) -> Dict:
+        return tushare_client.get_sina_hot_sector_boards(
+            str(trade_date).replace("-", ""),
+            limit=limit,
+            refresh=refresh,
         )
 
     def should_use_realtime_quote(self, trade_date: str) -> bool:

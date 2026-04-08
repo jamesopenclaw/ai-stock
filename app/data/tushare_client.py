@@ -60,6 +60,7 @@ class TushareClient:
     REALTIME_MARKET_FAILURE_COOLDOWN_SECONDS = 60
     REALTIME_VOLUME_RATIO_CACHE_TTL_SECONDS = 60
     REALTIME_MARKET_MIN_TOTAL = 3000
+    REALTIME_CANDIDATE_MIN_TOTAL = 80
     REALTIME_AGGREGATE_TIMEOUT_SECONDS = 5.0
     HOT_SECTOR_CACHE_TTL_SECONDS = 30
     STOCK_DETAIL_INTRADAY_CACHE_TTL_SECONDS = 20
@@ -284,7 +285,9 @@ class TushareClient:
             "NAME": str(row.get("f14") or "").strip(),
             "PRICE": as_float(row.get("f2")),
             "PCT_CHANGE": as_float(row.get("f3")),
+            "VOLUME": as_float(row.get("f5")),
             "AMOUNT": as_float(row.get("f6")),
+            "TURNOVER_RATE": as_float(row.get("f8")),
             "HIGH": as_float(row.get("f15")),
             "LOW": as_float(row.get("f16")),
             "OPEN": as_float(row.get("f17")),
@@ -837,6 +840,60 @@ class TushareClient:
             data_source="realtime_em",
             status="live",
         )
+
+    def _fetch_public_aggregate_stock_rows(self, trade_date: str) -> Optional[Dict[str, object]]:
+        """通过东财公开聚合接口获取全市场实时个股行级数据。"""
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        if not self._should_use_realtime_quote(compact_trade_date):
+            return None
+        if self._is_realtime_source_in_cooldown("aggregate_em"):
+            return None
+
+        params = {
+            "pn": "1",
+            "pz": "12000",
+            "po": "1",
+            "np": "1",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f3",
+            "fs": "m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23",
+            "fields": "f2,f3,f5,f6,f8,f12,f14,f15,f16,f17,f18",
+        }
+
+        try:
+            response = httpx.get(
+                "https://push2.eastmoney.com/api/qt/clist/get",
+                params=params,
+                timeout=self.REALTIME_AGGREGATE_TIMEOUT_SECONDS,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            diff = (((payload or {}).get("data") or {}).get("diff")) or []
+        except Exception as e:
+            self._mark_realtime_source_failure("aggregate_em")
+            logger.warning(f"公开实时候选拉取失败: {e}")
+            return None
+
+        rows = []
+        for raw in diff:
+            normalized = self._normalize_public_aggregate_row(raw)
+            if normalized:
+                rows.append(normalized)
+
+        if len(rows) < self.REALTIME_CANDIDATE_MIN_TOTAL:
+            self._mark_realtime_source_failure("aggregate_em")
+            logger.warning(f"公开实时候选样本不足（仅 {len(rows)} 条），转入日线候选兜底")
+            return None
+
+        self._clear_realtime_source_failure("aggregate_em")
+        return {
+            "rows": rows,
+            "data_trade_date": compact_trade_date,
+            "quote_time": self._now_sh().strftime("%Y-%m-%d %H:%M:%S"),
+            "data_source": "realtime_em",
+        }
 
     def _fetch_realtime_quote_map(self, ts_codes: List[str]) -> Dict[str, Dict]:
         """批量获取实时行情并转成按 ts_code 索引的映射。"""
@@ -1814,17 +1871,26 @@ class TushareClient:
             })
         return sectors
 
-    def get_sector_data_with_meta(self, trade_date: str) -> Dict[str, object]:
+    def get_sector_data_with_meta(
+        self,
+        trade_date: str,
+        *,
+        prefer_today: bool = False,
+    ) -> Dict[str, object]:
         """获取行业板块，并返回实际使用的数据日期。"""
         if not self.token:
             return {
                 "rows": self._mock_sector_data(),
                 "data_trade_date": trade_date,
                 "used_mock": True,
-            }
+        }
 
         try:
-            effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
+            effective_trade_date = (
+                self._resolve_trade_date(trade_date)
+                if prefer_today
+                else self._resolve_eod_fallback_start_trade_date(trade_date)
+            )
             industry_map = self._get_stock_basic_industry_map()
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
                 df = self.pro.daily(trade_date=data_trade_date)
@@ -2406,7 +2472,12 @@ class TushareClient:
                 "message": f"涨停 theme 题材聚合异常: {e}",
             }
 
-    def get_concept_sectors_from_limitup_with_meta(self, trade_date: str) -> Dict[str, object]:
+    def get_concept_sectors_from_limitup_with_meta(
+        self,
+        trade_date: str,
+        *,
+        prefer_today: bool = False,
+    ) -> Dict[str, object]:
         """
         获取题材概念板块，并返回可追踪状态。
 
@@ -2452,7 +2523,12 @@ class TushareClient:
             return ths_meta
         return theme_meta
 
-    def get_limitup_industry_sectors_with_meta(self, trade_date: str) -> Dict[str, object]:
+    def get_limitup_industry_sectors_with_meta(
+        self,
+        trade_date: str,
+        *,
+        prefer_today: bool = False,
+    ) -> Dict[str, object]:
         """按涨停列表的 industry 字段聚合行业热度，并返回可追踪状态。"""
         effective_trade_date = self._resolve_trade_date(trade_date) if self.token else trade_date
         if not self.token:
@@ -2588,6 +2664,152 @@ class TushareClient:
             "concept_names": concept_names,
         }
 
+    def _is_realtime_limit_candidate(self, ts_code: str, change_pct: float) -> bool:
+        normalized = normalize_ts_code(ts_code)
+        if not normalized:
+            return False
+        code = normalized.split(".")[0]
+        threshold = 19.0 if code.startswith(("300", "301", "688")) else 9.5
+        return float(change_pct or 0) >= threshold
+
+    def _build_realtime_stock_dict_from_public_row(
+        self,
+        row: Dict[str, object],
+        stock_meta_map: Dict[str, Dict[str, str]],
+        *,
+        trade_date: str,
+        quote_time: Optional[str],
+        candidate_source_tag: str = "",
+    ) -> Dict:
+        ts_code = str(row.get("TS_CODE") or "").strip()
+        meta = stock_meta_map.get(ts_code) or {}
+        stock_name = str(meta.get("stock_name") or row.get("NAME") or ts_code).strip() or ts_code
+        sector_name = str(meta.get("industry") or "").strip() or "未知"
+        price = float(row.get("PRICE") or 0)
+        amount = float(row.get("AMOUNT") or 0)
+        volume = float(row.get("VOLUME") or 0)
+        intraday_volume_ratio = None
+        return {
+            "ts_code": ts_code,
+            "stock_name": stock_name,
+            "sector_name": sector_name,
+            "close": price,
+            "change_pct": float(row.get("PCT_CHANGE") or 0),
+            "turnover_rate": float(row.get("TURNOVER_RATE") or 0),
+            "amount": amount,
+            "vol_ratio": intraday_volume_ratio,
+            "high": float(row.get("HIGH") or price),
+            "low": float(row.get("LOW") or price),
+            "open": float(row.get("OPEN") or price),
+            "pre_close": float(row.get("CLOSE") or 0),
+            "candidate_source_tag": candidate_source_tag,
+            "volume": volume,
+            "avg_price": self._infer_realtime_avg_price(price, amount, volume),
+            "intraday_volume_ratio": intraday_volume_ratio,
+            "quote_time": quote_time,
+            "data_source": "realtime_em",
+            "concept_names": [],
+        }
+
+    def _build_realtime_stock_candidates_from_public_aggregate(
+        self,
+        trade_date: str,
+        *,
+        top_gainers: int,
+        pct_floor: float,
+    ) -> Optional[Dict[str, object]]:
+        payload = self._fetch_public_aggregate_stock_rows(trade_date)
+        if not payload:
+            return None
+
+        rows = payload.get("rows") or []
+        if not rows:
+            return None
+
+        stock_meta_map = self._get_stock_basic_snapshot_map()
+        quote_time = payload.get("quote_time")
+        merged: Dict[str, Dict] = {}
+
+        eligible_rows = [
+            row for row in rows
+            if is_sector_scan_board_eligible(str(row.get("TS_CODE") or "").strip())
+            and float(row.get("PRICE") or 0) > 0
+            and float(row.get("CLOSE") or 0) > 0
+        ]
+        if not eligible_rows:
+            return None
+
+        top_n = max(1, min(top_gainers, 300))
+        top_rows = sorted(
+            eligible_rows,
+            key=lambda item: float(item.get("PCT_CHANGE") or 0),
+            reverse=True,
+        )[:top_n]
+        for row in top_rows:
+            ts_code = str(row.get("TS_CODE") or "").strip()
+            merged[ts_code] = self._build_realtime_stock_dict_from_public_row(
+                row,
+                stock_meta_map,
+                trade_date=trade_date,
+                quote_time=quote_time,
+                candidate_source_tag="涨幅前列",
+            )
+
+        anomaly_rows = sorted(
+            eligible_rows,
+            key=lambda item: (
+                float(item.get("AMOUNT") or 0),
+                float(item.get("PCT_CHANGE") or 0),
+            ),
+            reverse=True,
+        )[: min(120, max(top_n, 40))]
+        for row in anomaly_rows:
+            ts_code = str(row.get("TS_CODE") or "").strip()
+            intraday_volume_ratio = None
+            turnover_rate = float(row.get("TURNOVER_RATE") or 0)
+            realtime_anomaly = (
+                intraday_volume_ratio is not None and intraday_volume_ratio >= 2.5
+            ) or (
+                intraday_volume_ratio is None
+                and turnover_rate >= 10
+                and float(row.get("PCT_CHANGE") or 0) > pct_floor
+                and float(row.get("AMOUNT") or 0) >= 50000000
+            )
+            if realtime_anomaly:
+                if ts_code in merged:
+                    merged[ts_code]["intraday_volume_ratio"] = intraday_volume_ratio
+                    merged[ts_code]["vol_ratio"] = intraday_volume_ratio
+                    merged[ts_code] = self._append_candidate_source(merged[ts_code], "量比异动")
+                else:
+                    record = self._build_realtime_stock_dict_from_public_row(
+                        row,
+                        stock_meta_map,
+                        trade_date=trade_date,
+                        quote_time=quote_time,
+                        candidate_source_tag="量比异动",
+                    )
+                    merged[ts_code] = record
+
+            if self._is_realtime_limit_candidate(ts_code, float(row.get("PCT_CHANGE") or 0)):
+                if ts_code in merged:
+                    merged[ts_code] = self._append_candidate_source(merged[ts_code], "涨停入选")
+                else:
+                    merged[ts_code] = self._build_realtime_stock_dict_from_public_row(
+                        row,
+                        stock_meta_map,
+                        trade_date=trade_date,
+                        quote_time=quote_time,
+                        candidate_source_tag="涨停入选",
+                    )
+
+        result = list(merged.values())
+        result.sort(key=lambda x: x["change_pct"], reverse=True)
+        return {
+            "rows": result,
+            "data_trade_date": payload.get("data_trade_date"),
+            "used_mock": False,
+        }
+
     def _append_candidate_source(self, record: Dict, source_tag: str) -> Dict:
         """追加候选来源标签并去重。"""
         if not source_tag:
@@ -2632,12 +2854,21 @@ class TushareClient:
         """获取当日个股行情列表。"""
         return self.get_stock_list_with_meta(trade_date, limit).get("rows", [])
 
-    def _fetch_recent_stock_daily_df(self, trade_date: str) -> Dict[str, object]:
+    def _fetch_recent_stock_daily_df(
+        self,
+        trade_date: str,
+        *,
+        prefer_today: bool = False,
+    ) -> Dict[str, object]:
         """获取最近一个有 daily 个股数据的交易日明细。"""
         if not self.token:
             return {"df": None, "data_trade_date": trade_date, "used_mock": True}
 
-        effective_trade_date = self.get_last_completed_trade_date(trade_date)
+        effective_trade_date = (
+            self._resolve_trade_date(trade_date)
+            if prefer_today
+            else self.get_last_completed_trade_date(trade_date)
+        )
         for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
             df = self.pro.daily(trade_date=data_trade_date)
             if df is None or df.empty:
@@ -2764,10 +2995,15 @@ class TushareClient:
         top_gainers: int = 100,
         vol_ratio_min: float = 2.5,
         pct_floor: float = -5.0,
+        prefer_today: bool = False,
     ) -> Dict[str, object]:
         """扩展候选池，并返回实际使用的数据交易日。"""
         compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
-        cache_key = f"{compact_trade_date}:{int(top_gainers)}:{float(vol_ratio_min):.4f}:{float(pct_floor):.4f}"
+        mode_tag = "prefer_today" if prefer_today else "stable"
+        cache_key = (
+            f"{compact_trade_date}:{int(top_gainers)}:{float(vol_ratio_min):.4f}:"
+            f"{float(pct_floor):.4f}:{mode_tag}"
+        )
         cached = self._get_cached_expanded_stock_list(cache_key)
         if cached is not None:
             return cached
@@ -2782,7 +3018,30 @@ class TushareClient:
             return payload
 
         try:
-            payload = self._fetch_recent_stock_daily_df(compact_trade_date)
+            if prefer_today:
+                realtime_payload = self._build_realtime_stock_candidates_from_public_aggregate(
+                    compact_trade_date,
+                    top_gainers=top_gainers,
+                    pct_floor=pct_floor,
+                )
+                if realtime_payload and realtime_payload.get("rows"):
+                    self._cache_expanded_stock_list(
+                        cache_key,
+                        realtime_payload,
+                        compact_trade_date,
+                        str(realtime_payload.get("data_trade_date") or compact_trade_date),
+                    )
+                    logger.info(
+                        f"扩展个股候选（{realtime_payload.get('data_trade_date')}）: 共 "
+                        f"{len(realtime_payload.get('rows') or [])} 只 "
+                        f"(公开实时候选优先, 涨幅前{max(1, min(top_gainers, 300))}+近似涨停+量比异动)"
+                    )
+                    return copy.deepcopy(realtime_payload)
+
+            payload = self._fetch_recent_stock_daily_df(
+                compact_trade_date,
+                prefer_today=prefer_today,
+            )
             df = payload.get("df")
             effective_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
             if df is None or df.empty:

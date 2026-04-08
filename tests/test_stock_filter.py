@@ -104,6 +104,33 @@ class TestStockFilter:
         assert gate.account_pool_limit == 1
         assert "弱中性" in gate.dominant_reason
 
+    def test_growth_board_strong_confirm_is_not_chase_only_too_early(self, service):
+        """
+        测试：创业板强确认票不应沿用主板阈值过早打成只适合追涨
+        """
+        stock = StockInput(
+            ts_code="300812.SZ",
+            stock_name="易天股份",
+            sector_name="设备",
+            close=40.5,
+            change_pct=11.2,
+            turnover_rate=19.0,
+            amount=180000,
+            vol_ratio=2.8,
+            high=40.8,
+            low=36.2,
+            open=36.9,
+            pre_close=36.42,
+        )
+
+        next_tag = service._determine_next_tradeability_tag(
+            stock,
+            bucket_tag="强势确认",
+            tradeability_tag=StockTradeabilityTag.TRADABLE,
+        )
+
+        assert next_tag == NextTradeabilityTag.BREAKTHROUGH
+
     @pytest.fixture
     def sample_stocks(self):
         """示例股票数据"""
@@ -1734,7 +1761,7 @@ class TestStockFilter:
 
         selected = service._pick_sector_representatives(items)
 
-        assert 2 <= len(selected) <= 4
+        assert 2 <= len(selected) <= service.SECTOR_REPRESENTATIVE_LIMIT
 
     def test_sector_representatives_drop_follow_candidates_first(self, service):
         """

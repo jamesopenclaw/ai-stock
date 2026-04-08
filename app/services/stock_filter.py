@@ -2264,15 +2264,28 @@ class StockFilterService:
         else:
             score += 7.0
 
-        if 4.0 <= change_pct <= 7.2:
-            score += 10.0
-        elif 3.2 <= change_pct <= 8.2:
-            score += 6.0
+        if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            change_ceiling, turnover_ceiling = self._comfortable_breakthrough_limits(stock.ts_code)
+            extension_line = self._comfortable_breakthrough_extension_line(stock.ts_code)
+            if 4.0 <= change_pct <= extension_line:
+                score += 10.0
+            elif 3.2 <= change_pct <= change_ceiling:
+                score += 6.0
 
-        if turnover_rate <= 16.5:
-            score += 8.0
-        elif turnover_rate <= 18.5:
-            score += 4.0
+            if turnover_rate <= turnover_ceiling:
+                score += 8.0
+            elif turnover_rate <= turnover_ceiling + 2.0:
+                score += 4.0
+        else:
+            if 4.0 <= change_pct <= 7.2:
+                score += 10.0
+            elif 3.2 <= change_pct <= 8.2:
+                score += 6.0
+
+            if turnover_rate <= 16.5:
+                score += 8.0
+            elif turnover_rate <= 18.5:
+                score += 4.0
 
         return round(score, 1)
 
@@ -2286,7 +2299,7 @@ class StockFilterService:
         comfortable_breakthrough = (
             stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
             and stock.structure_state_tag in {StructureStateTag.DIVERGENCE, StructureStateTag.REPAIR}
-            and float(stock.turnover_rate or 0) < 15
+            and float(stock.turnover_rate or 0) < self._comfortable_breakthrough_limits(stock.ts_code)[1]
             and not self._has_upper_shadow_risk(stock)
         )
         has_comfortable_entry = stock.next_tradeability_tag in {
@@ -2470,9 +2483,11 @@ class StockFilterService:
                 "优先轻仓低吸，不追单根拉升",
             )
         if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            change_ceiling, turnover_ceiling = self._comfortable_breakthrough_limits(stock.ts_code)
+            extension_line = self._comfortable_breakthrough_extension_line(stock.ts_code)
             if (
                 stock.structure_state_tag in {StructureStateTag.DIVERGENCE, StructureStateTag.REPAIR}
-                and float(stock.turnover_rate or 0) < 15
+                and float(stock.turnover_rate or 0) < turnover_ceiling
                 and not self._has_upper_shadow_risk(stock)
             ):
                 return (
@@ -2482,15 +2497,15 @@ class StockFilterService:
                 )
             change_pct = float(stock.change_pct or 0)
             turnover_rate = float(stock.turnover_rate or 0)
-            if change_pct > 7.2:
+            if change_pct > change_ceiling:
                 return False, "需要突破确认，但当日涨幅已偏大，不算舒服买点。", None
-            if change_pct > 6.5 and turnover_rate >= 8:
+            if change_pct > extension_line and turnover_rate >= max(turnover_ceiling * 0.5, 8.0):
                 return False, "需要突破确认，当前涨幅已偏大且换手开始抬升，更像加速追价。", None
-            if turnover_rate >= 15:
+            if turnover_rate >= turnover_ceiling:
                 return False, "需要突破确认，但换手偏高，追价舒适度不足。", None
             if self._has_upper_shadow_risk(stock):
                 return False, "盘中上影偏长，突破承接一般，不算舒服买点。", None
-            if change_pct > 6.5:
+            if change_pct > extension_line:
                 return (
                     True,
                     "突破延续但换手仍可控，可纳入账户可参与池。",
@@ -2508,6 +2523,22 @@ class StockFilterService:
                 "试错仓参与，确认后再扩大仓位",
             )
         return False, "当前缺少清晰、舒服的买入点，不进账户可参与池。", None
+
+    def _comfortable_breakthrough_limits(self, ts_code: str) -> tuple[float, float]:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return 16.0, 25.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return 9.5, 20.0
+        return 7.5, 15.0
+
+    def _comfortable_breakthrough_extension_line(self, ts_code: str) -> float:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return 12.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return 8.5
+        return 6.5
 
     def _build_sector_map(self, sector_scan) -> Dict:
         """构建板块映射（包含全部分类，确保个股都能找到所属板块）"""
@@ -2868,11 +2899,13 @@ class StockFilterService:
         change_pct = float(stock.change_pct or 0)
         turnover_rate = float(stock.turnover_rate or 0)
         if next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
-            if 4.5 <= change_pct <= 6.8:
+            change_ceiling, turnover_ceiling = self._comfortable_breakthrough_limits(stock.ts_code)
+            extension_line = self._comfortable_breakthrough_extension_line(stock.ts_code)
+            if 4.5 <= change_pct <= extension_line:
                 score += 4
-            if change_pct > 6.5:
-                score -= min((change_pct - 6.5) * 4, 12)
-            if turnover_rate >= 15:
+            if change_pct > extension_line:
+                score -= min((change_pct - extension_line) * 4, max((change_ceiling - extension_line) * 4, 12))
+            if turnover_rate >= turnover_ceiling:
                 score -= 6
         elif next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
             if 1 <= change_pct <= 5.5:
@@ -3080,9 +3113,7 @@ class StockFilterService:
         """次日可交易性画像。"""
         if tradeability_tag == StockTradeabilityTag.NOT_RECOMMENDED:
             return NextTradeabilityTag.NO_GOOD_ENTRY
-        if stock.change_pct >= 9 or (
-            stock.change_pct >= 7 and stock.turnover_rate >= 18
-        ):
+        if self._is_chase_only_candidate(stock):
             return NextTradeabilityTag.CHASE_ONLY
         if bucket_tag == "趋势回踩":
             return NextTradeabilityTag.RETRACE_CONFIRM
@@ -3110,6 +3141,22 @@ class StockFilterService:
                 next_tradeability_tag.value,
             ]
         )
+
+    def _is_chase_only_candidate(self, stock: StockInput) -> bool:
+        change_pct = float(stock.change_pct or 0.0)
+        turnover_rate = float(stock.turnover_rate or 0.0)
+        full_chase_line, crowded_chase_line, crowded_turnover = self._chase_only_thresholds(stock.ts_code)
+        if change_pct >= full_chase_line:
+            return True
+        return change_pct >= crowded_chase_line and turnover_rate >= crowded_turnover
+
+    def _chase_only_thresholds(self, ts_code: str) -> tuple[float, float, float]:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return 20.0, 15.0, 25.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return 13.0, 10.0, 22.0
+        return 9.3, 8.0, 20.0
 
     def _why_market_watch(self, stock: StockOutput, *, is_holding: bool = False) -> str:
         sector_label = stock.sector_profile_tag.value if stock.sector_profile_tag else "当前强势方向"

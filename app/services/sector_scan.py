@@ -55,6 +55,7 @@ class SectorScanService:
         trade_date: str,
         limit_output: bool = True,
         market_env: Optional[MarketEnvOutput] = None,
+        prefer_today: bool = False,
     ) -> SectorScanResponse:
         """
         扫描当日板块
@@ -69,7 +70,10 @@ class SectorScanService:
         resolved_trade_date = self.client._resolve_trade_date(compact_trade_date)
 
         # 获取板块数据
-        sector_payload = self._get_sector_data(resolved_trade_date)
+        sector_payload = self._get_sector_data(
+            resolved_trade_date,
+            prefer_today=prefer_today,
+        )
         resolved_trade_date = sector_payload.get("data_trade_date") or resolved_trade_date
         resolved_trade_date_fmt = (
             f"{resolved_trade_date[:4]}-{resolved_trade_date[4:6]}-{resolved_trade_date[6:8]}"
@@ -429,25 +433,65 @@ class SectorScanService:
             logger.warning(f"获取板块 Top 股票失败: {e}")
             return []
 
-    def _get_sector_data(self, trade_date: str) -> Dict[str, object]:
+    def _get_sector_data(self, trade_date: str, *, prefer_today: bool = False) -> Dict[str, object]:
         """
         获取板块数据：优先走独立题材聚合；
         若题材不可用，则退回涨停行业聚合；最后再用申万行业均值补充。
         """
         try:
             compact = trade_date.replace("-", "")
-            industry_meta = self.client.get_sector_data_with_meta(compact)
-            actual_trade_date = str(industry_meta.get("data_trade_date") or compact)
+            if prefer_today and self.client._should_use_realtime_quote(compact):
+                hot_payload = self.client.get_sina_hot_sector_boards(
+                    compact,
+                    limit=20,
+                    refresh=True,
+                )
+                hot_concepts = hot_payload.get("concept_boards") or []
+                hot_industries = hot_payload.get("industry_boards") or []
+                hot_trade_date = str(hot_payload.get("resolved_trade_date") or trade_date).replace("-", "")
+                if hot_concepts or hot_industries:
+                    concept_rows = [{**r, "sector_source_type": "concept"} for r in hot_concepts]
+                    industry_rows = [{**r, "sector_source_type": "industry"} for r in hot_industries]
+                    seen_names = {r.get("sector_name", "") for r in concept_rows}
+                    merged: List[Dict] = list(concept_rows)
+                    for row in industry_rows:
+                        name = row.get("sector_name", "")
+                        if name and name not in seen_names:
+                            merged.append(row)
+                            seen_names.add(name)
+                    return {
+                        "rows": merged,
+                        "sector_data_mode": "realtime_hot_sector",
+                        "concept_data_status": "realtime_hot_sector",
+                        "concept_data_message": "雷达模式优先使用新浪热门板块实时口径",
+                        "data_trade_date": hot_trade_date or compact,
+                    }
+
+            industry_meta = self.client.get_sector_data_with_meta(
+                compact,
+                prefer_today=prefer_today,
+            )
+            industry_trade_date = str(industry_meta.get("data_trade_date") or compact)
             industry_rows = industry_meta.get("rows") or []
-            concept_meta = self.client.get_concept_sectors_from_limitup_with_meta(actual_trade_date)
+            concept_request_trade_date = compact if prefer_today else industry_trade_date
+            concept_meta = self.client.get_concept_sectors_from_limitup_with_meta(
+                concept_request_trade_date,
+                prefer_today=prefer_today,
+            )
             concept_rows = concept_meta.get("rows") or []
             limitup_industry_meta = None
             limitup_industry_rows: List[Dict] = []
             if not concept_rows and concept_meta.get("status") != "ok":
                 limitup_industry_meta = self.client.get_limitup_industry_sectors_with_meta(
-                    actual_trade_date
+                    concept_request_trade_date,
+                    prefer_today=prefer_today,
                 )
                 limitup_industry_rows = limitup_industry_meta.get("rows") or []
+            actual_trade_date = (
+                concept_request_trade_date
+                if prefer_today and (concept_rows or limitup_industry_rows)
+                else industry_trade_date
+            )
 
             concept_rows = [{**r, "sector_source_type": "concept"} for r in concept_rows]
             limitup_industry_rows = [
