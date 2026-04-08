@@ -156,3 +156,22 @@ async def test_run_daily_pipeline_ignores_review_outcome_refresh_failure(monkeyp
     result = await scheduler._run_daily_pipeline("2026-04-01")
 
     assert result["review_outcome_refresh_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_mode_runs_ths_sync(monkeypatch):
+    scheduler = TaskScheduler()
+
+    async def fake_sync_ths_concepts(trade_date):
+        assert trade_date == "2026-04-08"
+        return {"trade_date": "20260408", "concept_count": 12, "member_count": 345}
+
+    monkeypatch.setattr(scheduler, "sync_ths_concepts", fake_sync_ths_concepts)
+
+    result = await scheduler._execute_mode("ths_sync", "2026-04-08")
+
+    assert result == {
+        "trade_date": "2026-04-08",
+        "pipeline": "ths_sync",
+        "report": {"trade_date": "20260408", "concept_count": 12, "member_count": 345},
+    }

@@ -176,6 +176,14 @@ class _FallbackDailyPro(_FakePro):
         return pd.DataFrame()
 
 
+class _QuotaLimitedDailyPro(_FakePro):
+    def daily(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
+        self.daily_calls.append((ts_code, start_date, end_date, trade_date))
+        raise RuntimeError(
+            "抱歉，您每天最多访问该接口10000次，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。"
+        )
+
+
 def test_get_stock_detail_falls_back_to_recent_daily_when_same_day_not_ready():
     """交易日当天无 daily 明细时，应回退到最近可用日线，而不是返回 0。"""
     client = TushareClient.__new__(TushareClient)
@@ -249,6 +257,89 @@ def test_get_stock_detail_uses_short_cache_for_same_request():
     assert client.pro.daily_calls == [("002025.SZ", "20260320", "20260320", None)]
     assert client.pro.daily_basic_calls == [("002025.SZ", "20260320", "ts_code,turnover_rate,volume_ratio")]
     assert second == first
+
+
+def test_get_stock_detail_returns_lightweight_detail_when_daily_hits_quota_limit():
+    """详情额度打满时，应返回轻量详情并打上冷却状态。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _QuotaLimitedDailyPro()
+    client._resolve_trade_date = lambda d: "20260323"
+    client._recent_open_dates = lambda trade_date, count=5: ["20260323"]
+    client._should_use_realtime_quote = lambda d: True
+    client._fetch_realtime_stock_quote_map = lambda codes: {
+        "002025.SZ": {
+            "close": 63.44,
+            "change_pct": -0.17,
+            "open": 63.70,
+            "high": 64.10,
+            "low": 63.22,
+            "pre_close": 63.55,
+            "volume": 2456000,
+            "amount": 156000000,
+            "avg_price": 63.52,
+            "quote_time": "2026-03-23 09:35:51",
+            "data_source": "realtime_sina",
+        }
+    }
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_detail_cache = {}
+    client._stock_detail_quota_state = {"limited_until": 0.0, "message": ""}
+    client._get_stock_basic_snapshot_map = lambda: {
+        "002025.SZ": {"stock_name": "航天电器", "industry": "元器件"}
+    }
+    client._get_ths_concept_names_for_stock = lambda ts_code: []
+
+    detail = client.get_stock_detail("002025.SZ", "2026-03-23")
+
+    assert client.pro.daily_calls == [("002025.SZ", "20260323", "20260323", None)]
+    assert detail["stock_name"] == "航天电器"
+    assert detail["sector_name"] == "元器件"
+    assert detail["close"] == 63.44
+    assert detail["data_source"] == "realtime_sina"
+    assert client._is_stock_detail_quota_limited() is True
+
+
+def test_get_stock_detail_skips_tushare_during_quota_cooldown():
+    """额度冷却期内应直接走轻量详情，不再重复访问 Tushare 详情接口。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _QuotaLimitedDailyPro()
+    client._resolve_trade_date = lambda d: "20260323"
+    client._recent_open_dates = lambda trade_date, count=5: ["20260323"]
+    client._should_use_realtime_quote = lambda d: True
+    client._fetch_realtime_stock_quote_map = lambda codes: {
+        normalize: {
+            "close": 20.0 + index,
+            "change_pct": 1.0 + index,
+            "open": 19.5 + index,
+            "high": 20.5 + index,
+            "low": 19.2 + index,
+            "pre_close": 19.8 + index,
+            "volume": 1000000 + index,
+            "amount": 50000000 + index,
+            "avg_price": 19.9 + index,
+            "quote_time": "2026-03-23 10:02:01",
+            "data_source": "realtime_sina",
+        }
+        for index, normalize in enumerate(codes)
+    }
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_detail_cache = {}
+    client._stock_detail_quota_state = {"limited_until": 0.0, "message": ""}
+    client._get_stock_basic_snapshot_map = lambda: {
+        "002025.SZ": {"stock_name": "航天电器", "industry": "元器件"},
+        "002475.SZ": {"stock_name": "立讯精密", "industry": "电子"},
+    }
+    client._get_ths_concept_names_for_stock = lambda ts_code: []
+
+    first = client.get_stock_detail("002025.SZ", "2026-03-23")
+    second = client.get_stock_detail("002475.SZ", "2026-03-23")
+
+    assert client.pro.daily_calls == [("002025.SZ", "20260323", "20260323", None)]
+    assert first["data_source"] == "realtime_sina"
+    assert second["stock_name"] == "立讯精密"
+    assert second["data_source"] == "realtime_sina"
 
 
 def test_get_stock_quote_map_batches_daily_query_and_realtime_overlay():
@@ -343,6 +434,47 @@ def test_fetch_realtime_stock_quote_map_uses_realtime_quote(monkeypatch):
     assert result["002475.SZ"]["close"] == 36.12
 
 
+def test_fetch_realtime_stock_quote_map_uses_short_cache(monkeypatch):
+    """同一批股票短时间重复取实时行情时，应命中本地缓存。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client.REALTIME_CHUNK_SIZE = 50
+    client.REALTIME_SOURCE = "dc"
+    client.REALTIME_MARKET_CACHE_TTL_SECONDS = 20
+    client._realtime_quote_cache = {}
+    client._infer_realtime_avg_price = lambda price, amount, volume: 63.52
+
+    call_count = {"value": 0}
+
+    def fake_realtime_quote(ts_code, src=None):
+        call_count["value"] += 1
+        return pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "002025.SZ",
+                    "PRICE": 63.44,
+                    "OPEN": 63.70,
+                    "HIGH": 64.10,
+                    "LOW": 63.22,
+                    "PRE_CLOSE": 63.55,
+                    "VOLUME": 2456000,
+                    "AMOUNT": 156000000,
+                    "DATE": "20260330",
+                    "TIME": "09:35:51",
+                }
+            ]
+        )
+
+    monkeypatch.setattr("app.data.tushare_client.ts.realtime_quote", fake_realtime_quote)
+
+    first = client._fetch_realtime_stock_quote_map(["002025.SZ"])
+    second = client._fetch_realtime_stock_quote_map(["002025.SZ"])
+
+    assert call_count["value"] == 1
+    assert second == first
+
+
 class _FallbackStockListPro(_FakePro):
     def __init__(self):
         super().__init__()
@@ -425,6 +557,48 @@ def test_resolve_trade_date_uses_short_cache():
     assert first == "20260323"
     assert second == "20260323"
     assert len(client.pro.trade_cal_calls) == 1
+
+
+def test_get_stock_quote_map_reuses_daily_and_daily_basic_caches():
+    """同一交易日重复取批量行情时，应复用 daily 和 daily_basic 结果。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._resolve_trade_date = lambda d: "20260320"
+    client._recent_open_dates = lambda trade_date, count=5: ["20260320"]
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._daily_api_cache = {}
+    client._daily_basic_api_cache = {}
+    client._should_use_realtime_quote = lambda d: False
+    client._should_use_market_snapshot = lambda d: False
+
+    first = client.get_stock_quote_map(["002025.SZ", "002475.SZ"], "2026-03-23")
+    second = client.get_stock_quote_map(["002025.SZ", "002475.SZ"], "2026-03-23")
+
+    assert client.pro.daily_calls == [(None, None, None, "20260320")]
+    assert client.pro.daily_basic_calls == [(None, "20260320", "ts_code,turnover_rate,volume_ratio")]
+    assert second == first
+
+
+def test_get_index_quote_with_meta_reuses_index_daily_cache():
+    """同一交易日重复取指数时，应复用 index_daily 结果。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._resolve_eod_fallback_start_trade_date = lambda d: "20260320"
+    client._recent_open_dates = lambda trade_date, count=5: ["20260320"]
+    client._index_daily_api_cache = {}
+    client._should_use_market_snapshot = lambda d: False
+
+    first = client.get_index_quote_with_meta("20260320")
+    second = client.get_index_quote_with_meta("20260320")
+
+    assert client.pro.index_daily_calls == [
+        ("000001.SH", "20260320", "20260320"),
+        ("399001.SZ", "20260320", "20260320"),
+        ("399006.SZ", "20260320", "20260320"),
+    ]
+    assert second == first
 
 
 def test_get_expanded_stock_list_falls_back_to_recent_available_daily():
@@ -557,6 +731,63 @@ def test_get_expanded_stock_list_prefers_public_realtime_aggregate_when_availabl
     assert "涨幅前列" in target["candidate_source_tag"]
     assert "涨停入选" in target["candidate_source_tag"]
     assert "量比异动" in target["candidate_source_tag"]
+
+
+def test_get_expanded_stock_list_prefers_public_realtime_aggregate_after_close_before_eod(
+    monkeypatch,
+):
+    """15:00 后到 EOD 数据就绪前，雷达模式仍应优先使用公开实时候选。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FallbackStockListPro()
+    client.REALTIME_CANDIDATE_MIN_TOTAL = 1
+    client._resolve_trade_date = lambda d: "20260323"
+    client._should_use_realtime_quote = lambda d: False
+    client._should_use_market_snapshot = lambda d: True
+    client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_basic_snapshot_cache = {
+        "fetched_at": time_module.time(),
+        "mapping": {
+            "002475.SZ": {"stock_name": "立讯精密", "industry": "消费电子"},
+        },
+    }
+    client._expanded_stock_list_cache = {}
+    client._realtime_market_source_cooldowns = {}
+    client._infer_intraday_volume_ratio = lambda *args, **kwargs: 3.4
+    client._get_ths_concept_names_for_stock = lambda code: ["AI 硬件"] if code == "002475.SZ" else []
+    client._now_sh = lambda: datetime(2026, 3, 23, 15, 9, 5)
+
+    payload = {
+        "data": {
+            "diff": [
+                {
+                    "f12": "002475",
+                    "f14": "立讯精密",
+                    "f2": 36.12,
+                    "f3": 10.02,
+                    "f5": 1860000,
+                    "f6": 67000000,
+                    "f8": 12.6,
+                    "f15": 36.30,
+                    "f16": 34.00,
+                    "f17": 34.10,
+                    "f18": 32.83,
+                }
+            ]
+        }
+    }
+    monkeypatch.setattr("app.data.tushare_client.httpx.get", lambda *args, **kwargs: _FakeJsonResponse(payload))
+
+    result = client.get_expanded_stock_list_with_meta(
+        "20260323",
+        top_gainers=20,
+        prefer_today=True,
+    )
+
+    assert result["data_trade_date"] == "20260323"
+    assert result["rows"]
+    assert result["rows"][0]["data_source"] == "realtime_em"
+    assert client.pro.daily_calls == []
 
 
 def test_get_expanded_stock_list_with_meta_uses_cache_for_same_request():
@@ -1733,3 +1964,136 @@ def test_get_sina_hot_sector_boards_normalizes_payload_and_uses_cache(monkeypatc
     assert result["industry_boards"][0]["leader_stock_ts_code"] == "300436.SZ"
     assert result["concept_boards"][0]["sector_source_type"] == "concept"
     assert cached == result
+
+
+def test_get_ths_concept_names_for_stock_prefers_local_snapshot():
+    client = TushareClient.__new__(TushareClient)
+    client._local_ths_concept_snapshot = {
+        "loaded": True,
+        "loaded_at": 0.0,
+        "sync_trade_date": "20260408",
+        "index_map": {
+            "885531.TI": {"name": "绿色电力", "type": "N"},
+            "885732.TI": {"name": "智能电网", "type": "N"},
+        },
+        "stock_to_codes": {
+            "001258.SZ": ["885531.TI", "885732.TI"],
+        },
+    }
+
+    class _ForbiddenPro:
+        def ths_index(self, **kwargs):
+            raise AssertionError("should not request remote ths_index")
+
+        def ths_member(self, **kwargs):
+            raise AssertionError("should not request remote ths_member")
+
+    client.pro = _ForbiddenPro()
+
+    assert client._get_ths_concept_names_for_stock("001258.SZ") == ["绿色电力", "智能电网"]
+    assert client._get_ths_concept_names_for_stock("000001.SZ") == []
+
+
+def test_get_ths_concept_names_for_stock_lazy_loads_local_snapshot(monkeypatch):
+    client = TushareClient.__new__(TushareClient)
+    client._local_ths_concept_snapshot = {
+        "loaded": False,
+        "loaded_at": 0.0,
+        "sync_trade_date": "",
+        "index_map": {},
+        "stock_to_codes": {},
+    }
+    client._local_ths_concept_snapshot_lock = threading.Lock()
+
+    client.load_local_ths_concept_snapshot = TushareClient.load_local_ths_concept_snapshot.__get__(client, TushareClient)
+    monkeypatch.setattr(
+        client,
+        "_run_coroutine_sync",
+        lambda coroutine: {
+            "sync_trade_date": "20260408",
+            "index_map": {"885531.TI": {"name": "绿色电力", "type": "N"}},
+            "stock_to_codes": {"001258.SZ": ["885531.TI"]},
+        },
+    )
+    monkeypatch.setattr(client, "_load_local_ths_concept_snapshot_from_db_async", lambda: object())
+
+    class _ForbiddenPro:
+        def ths_index(self, **kwargs):
+            raise AssertionError("should not request remote ths_index")
+
+        def ths_member(self, **kwargs):
+            raise AssertionError("should not request remote ths_member")
+
+    client.pro = _ForbiddenPro()
+
+    assert client._get_ths_concept_names_for_stock("001258.SZ") == ["绿色电力"]
+    assert client._local_ths_concept_snapshot["loaded"] is True
+    assert client._local_ths_concept_snapshot["sync_trade_date"] == "20260408"
+
+
+def test_fetch_remote_ths_concept_snapshot_collects_members_by_concept_code():
+    client = TushareClient.__new__(TushareClient)
+    client._now_sh = lambda: datetime(2026, 4, 8, 19, 30)
+    client._log_tushare_api_call = lambda *args, **kwargs: None
+
+    class _RemoteConceptPro:
+        def __init__(self):
+            self.member_calls = []
+
+        def ths_index(self, exchange=None, type=None):
+            if type == "N":
+                return pd.DataFrame([{"ts_code": "885531.TI", "name": "绿色电力", "type": "N"}])
+            return pd.DataFrame()
+
+        def ths_member(self, ts_code=None, con_code=None):
+            self.member_calls.append((ts_code, con_code))
+            if ts_code == "885531.TI":
+                return pd.DataFrame(
+                    [
+                        {"ts_code": "885531.TI", "con_code": "001258.SZ", "con_name": "立新能源", "is_new": "Y"},
+                        {"ts_code": "885531.TI", "con_code": "000001.SZ", "con_name": "平安银行", "is_new": "N"},
+                    ]
+                )
+            return pd.DataFrame()
+
+    client.pro = _RemoteConceptPro()
+
+    payload = client.fetch_remote_ths_concept_snapshot("2026-04-08")
+
+    assert payload["sync_trade_date"] == "20260408"
+    assert payload["concept_rows"] == [
+        {"ts_code": "885531.TI", "concept_name": "绿色电力", "ths_type": "N", "exchange": "A"}
+    ]
+    assert payload["member_rows"] == [
+        {"concept_code": "885531.TI", "stock_code": "001258.SZ", "stock_name": "立新能源"}
+    ]
+    assert client.pro.member_calls == [("885531.TI", None)]
+
+
+def test_fetch_remote_ths_concept_member_rows_deduplicates_within_batch():
+    client = TushareClient.__new__(TushareClient)
+    client._log_tushare_api_call = lambda *args, **kwargs: None
+
+    class _RemoteConceptMemberPro:
+        def __init__(self):
+            self.member_calls = []
+
+        def ths_member(self, ts_code=None, con_code=None):
+            self.member_calls.append((ts_code, con_code))
+            if ts_code == "885531.TI":
+                return pd.DataFrame(
+                    [
+                        {"ts_code": "885531.TI", "con_code": "001258.SZ", "con_name": "立新能源", "is_new": "Y"},
+                        {"ts_code": "885531.TI", "con_code": "001258.SZ", "con_name": "立新能源", "is_new": "Y"},
+                    ]
+                )
+            return pd.DataFrame()
+
+    client.pro = _RemoteConceptMemberPro()
+
+    rows = client.fetch_remote_ths_concept_member_rows(["885531.TI"])
+
+    assert rows == [
+        {"concept_code": "885531.TI", "stock_code": "001258.SZ", "stock_name": "立新能源"}
+    ]
+    assert client.pro.member_calls == [("885531.TI", None)]

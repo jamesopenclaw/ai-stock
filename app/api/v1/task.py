@@ -17,7 +17,7 @@ router = APIRouter()
 class TaskRequest(BaseModel):
     """任务请求"""
     trade_date: Optional[str] = None
-    mode: str = "daily"  # daily, sync, analyze, notify
+    mode: str = "daily"  # daily, sync, analyze, notify, ths_sync
     force: bool = False
 
 
@@ -41,6 +41,7 @@ async def trigger_task(
     - mode=sync: 仅同步数据
     - mode=analyze: 仅执行分析
     - mode=notify: 仅推送通知
+    - mode=ths_sync: 收盘后同步同花顺概念成分到本地库
     """
     trade_date = request.trade_date or datetime.now().strftime("%Y-%m-%d")
 

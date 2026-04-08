@@ -6,7 +6,11 @@ from typing import Dict, List, Optional
 
 from app.models.schemas import BuyPointResponse, SellPointResponse, StockPoolsOutput, StockOutput
 from app.services.buy_point import buy_point_service
-from app.services.decision_context import DecisionContext, decision_context_service
+from app.services.decision_context import (
+    DecisionContext,
+    SharedDecisionContext,
+    decision_context_service,
+)
 from app.services.review_snapshot import review_snapshot_service
 from app.services.sell_point import sell_point_service
 from app.services.stock_filter import stock_filter_service
@@ -40,13 +44,25 @@ class DecisionFlowService:
         top_gainers: int,
         include_holdings: bool,
         account_id: Optional[str] = None,
+        shared_context: Optional[SharedDecisionContext] = None,
     ) -> CandidateAnalysisBundle:
-        context = await decision_context_service.build_context(
-            trade_date,
-            top_gainers=top_gainers,
-            include_holdings=include_holdings,
-            account_id=account_id,
-        )
+        if shared_context is None:
+            context = await decision_context_service.build_context(
+                trade_date,
+                top_gainers=top_gainers,
+                include_holdings=include_holdings,
+                account_id=account_id,
+            )
+        else:
+            account_context = await decision_context_service.build_account_context(
+                trade_date,
+                account_id=account_id,
+            )
+            context = decision_context_service.compose_context(
+                shared_context,
+                account_context,
+                include_holdings=include_holdings,
+            )
         review_bias_profile = await review_snapshot_service.get_review_bias_profile_safe(
             limit_days=10,
             account_id=account_id,
@@ -82,12 +98,14 @@ class DecisionFlowService:
         *,
         top_gainers: int = 200,
         account_id: Optional[str] = None,
+        shared_context: Optional[SharedDecisionContext] = None,
     ) -> FullDecisionBundle:
         candidate_bundle = await self.build_candidate_analysis(
             trade_date,
             top_gainers=top_gainers,
             include_holdings=True,
             account_id=account_id,
+            shared_context=shared_context,
         )
         buy_analysis = buy_point_service.analyze(
             trade_date,

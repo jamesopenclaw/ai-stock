@@ -89,6 +89,15 @@ def _attach_stock_pools_context_snapshot(result, *, market_env=None, sector_scan
     return result
 
 
+def _unpack_candidate_result(candidate_result):
+    if isinstance(candidate_result, tuple):
+        if len(candidate_result) >= 4:
+            return candidate_result[0], candidate_result[1], candidate_result[2], candidate_result[3]
+        if len(candidate_result) >= 2:
+            return candidate_result[0], candidate_result[1], None, None
+    return candidate_result, None, None, None
+
+
 def _serialize_stock_pools_result(
     result,
     *,
@@ -103,6 +112,9 @@ def _serialize_stock_pools_result(
         "resolved_trade_date": result.resolved_trade_date,
         "sector_scan_trade_date": result.sector_scan_trade_date,
         "sector_scan_resolved_trade_date": result.sector_scan_resolved_trade_date,
+        "candidate_data_status": getattr(result, "candidate_data_status", None),
+        "candidate_data_message": getattr(result, "candidate_data_message", None),
+        "snapshot_status_message": getattr(result, "snapshot_status_message", None),
         "market_env": result.market_env.model_dump() if getattr(result, "market_env", None) else None,
         "mainline_sectors": [sector.model_dump() for sector in getattr(result, "mainline_sectors", [])],
         "sub_mainline_sectors": [sector.model_dump() for sector in getattr(result, "sub_mainline_sectors", [])],
@@ -146,6 +158,8 @@ async def _compute_stock_pools_result(
     )
     result = bundle.stock_pools
     result.resolved_trade_date = bundle.context.resolved_stock_trade_date
+    result.candidate_data_status = getattr(bundle.context, "candidate_data_status", None)
+    result.candidate_data_message = getattr(bundle.context, "candidate_data_message", None)
     result.sector_scan_trade_date = bundle.context.sector_scan_trade_date
     result.sector_scan_resolved_trade_date = bundle.context.sector_scan_resolved_trade_date
     result.snapshot_version = STOCK_POOLS_SNAPSHOT_VERSION
@@ -181,13 +195,14 @@ async def _compute_radar_stock_pools_result(
         market_env=market_env,
         prefer_today=True,
     )
-    stocks, resolved_stock_trade_date = decision_context_service.get_candidate_stocks(
+    stocks, resolved_stock_trade_date, candidate_data_status, candidate_data_message = _unpack_candidate_result(
+        decision_context_service.get_candidate_stocks(
         trade_date,
         top_gainers=candidate_limit,
         holdings_list=account_context.holdings_list,
         include_holdings=True,
         prefer_today=True,
-    )
+    ))
     scored_stocks = stock_filter_service.filter_with_context(
         trade_date,
         stocks,
@@ -211,6 +226,8 @@ async def _compute_radar_stock_pools_result(
         review_bias_profile=review_bias_profile,
     )
     result.resolved_trade_date = resolved_stock_trade_date or trade_date
+    result.candidate_data_status = candidate_data_status
+    result.candidate_data_message = candidate_data_message
     result.sector_scan_trade_date = trade_date
     result.sector_scan_resolved_trade_date = getattr(sector_scan, "resolved_trade_date", None) or trade_date
     result.snapshot_version = STOCK_POOLS_SNAPSHOT_VERSION
@@ -418,6 +435,13 @@ async def get_stock_pools(
                 account_id=account_id,
             )
             if cached:
+                snapshot_status_message = None
+                if not cache_valid:
+                    snapshot_status_message = (
+                        f"当前先展示旧稳定快照（候选 {cached.resolved_trade_date or '-'} / 板块 {cached.sector_scan_resolved_trade_date or '-'}），"
+                        f"后台正在按 {trade_date} 重算。"
+                    )
+                    cached.snapshot_status_message = snapshot_status_message
                 return ApiResponse(
                     data=_serialize_stock_pools_result(
                         cached,
@@ -459,6 +483,9 @@ async def get_stock_pools(
                     "refresh_in_progress": True,
                     "refresh_requested": started,
                     "stale_snapshot": False,
+                    "candidate_data_status": None,
+                    "candidate_data_message": None,
+                    "snapshot_status_message": f"后台正在按 {trade_date} 生成稳定快照。",
                     "mode": "stable",
                     "is_realtime": False,
                     "radar_generated_at": None,

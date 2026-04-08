@@ -20,17 +20,25 @@ async def test_refresh_active_accounts_refreshes_each_active_account(monkeypatch
             ("acct-002", None),
         ]
 
-    async def fake_refresh(account_id, *, user_id=None, trade_date=None, force=False):
+    async def fake_refresh(account_id, *, user_id=None, trade_date=None, force=False, shared_context=None):
         captured.append(
             {
                 "account_id": account_id,
                 "user_id": user_id,
                 "trade_date": trade_date,
                 "force": force,
+                "shared_context": shared_context,
             }
         )
 
     monkeypatch.setattr(engine, "list_active_accounts", fake_list_active_accounts)
+    async def fake_build_shared_context(trade_date, top_gainers=120):
+        return SimpleNamespace(trade_date=trade_date, top_gainers=top_gainers)
+
+    monkeypatch.setattr(
+        "app.services.notification_engine.decision_context_service.build_shared_context",
+        fake_build_shared_context,
+    )
     monkeypatch.setattr(engine, "refresh_account_events", fake_refresh)
 
     refreshed = await engine.refresh_active_accounts(
@@ -45,13 +53,56 @@ async def test_refresh_active_accounts_refreshes_each_active_account(monkeypatch
             "user_id": "user-001",
             "trade_date": "2026-04-04",
             "force": True,
+            "shared_context": captured[0]["shared_context"],
         },
         {
             "account_id": "acct-002",
             "user_id": None,
             "trade_date": "2026-04-04",
             "force": True,
+            "shared_context": captured[0]["shared_context"],
         },
+    ]
+    assert captured[0]["shared_context"].trade_date == "2026-04-04"
+    assert captured[0]["shared_context"].top_gainers == 120
+
+
+@pytest.mark.asyncio
+async def test_refresh_active_accounts_builds_shared_context_once(monkeypatch):
+    engine = NotificationEngine()
+    shared_calls = []
+    refresh_calls = []
+    shared_context = SimpleNamespace(marker="shared")
+
+    async def fake_list_active_accounts():
+        return [
+            ("acct-001", "user-001"),
+            ("acct-002", "user-002"),
+            ("acct-003", None),
+        ]
+
+    async def fake_build_shared_context(trade_date, top_gainers=120):
+        shared_calls.append((trade_date, top_gainers))
+        return shared_context
+
+    async def fake_refresh(account_id, *, user_id=None, trade_date=None, force=False, shared_context=None):
+        refresh_calls.append((account_id, user_id, trade_date, force, shared_context))
+
+    monkeypatch.setattr(engine, "list_active_accounts", fake_list_active_accounts)
+    monkeypatch.setattr(
+        "app.services.notification_engine.decision_context_service.build_shared_context",
+        fake_build_shared_context,
+    )
+    monkeypatch.setattr(engine, "refresh_account_events", fake_refresh)
+
+    refreshed = await engine.refresh_active_accounts(trade_date="2026-04-08", force=False)
+
+    assert refreshed == 3
+    assert shared_calls == [("2026-04-08", 120)]
+    assert refresh_calls == [
+        ("acct-001", "user-001", "2026-04-08", False, shared_context),
+        ("acct-002", "user-002", "2026-04-08", False, shared_context),
+        ("acct-003", None, "2026-04-08", False, shared_context),
     ]
 
 

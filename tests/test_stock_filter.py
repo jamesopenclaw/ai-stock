@@ -1288,6 +1288,145 @@ class TestStockFilter:
 
         assert [item.ts_code for item in market_watch] == ["000001.SZ"]
 
+    def test_market_watch_candidates_expand_beyond_frontline_when_requested(self, service):
+        """
+        测试：观察候选全集在雷达展开场景下，不应被代表票逻辑再次截断。
+        """
+        stock = StockOutput(
+            ts_code="000001.SZ",
+            stock_name="扩展观察票",
+            sector_name="算力",
+            change_pct=3.8,
+            amount=160000,
+            stock_score=78.0,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.CAUTION,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            sector_profile_tag=SectorProfileTag.A_MAINLINE,
+            candidate_source_tag="涨幅前列",
+        )
+
+        service._should_enter_market_watch = lambda current: True
+        service._allows_new_pool_entry = lambda current, profiles, sectors: True
+        service._evaluate_account_pool_candidate = (
+            lambda *args, **kwargs: (False, "先观察", None, None)
+        )
+        service._why_market_watch = lambda current, is_holding=False: "值得盯"
+        service._build_not_other_pool_reasons = lambda *args, **kwargs: []
+        service._build_pool_summary = lambda *args, **kwargs: "summary"
+        service._clone_for_pool = lambda current, *args, **kwargs: current
+
+        market_watch = service._build_market_watch_candidates(
+            scored_stocks=[stock],
+            holding_codes=set(),
+            allowed_profiles={SectorProfileTag.A_MAINLINE},
+            allowed_sector_names={"算力"},
+            representative_codes={"000002.SZ"},
+            execution_priority_codes=set(),
+            account=None,
+            market_env=MagicMock(),
+            holding_profile={},
+            global_trade_gate=MagicMock(),
+            restrict_to_frontline=False,
+        )
+
+        assert [item.ts_code for item in market_watch] == ["000001.SZ"]
+
+    def test_market_watch_candidates_expand_beyond_allowed_sector_names_when_requested(self, service):
+        """
+        测试：观察候选全集不应继续被执行主线的 sector_name 范围绑死。
+        """
+        stock = StockOutput(
+            ts_code="000001.SZ",
+            stock_name="扩展方向票",
+            sector_name="AI应用",
+            change_pct=4.1,
+            amount=180000,
+            stock_score=80.0,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.CAUTION,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            sector_profile_tag=SectorProfileTag.A_MAINLINE,
+            direction_signal_tag="强化中",
+            candidate_source_tag="涨幅前列",
+        )
+
+        service._should_enter_market_watch = lambda current: True
+        service._evaluate_account_pool_candidate = (
+            lambda *args, **kwargs: (False, "先观察", None, None)
+        )
+        service._why_market_watch = lambda current, is_holding=False: "值得盯"
+        service._build_not_other_pool_reasons = lambda *args, **kwargs: []
+        service._build_pool_summary = lambda *args, **kwargs: "summary"
+        service._clone_for_pool = lambda current, *args, **kwargs: current
+
+        market_watch = service._build_market_watch_candidates(
+            scored_stocks=[stock],
+            holding_codes=set(),
+            allowed_profiles={SectorProfileTag.A_MAINLINE},
+            allowed_sector_names={"通信设备"},
+            representative_codes=set(),
+            execution_priority_codes=set(),
+            account=None,
+            market_env=MagicMock(),
+            holding_profile={},
+            global_trade_gate=MagicMock(),
+            restrict_to_frontline=False,
+        )
+
+        assert [item.ts_code for item in market_watch] == ["000001.SZ"]
+
+    def test_resolve_new_pool_sector_names_falls_back_to_matched_profile_names_when_visible_names_miss(self, service):
+        """
+        测试：当前排主线名与实时候选名称体系不一致时，应退回到候选里实际命中的主线名称，
+        避免观察池被空集误杀。
+        """
+        sector_scan = MagicMock(
+            mainline_sectors=[
+                MagicMock(sector_name="MCP概念"),
+                MagicMock(sector_name="短视频"),
+                MagicMock(sector_name="通信设备"),
+                MagicMock(sector_name="半导体"),
+            ],
+            sub_mainline_sectors=[],
+        )
+        scored_stocks = [
+            MagicMock(
+                ts_code="300308.SZ",
+                stock_name="中际旭创",
+                sector_name="通信设备",
+                concept_names=[],
+                stock_score=97.3,
+                market_strength_score=100.0,
+                execution_opportunity_score=83.0,
+                sector_profile_tag=SectorProfileTag.A_MAINLINE,
+            ),
+            MagicMock(
+                ts_code="300548.SZ",
+                stock_name="长芯博创",
+                sector_name="半导体",
+                concept_names=[],
+                stock_score=96.1,
+                market_strength_score=98.0,
+                execution_opportunity_score=81.0,
+                sector_profile_tag=SectorProfileTag.A_MAINLINE,
+            ),
+        ]
+
+        names = service._resolve_new_pool_sector_names(
+            sector_scan,
+            scored_stocks,
+            holding_codes=set(),
+            allowed_profiles={SectorProfileTag.A_MAINLINE},
+            market_env=MagicMock(),
+        )
+
+        assert names == {"通信设备", "半导体"}
+
     def test_new_pools_only_use_a_mainline_when_available(self, service, mock_market_env_attack):
         """
         测试：新开仓三池有 A 类主线候选时，应只使用 A 类主线股票。

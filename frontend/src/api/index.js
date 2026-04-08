@@ -266,7 +266,13 @@ export const stockApi = {
   pools: (tradeDate, limit, options = {}) => cachedGet(
     scopedCacheKey('stock-pools', [tradeDate, String(limit), String(options.mode || 'stable')]),
     () => api.get('/stock/pools', {
-      params: { trade_date: tradeDate, limit, refresh: Boolean(options.refresh), mode: options.mode || 'stable' },
+      params: {
+        trade_date: tradeDate,
+        limit,
+        refresh: Boolean(options.refresh),
+        mode: options.mode || 'stable',
+        include_watch_candidates: (options.mode || 'stable') === 'radar',
+      },
       timeout: options.timeout
     }),
     {

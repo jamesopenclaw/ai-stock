@@ -14,6 +14,7 @@ from app.services.market_env import market_env_service
 from app.services.notify import notify_service
 from app.services.review_snapshot import review_snapshot_service
 from app.services.task_run_service import task_run_service
+from app.services.ths_concept_sync_service import ths_concept_sync_service
 from app.models.schemas import AccountInput
 
 
@@ -25,6 +26,7 @@ class TaskScheduler:
         "sync": 2,
         "analyze": 2,
         "notify": 2,
+        "ths_sync": 1,
     }
     RETRY_DELAY_SECONDS = 1.0
     REVIEW_OUTCOME_REFRESH_BATCH_ROWS = 20
@@ -264,6 +266,23 @@ class TaskScheduler:
 
         return summary
 
+    async def sync_ths_concepts(self, trade_date: str) -> dict:
+        """收盘后同步同花顺概念定义与成分到本地库。"""
+        compact_trade_date = str(trade_date or "").replace("-", "").strip()
+        self.logger.info("开始同步 THS 概念缓存 trade_date={}", compact_trade_date or "-")
+        try:
+            payload = await ths_concept_sync_service.sync_from_tushare(compact_trade_date)
+        except Exception as exc:
+            await ths_concept_sync_service.mark_sync_failed(compact_trade_date, str(exc))
+            raise
+        self.logger.info(
+            "THS 概念缓存同步完成 trade_date={} concepts={} members={}",
+            payload.get("trade_date") or compact_trade_date,
+            payload.get("concept_count") or 0,
+            payload.get("member_count") or 0,
+        )
+        return payload
+
     async def enqueue_task(
         self,
         mode: str,
@@ -349,6 +368,9 @@ class TaskScheduler:
             report = await self.run_analysis(trade_date)
             await self.notify_report(trade_date, report)
             return {"trade_date": trade_date, "pipeline": "notify"}
+        if mode == "ths_sync":
+            payload = await self.sync_ths_concepts(trade_date)
+            return {"trade_date": trade_date, "pipeline": "ths_sync", "report": payload}
         raise ValueError(f"不支持的任务模式: {mode}")
 
     async def _run_daily_pipeline(self, trade_date: str) -> dict:

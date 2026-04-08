@@ -440,7 +440,7 @@ class SectorScanService:
         """
         try:
             compact = trade_date.replace("-", "")
-            if prefer_today and self.client._should_use_realtime_quote(compact):
+            if prefer_today and self.client._should_use_market_snapshot(compact):
                 hot_payload = self.client.get_sina_hot_sector_boards(
                     compact,
                     limit=20,
@@ -451,10 +451,28 @@ class SectorScanService:
                 hot_trade_date = str(hot_payload.get("resolved_trade_date") or trade_date).replace("-", "")
                 if hot_concepts or hot_industries:
                     concept_rows = [{**r, "sector_source_type": "concept"} for r in hot_concepts]
-                    industry_rows = [{**r, "sector_source_type": "industry"} for r in hot_industries]
-                    seen_names = {r.get("sector_name", "") for r in concept_rows}
-                    merged: List[Dict] = list(concept_rows)
-                    for row in industry_rows:
+                    concept_names = [
+                        str(row.get("sector_name") or "").strip()
+                        for row in hot_concepts
+                        if str(row.get("sector_name") or "").strip()
+                    ]
+                    industry_rows = []
+                    for index, row in enumerate(hot_industries):
+                        enriched = {**row, "sector_source_type": "industry"}
+                        subtitle_names = [
+                            name for name in concept_names[index:index + 2]
+                            if name
+                        ]
+                        if not subtitle_names:
+                            subtitle_names = concept_names[:2]
+                        if subtitle_names:
+                            enriched["sector_news_summary"] = f"热门概念：{'、'.join(subtitle_names)}"
+                        industry_rows.append(enriched)
+
+                    # 雷达模式以行业做主锚，概念保留为补充信号。
+                    seen_names = {r.get("sector_name", "") for r in industry_rows}
+                    merged: List[Dict] = list(industry_rows)
+                    for row in concept_rows:
                         name = row.get("sector_name", "")
                         if name and name not in seen_names:
                             merged.append(row)
@@ -463,7 +481,7 @@ class SectorScanService:
                         "rows": merged,
                         "sector_data_mode": "realtime_hot_sector",
                         "concept_data_status": "realtime_hot_sector",
-                        "concept_data_message": "雷达模式优先使用新浪热门板块实时口径",
+                        "concept_data_message": "雷达模式优先使用新浪热门行业，概念作为补充强化信号",
                         "data_trade_date": hot_trade_date or compact,
                     }
 
@@ -1031,6 +1049,7 @@ class SectorScanService:
         # 汇总榜单按涨幅优先，再看成交额与成分股数量
         result.sort(
             key=lambda x: (
+                self._display_source_priority(x.sector_source_type, data_mode),
                 x.sector_change_pct,
                 next(
                     (
@@ -1050,6 +1069,22 @@ class SectorScanService:
             sector.sector_strength_rank = idx + 1
 
         return result
+
+    def _display_source_priority(self, source_type: str, data_mode: str) -> int:
+        normalized = str(source_type or "industry").strip()
+        if data_mode == "realtime_hot_sector":
+            return {
+                "industry": 4,
+                "limitup_industry": 3,
+                "concept": 2,
+                "mock": 1,
+            }.get(normalized, 0)
+        return {
+            "concept": 4,
+            "limitup_industry": 3,
+            "industry": 2,
+            "mock": 1,
+        }.get(normalized, 0)
 
     def _rank_sectors_within_source(self, sectors: List[Dict]) -> List[Dict]:
         """题材与行业分组排序，避免不同口径直接共享排名分。"""

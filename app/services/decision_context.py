@@ -30,6 +30,8 @@ class SharedDecisionContext:
     realtime_market_env: object
     sector_scan: object
     stocks: List[StockInput]
+    candidate_data_status: Optional[str] = None
+    candidate_data_message: Optional[str] = None
 
 
 @dataclass
@@ -49,6 +51,8 @@ class DecisionContext:
 
     trade_date: str
     resolved_stock_trade_date: Optional[str]
+    candidate_data_status: Optional[str]
+    candidate_data_message: Optional[str]
     sector_scan_trade_date: Optional[str]
     sector_scan_resolved_trade_date: Optional[str]
     market_env: object
@@ -113,7 +117,7 @@ class DecisionContextService:
         holdings_list: Optional[List[dict]] = None,
         include_holdings: bool = False,
         prefer_today: bool = False,
-    ) -> tuple[List[StockInput], Optional[str]]:
+    ) -> tuple[List[StockInput], Optional[str], Optional[str], Optional[str]]:
         """获取候选股，并按需将持仓并入候选池。"""
         stock_payload = market_data_gateway.get_expanded_stock_list_with_meta(
             trade_date,
@@ -122,6 +126,8 @@ class DecisionContextService:
         )
         stock_list = stock_payload.get("rows") or []
         resolved_trade_date = stock_payload.get("data_trade_date")
+        candidate_data_status = stock_payload.get("data_status")
+        candidate_data_message = stock_payload.get("data_message")
         stocks = [
             StockInput(
                 ts_code=s["ts_code"],
@@ -160,7 +166,7 @@ class DecisionContextService:
                 f"{resolved_trade_date[:4]}-{resolved_trade_date[4:6]}-{resolved_trade_date[6:8]}"
             )
 
-        return stocks, resolved_trade_date_fmt
+        return stocks, resolved_trade_date_fmt, candidate_data_status, candidate_data_message
 
     async def build_shared_context(
         self,
@@ -182,16 +188,24 @@ class DecisionContextService:
                 limit_output=False,
                 market_env=market_env,
             )
-        stocks, resolved_stock_trade_date = self.get_candidate_stocks(
+        candidate_payload = self.get_candidate_stocks(
             selection_trade_date,
             top_gainers=top_gainers,
             holdings_list=None,
             include_holdings=False,
         )
+        if len(candidate_payload) == 4:
+            stocks, resolved_stock_trade_date, candidate_data_status, candidate_data_message = candidate_payload
+        else:
+            stocks, resolved_stock_trade_date = candidate_payload
+            candidate_data_status = None
+            candidate_data_message = None
         return SharedDecisionContext(
             trade_date=trade_date,
             selection_trade_date=selection_trade_date,
             resolved_stock_trade_date=resolved_stock_trade_date,
+            candidate_data_status=candidate_data_status,
+            candidate_data_message=candidate_data_message,
             sector_scan_trade_date=getattr(sector_scan, "trade_date", None),
             sector_scan_resolved_trade_date=getattr(sector_scan, "resolved_trade_date", None),
             market_env=market_env,
@@ -240,6 +254,8 @@ class DecisionContextService:
         return DecisionContext(
             trade_date=shared_context.trade_date,
             resolved_stock_trade_date=shared_context.resolved_stock_trade_date,
+            candidate_data_status=shared_context.candidate_data_status,
+            candidate_data_message=shared_context.candidate_data_message,
             sector_scan_trade_date=shared_context.sector_scan_trade_date,
             sector_scan_resolved_trade_date=shared_context.sector_scan_resolved_trade_date,
             market_env=shared_context.market_env,

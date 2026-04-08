@@ -14,6 +14,7 @@ import sys
 from app.core.config import settings
 from app.core.security import get_current_user, hash_password
 from app.services.notification_engine import notification_engine
+from app.services.ths_concept_sync_service import ths_concept_sync_service
 
 # 配置日志
 logger.remove()
@@ -145,6 +146,11 @@ async def startup_event():
                         await session.commit()
     except Exception as e:
         logger.warning(f"默认业务数据初始化失败，请先执行 Alembic 迁移: {e}")
+
+    try:
+        await ths_concept_sync_service.refresh_local_cache()
+    except Exception as exc:
+        logger.warning("加载本地 THS 概念缓存失败: {}", exc)
 
     global _notification_refresh_task
     if settings.notification_background_refresh_enabled and _notification_refresh_task is None:

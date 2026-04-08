@@ -14,6 +14,7 @@ from app.core.database import async_session_factory
 from app.data.tushare_client import normalize_ts_code
 from app.models.schemas import MarketEnvTag, NotificationPriority, SellSignalTag, StockPoolTag
 from app.models.trading_account import TradingAccount
+from app.services.decision_context import SharedDecisionContext, decision_context_service
 from app.services.decision_flow import decision_flow_service
 from app.services.market_data_gateway import market_data_gateway
 from app.services.notification_service import notification_service
@@ -67,12 +68,27 @@ class NotificationEngine:
     ) -> int:
         """批量刷新全部有效账户的通知事件。"""
         accounts = await self.list_active_accounts()
+        shared_context = None
+        resolved_trade_date = trade_date or time.strftime("%Y-%m-%d")
+        if accounts:
+            try:
+                shared_context = await decision_context_service.build_shared_context(
+                    resolved_trade_date,
+                    top_gainers=120,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "notification shared context build failed trade_date={} error={}",
+                    resolved_trade_date,
+                    exc,
+                )
         for account_id, user_id in accounts:
             await self.refresh_account_events(
                 account_id,
                 user_id=user_id,
-                trade_date=trade_date,
+                trade_date=resolved_trade_date,
                 force=force,
+                shared_context=shared_context,
             )
         return len(accounts)
 
@@ -83,6 +99,7 @@ class NotificationEngine:
         user_id: Optional[str] = None,
         trade_date: Optional[str] = None,
         force: bool = False,
+        shared_context: Optional[SharedDecisionContext] = None,
     ) -> None:
         resolved_trade_date = trade_date or time.strftime("%Y-%m-%d")
         with self._cache_lock:
@@ -96,6 +113,7 @@ class NotificationEngine:
                 resolved_trade_date,
                 top_gainers=120,
                 account_id=account_id,
+                shared_context=shared_context,
             )
         except Exception as exc:
             logger.warning("notification refresh failed account_id={} error={}", account_id, exc)

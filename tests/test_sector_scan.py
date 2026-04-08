@@ -666,7 +666,7 @@ class TestSectorScan:
 
     def test_get_sector_data_prefers_sina_hot_sector_when_available(self, service, monkeypatch):
         """雷达模式盘中优先使用新浪热门板块，而不是等待日线行业数据。"""
-        monkeypatch.setattr(service.client, "_should_use_realtime_quote", lambda trade_date: True)
+        monkeypatch.setattr(service.client, "_should_use_market_snapshot", lambda trade_date: True)
         monkeypatch.setattr(
             service.client,
             "get_sina_hot_sector_boards",
@@ -686,7 +686,52 @@ class TestSectorScan:
         assert payload["data_trade_date"] == "20260323"
         assert payload["sector_data_mode"] == "realtime_hot_sector"
         assert payload["concept_data_status"] == "realtime_hot_sector"
-        assert payload["rows"][0]["sector_name"] == "AI 应用"
+        assert payload["rows"][0]["sector_name"] == "消费电子"
+        assert payload["rows"][0]["sector_source_type"] == "industry"
+        assert payload["rows"][0]["sector_news_summary"] == "热门概念：AI 应用"
+
+    def test_get_sector_data_uses_hot_sector_after_close_before_eod_ready(self, service, monkeypatch):
+        """15:00 后到日线稳定前，雷达板块仍应优先使用当天热门板块，不应直接回退昨日日线。"""
+        monkeypatch.setattr(service.client, "_should_use_market_snapshot", lambda trade_date: True)
+        monkeypatch.setattr(
+            service.client,
+            "get_sina_hot_sector_boards",
+            lambda trade_date, limit=20, refresh=True: {
+                "resolved_trade_date": "2026-03-23",
+                "concept_boards": [],
+                "industry_boards": [
+                    {"sector_name": "化学制药", "sector_change_pct": 4.2, "sector_source_type": "industry"},
+                ],
+            },
+        )
+
+        payload = service._get_sector_data("20260323", prefer_today=True)
+
+        assert payload["data_trade_date"] == "20260323"
+        assert payload["sector_data_mode"] == "realtime_hot_sector"
+        assert payload["rows"][0]["sector_name"] == "化学制药"
+
+    def test_score_sectors_prefers_industry_anchor_in_realtime_hot_sector(self, service):
+        """雷达热榜模式下，行业应优先作为主线展示锚点，概念作为补充。"""
+        sectors = [
+            {
+                "sector_name": "MCP概念",
+                "sector_change_pct": 11.5,
+                "sector_source_type": "concept",
+            },
+            {
+                "sector_name": "通信设备",
+                "sector_change_pct": 8.2,
+                "sector_source_type": "industry",
+                "sector_news_summary": "热门概念：MCP概念、短视频",
+            },
+        ]
+
+        scored = service._score_sectors(sectors, data_mode="realtime_hot_sector")
+
+        assert scored[0].sector_name == "通信设备"
+        assert scored[0].sector_source_type == "industry"
+        assert scored[0].sector_news_summary == "热门概念：MCP概念、短视频"
 
     def test_get_leader_returns_proxy_stocks(self, service, monkeypatch):
         """

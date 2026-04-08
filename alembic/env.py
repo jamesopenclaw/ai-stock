@@ -20,6 +20,9 @@ import app.models.review_snapshot  # noqa: F401
 import app.models.sector_scan_snapshot  # noqa: F401
 import app.models.stock_pool_snapshot  # noqa: F401
 import app.models.task_run  # noqa: F401
+import app.models.ths_concept_index  # noqa: F401
+import app.models.ths_concept_member  # noqa: F401
+import app.models.ths_concept_sync_state  # noqa: F401
 import app.models.account_setting  # noqa: F401
 import app.models.trading_account  # noqa: F401
 import app.models.user  # noqa: F401

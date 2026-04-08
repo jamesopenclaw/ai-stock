@@ -66,8 +66,8 @@ async def test_notify():
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="轻舟版交易系统定时任务")
-    parser.add_argument("--mode", choices=["daily", "sync", "analyze", "notify", "test"], default="daily",
-                      help="执行模式: daily(完整流程), sync(仅同步), analyze(仅分析), notify(仅推送), test(测试通知)")
+    parser.add_argument("--mode", choices=["daily", "sync", "analyze", "notify", "ths_sync", "test"], default="daily",
+                      help="执行模式: daily(完整流程), sync(仅同步), analyze(仅分析), notify(仅推送), ths_sync(同步 THS 概念成分), test(测试通知)")
     parser.add_argument("--date", type=str, default=None, help="交易日，格式YYYY-MM-DD")
     parser.add_argument("--time", type=str, default=None, help="定时任务执行时间，格式HH:MM")
 
@@ -91,6 +91,8 @@ def main():
         result = asyncio.run(run_mode_task("analyze", trade_date))
     elif args.mode == "notify":
         result = asyncio.run(run_mode_task("notify", trade_date))
+    elif args.mode == "ths_sync":
+        result = asyncio.run(run_mode_task("ths_sync", trade_date))
     else:
         result = {"status": "unknown_mode"}
 

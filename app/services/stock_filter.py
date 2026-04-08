@@ -293,13 +293,27 @@ class StockFilterService:
             holding_profile,
             global_trade_gate,
             review_bias_profile=review_bias_profile,
+            restrict_to_frontline=False,
+        )
+        visible_market_watch_candidates = self._build_market_watch_candidates(
+            scored_stocks,
+            holding_codes,
+            allowed_new_pool_profiles,
+            allowed_new_pool_sectors,
+            representative_codes,
+            execution_priority_codes,
+            account,
+            market_env,
+            holding_profile,
+            global_trade_gate,
+            review_bias_profile=review_bias_profile,
         )
         market_watch = self._select_visible_market_watch(
-            market_watch_candidates,
+            visible_market_watch_candidates,
             allowed_sector_names=allowed_new_pool_sectors,
         )
         account_executable = self.build_account_executable_pool(
-            market_watch_candidates,
+            visible_market_watch_candidates,
             holding_codes,
             account,
             market_env,
@@ -380,6 +394,7 @@ class StockFilterService:
         global_trade_gate: GlobalTradeGateOutput,
         *,
         review_bias_profile: Optional[Dict] = None,
+        restrict_to_frontline: bool = True,
     ) -> List[StockOutput]:
         """观察池候选全集：先回答“值得盯谁”，再由展示层截断。"""
         market_watch: List[StockOutput] = []
@@ -389,14 +404,25 @@ class StockFilterService:
             if not self._should_enter_market_watch(stock):
                 continue
             if not is_holding:
-                if not self._allows_new_pool_entry(stock, allowed_profiles, allowed_sector_names):
-                    continue
-                if (
-                    representative_codes
-                    and normalized_code not in representative_codes
-                    and normalized_code not in execution_priority_codes
-                ):
-                    continue
+                if restrict_to_frontline:
+                    if not self._allows_new_pool_entry(stock, allowed_profiles, allowed_sector_names):
+                        continue
+                    if (
+                        representative_codes
+                        and normalized_code not in representative_codes
+                        and normalized_code not in execution_priority_codes
+                    ):
+                        continue
+                else:
+                    if not self._is_new_pool_code_allowed(stock.ts_code):
+                        continue
+                    if (
+                        allowed_profiles
+                        and stock.sector_profile_tag not in allowed_profiles
+                        and not str(stock.direction_signal_tag or "").strip()
+                        and not str(stock.candidate_source_tag or "").strip()
+                    ):
+                        continue
 
             account_ok, account_reason, _, _ = self._evaluate_account_pool_candidate(
                 stock,
@@ -874,10 +900,53 @@ class StockFilterService:
                     if name in candidate_names
                 }
             )
-        return {
+        visible_names = {
             name for name in candidate_names
             if name in available_names
         }
+        if visible_names:
+            return visible_names
+
+        # 雷达模式下，主线榜前排可能是概念名，而实时候选暂时只有行业名。
+        # 这时不应把 allowed_sector_names 直接收成空集，而是退回到候选里实际命中的 A/B 主线名称。
+        fallback_scope = set()
+        if SectorProfileTag.A_MAINLINE in allowed_profiles:
+            fallback_scope.update(
+                _visible_names(getattr(sector_scan, "mainline_sectors", []), 50)
+            )
+        if SectorProfileTag.B_SUB_MAINLINE in allowed_profiles:
+            fallback_scope.update(
+                _visible_names(getattr(sector_scan, "sub_mainline_sectors", []), 20)
+            )
+
+        fallback_names: List[str] = []
+        ranked_fallback_stocks = sorted(
+            [
+                stock for stock in scored_stocks
+                if normalize_ts_code(stock.ts_code) not in holding_codes
+                and self._is_new_pool_code_allowed(stock.ts_code)
+                and stock.sector_profile_tag in allowed_profiles
+            ],
+            key=lambda stock: (
+                float(stock.market_strength_score or 0),
+                float(stock.stock_score or 0),
+                float(stock.execution_opportunity_score or 0),
+            ),
+            reverse=True,
+        )
+        target_count = max(3, min(5, len(candidate_names) or 5))
+        for stock in ranked_fallback_stocks:
+            matched_names = [
+                name for name in [str(stock.sector_name or "").strip(), *self._stock_sector_candidates(stock)]
+                if name and (not fallback_scope or name in fallback_scope)
+            ]
+            for name in matched_names:
+                if name not in fallback_names:
+                    fallback_names.append(name)
+            if len(fallback_names) >= target_count:
+                break
+
+        return set(fallback_names)
 
     def _select_strengthening_sector_names(
         self,

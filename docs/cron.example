@@ -10,8 +10,12 @@
 # 每日 16:40 执行分析并推送
 40 16 * * 1-5 cd /path/to/ai-stock && /usr/bin/python3 -m app.tasks.main --mode daily --date $(date +\%Y-\%m-\%d) >> /var/log/ai-stock-daily.log 2>&1
 
+# 每日 19:10 同步同花顺概念板块成分到本地库
+10 19 * * 1-5 cd /path/to/ai-stock && /usr/bin/python3 -m app.tasks.main --mode ths_sync --date $(date +\%Y-\%m-\%d) >> /var/log/ai-stock-ths-sync.log 2>&1
+
 # 说明：
 # - 仅在工作日(周一到周五)执行
 # - 16:30 同步数据
 # - 16:40 执行分析并推送到企业微信
+# - 19:10 收盘后刷新同花顺概念板块本地缓存
 # - 日志文件位于 /var/log/ai-stock-*.log

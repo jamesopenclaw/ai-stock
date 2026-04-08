@@ -177,7 +177,10 @@
                 @click="goToSectors(item.name)"
               >
                 <div class="direction-card-top">
-                  <strong>{{ item.name }}</strong>
+                  <div class="direction-card-title-group">
+                    <strong>{{ item.name }}</strong>
+                    <span v-if="item.subtitle" class="direction-card-subtitle">{{ item.subtitle }}</span>
+                  </div>
                   <span :class="['direction-card-change', pctClass(item.changePct)]">
                     {{ formatSignedPct(item.changePct) }}
                   </span>
@@ -559,6 +562,10 @@
                 <div class="section-kicker">模块 B</div>
                 <div class="section-title">市场最强观察池</div>
                 <div class="priority-panel-desc">先看市场在围绕哪些方向交易，再决定哪些票值得继续盯。</div>
+                <div v-if="isRadarMode" class="priority-panel-meta">
+                  前排代表 {{ marketPool.length }} 只
+                  <span v-if="marketWatchCandidateCount"> / 候选全集 {{ marketWatchCandidateCount }} 只</span>
+                </div>
               </div>
               <el-button text type="primary" @click="activateTab('market', { scroll: true })">查看详细清单</el-button>
             </div>
@@ -584,6 +591,33 @@
                   </div>
                 </div>
               </section>
+            </div>
+            <div v-if="showRadarWatchExpansion" class="watch-candidate-panel">
+              <div class="watch-candidate-head">
+                <div>
+                  <div class="watch-candidate-title">候选补充</div>
+                  <div class="watch-candidate-desc">这些票还在观察候选全集里，适合扩展盯盘范围，但不替代前排代表票。</div>
+                </div>
+                <el-button text type="primary" @click="watchCandidatesExpanded = !watchCandidatesExpanded">
+                  {{ watchCandidatesExpanded ? '收起候选' : `展开候选（还有 ${marketRadarExtraCandidates.length} 只）` }}
+                </el-button>
+              </div>
+              <div class="watch-candidate-grid">
+                <article v-for="stock in marketRadarExtraVisible" :key="stock.ts_code" class="watch-candidate-card">
+                  <div class="watch-candidate-card-top">
+                    <div>
+                      <strong>{{ stock.stock_name }}</strong>
+                      <span>{{ stock.ts_code }}</span>
+                    </div>
+                    <em :class="pctClass(stock.change_pct)">{{ formatSignedPct(stock.change_pct) }}</em>
+                  </div>
+                  <div class="watch-candidate-card-meta">{{ stock.sector_name || '无板块信息' }} / {{ stock.candidate_source_tag || '候选补充' }}</div>
+                  <div class="watch-candidate-card-copy">{{ watchKeyLine(stock) }}</div>
+                  <div class="stock-inline-actions">
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                  </div>
+                </article>
+              </div>
             </div>
           </article>
 
@@ -754,6 +788,68 @@
                 </div>
               </article>
             </div>
+            <section v-if="showRadarWatchExpansion" class="watch-candidate-detail-panel">
+              <div class="watch-candidate-head">
+                <div>
+                  <div class="watch-candidate-title">观察候选展开区</div>
+                  <div class="watch-candidate-desc">代表票之外的候选补充，适合扩展盯盘范围，不直接等同于前排优先级。</div>
+                </div>
+                <div class="watch-candidate-summary">
+                  候选全集 {{ marketWatchCandidateCount }} 只 / 当前可见代表票 {{ marketPool.length }} 只
+                </div>
+              </div>
+              <div class="signal-grid signal-grid-candidate">
+                <article
+                  v-for="stock in marketRadarExtraVisible"
+                  :key="`extra-${stock.ts_code}`"
+                  :class="['signal-card', 'signal-card-market', 'signal-card-candidate', { 'signal-card-focused': matchesFocusSector(stock) }]"
+                >
+                  <div class="signal-card-header">
+                    <div>
+                      <div class="signal-stock">{{ stock.stock_name }}</div>
+                      <div class="signal-code">{{ stock.ts_code }}</div>
+                    </div>
+                    <div class="signal-badges">
+                      <el-tag size="small" type="info">候选补充</el-tag>
+                      <el-tag v-if="stock.direction_signal_tag" size="small" type="warning">
+                        {{ stock.direction_signal_tag }}
+                      </el-tag>
+                      <el-tag v-if="stock.representative_role_tag" size="small" type="danger">
+                        {{ stock.representative_role_tag }}
+                      </el-tag>
+                    </div>
+                  </div>
+                  <div class="signal-meta">
+                    <span>{{ stock.sector_name || '无板块信息' }}</span>
+                    <span>{{ stock.candidate_source_tag || '候选补充' }}</span>
+                  </div>
+                  <div class="signal-intent signal-intent-market">
+                    {{ marketActionLine(stock) }}
+                  </div>
+                  <div class="decision-section">
+                    <div class="decision-card">
+                      <div class="decision-title">观察理由</div>
+                      <div class="decision-copy">{{ watchKeyLine(stock) }}</div>
+                    </div>
+                    <div class="decision-card">
+                      <div class="decision-title">暂不排前</div>
+                      <div class="decision-copy">{{ watchOnlyReasonLine(stock) }}</div>
+                    </div>
+                  </div>
+                  <div class="signal-footer">
+                    <span>先扩展盯盘，不直接上升为前排代表票。</span>
+                    <div class="footer-actions">
+                      <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <div v-if="marketRadarHiddenCount > 0" class="watch-candidate-more">
+                <el-button text type="primary" @click="watchCandidatesExpanded = true">
+                  还有 {{ marketRadarHiddenCount }} 只候选未展开
+                </el-button>
+              </div>
+            </section>
           </el-tab-pane>
 
           <el-tab-pane name="account">
@@ -1106,6 +1202,8 @@ const displayDate = ref('')
 const detailCardRef = ref(null)
 const poolsData = ref({
   market_watch_pool: [],
+  market_watch_candidates: [],
+  market_watch_candidate_count: 0,
   account_executable_pool: [],
   holding_process_pool: [],
   resolved_trade_date: '',
@@ -1138,6 +1236,7 @@ const poolMode = ref(String(route.query.mode || 'stable').trim() === 'radar' ? '
 let refreshPollTimer = null
 let radarAutoRefreshTimer = null
 const waitingForRefreshResult = ref(false)
+const watchCandidatesExpanded = ref(false)
 
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
@@ -1156,27 +1255,44 @@ const poolsFreshnessItems = computed(() => [
   },
   {
     label: '候选口径',
-    value: poolsData.value.resolved_trade_date
-      ? (poolsData.value.resolved_trade_date === displayDate.value
-          ? '当日候选'
-          : `回退到 ${poolsData.value.resolved_trade_date}`)
-      : '待加载',
-    tone: poolsData.value.resolved_trade_date === displayDate.value ? 'strong' : 'warn',
+    value: poolsData.value.stale_snapshot && poolsData.value.refresh_in_progress && poolsData.value.resolved_trade_date
+      ? `旧快照 ${poolsData.value.resolved_trade_date}（后台刷新中）`
+      : (poolsData.value.candidate_data_status && poolsData.value.candidate_data_status !== 'ok'
+          ? '当日候选异常'
+          : (poolsData.value.resolved_trade_date
+              ? (poolsData.value.resolved_trade_date === displayDate.value
+                  ? '当日候选'
+                  : `回退到 ${poolsData.value.resolved_trade_date}`)
+              : '待加载')),
+    tone: (poolsData.value.stale_snapshot && poolsData.value.refresh_in_progress)
+      || (poolsData.value.candidate_data_status && poolsData.value.candidate_data_status !== 'ok')
+      || poolsData.value.resolved_trade_date !== displayDate.value
+      ? 'warn'
+      : 'strong',
   },
   {
     label: '板块口径',
-    value: poolsData.value.sector_scan_resolved_trade_date
-      ? (poolsData.value.sector_scan_resolved_trade_date === displayDate.value
-          ? '当日扫描'
-          : `回退到 ${poolsData.value.sector_scan_resolved_trade_date}`)
-      : '待加载',
-    tone: poolsData.value.sector_scan_resolved_trade_date === displayDate.value ? 'strong' : 'warn',
+    value: poolsData.value.stale_snapshot && poolsData.value.refresh_in_progress && poolsData.value.sector_scan_resolved_trade_date
+      ? `旧快照 ${poolsData.value.sector_scan_resolved_trade_date}（后台刷新中）`
+      : (poolsData.value.sector_scan_resolved_trade_date
+          ? (poolsData.value.sector_scan_resolved_trade_date === displayDate.value
+              ? '当日扫描'
+              : `回退到 ${poolsData.value.sector_scan_resolved_trade_date}`)
+          : '待加载'),
+    tone: ((poolsData.value.stale_snapshot && poolsData.value.refresh_in_progress)
+      || poolsData.value.sector_scan_resolved_trade_date !== displayDate.value)
+      ? 'warn'
+      : 'strong',
   },
 ])
 const poolsFreshnessNote = computed(() => (
   isRadarMode.value
     ? '实时雷达适合盯盘，但看到异动后仍要回买点或卖点页确认触发条件。'
-    : '稳定模式优先看最近稳定结论，更适合盘前和盘后判断。'
+    : (
+        poolsData.value.snapshot_status_message
+        || poolsData.value.candidate_data_message
+        || '稳定模式优先看最近稳定结论，更适合盘前和盘后判断。'
+      )
 ))
 const buyAnalysisTradeDate = computed(() => (
   isRadarMode.value
@@ -1185,6 +1301,9 @@ const buyAnalysisTradeDate = computed(() => (
 ))
 
 const marketCount = computed(() => poolsData.value.market_watch_pool?.length || 0)
+const marketWatchCandidateCount = computed(() => (
+  Number(poolsData.value.market_watch_candidate_count || 0) || (poolsData.value.market_watch_candidates?.length || 0)
+))
 const accountCount = computed(() => poolsData.value.account_executable_pool?.length || 0)
 const holdingCount = computed(() => poolsData.value.holding_process_pool?.length || 0)
 const globalTradeGate = computed(() => poolsData.value.global_trade_gate || {
@@ -1296,6 +1415,16 @@ const matchesReviewBucket = (stock) => {
 const applyPoolFilters = (rows = []) => sortByFocusSector(rows).filter(matchesReviewBucket)
 
 const marketPool = computed(() => applyPoolFilters(poolsData.value.market_watch_pool || []))
+const marketWatchCandidates = computed(() => applyPoolFilters(poolsData.value.market_watch_candidates || []))
+const marketVisibleCodeSet = computed(() => new Set((marketPool.value || []).map((stock) => String(stock.ts_code || '').trim())))
+const marketRadarExtraCandidates = computed(() => (
+  marketWatchCandidates.value.filter((stock) => !marketVisibleCodeSet.value.has(String(stock.ts_code || '').trim()))
+))
+const marketRadarExtraVisible = computed(() => (
+  watchCandidatesExpanded.value ? marketRadarExtraCandidates.value : marketRadarExtraCandidates.value.slice(0, 6)
+))
+const marketRadarHiddenCount = computed(() => Math.max(0, marketRadarExtraCandidates.value.length - marketRadarExtraVisible.value.length))
+const showRadarWatchExpansion = computed(() => isRadarMode.value && marketRadarExtraCandidates.value.length > 0)
 const accountPool = computed(() => applyPoolFilters(poolsData.value.account_executable_pool || []).sort(compareAccountExecutionPriority))
 const focusMatches = computed(() => ({
   market: (poolsData.value.market_watch_pool || []).filter((stock) => matchesFocusSector(stock)).length,
@@ -1416,6 +1545,7 @@ const primaryDirectionItems = computed(() => summarizedMainlineSectors.value.map
   mainlineTag: directionMainlineLabel(sector),
   tier: String(sector.sector_tier || '').trim(),
   actionHint: String(sector.sector_action_hint || '').trim(),
+  subtitle: String(sector.sector_news_summary || '').trim(),
   reason: sector.sector_summary_reason || sector.sector_rotation_reason || sector.sector_comment || '先盯联动是否延续，再决定要不要往执行层下钻。',
 })))
 
@@ -2116,6 +2246,8 @@ const loadData = async (options = {}) => {
     const payload = res.data.data || {
       global_trade_gate: null,
       market_watch_pool: [],
+      market_watch_candidates: [],
+      market_watch_candidate_count: 0,
       account_executable_pool: [],
       holding_process_pool: [],
       resolved_trade_date: '',
@@ -2127,11 +2259,17 @@ const loadData = async (options = {}) => {
       refresh_in_progress: false,
       refresh_requested: false,
       stale_snapshot: false,
+      candidate_data_status: '',
+      candidate_data_message: '',
+      snapshot_status_message: '',
       mode: poolMode.value,
       is_realtime: poolMode.value === 'radar',
       radar_generated_at: '',
     }
     poolsData.value = payload
+    if (!isRadarMode.value) {
+      watchCandidatesExpanded.value = false
+    }
     activeTab.value = resolveDefaultTab()
     if (payload.refresh_in_progress) {
       scheduleRefreshPolling()
@@ -2534,14 +2672,25 @@ onUnmounted(() => {
 .direction-card-top {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 10px;
+}
+
+.direction-card-title-group {
+  display: grid;
+  gap: 4px;
 }
 
 .direction-card-top strong {
   font-size: 16px;
   font-weight: 700;
   color: #fff;
+}
+
+.direction-card-subtitle {
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(167, 206, 255, 0.84);
 }
 
 .direction-card-change {
@@ -3082,6 +3231,13 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.76);
 }
 
+.priority-panel-meta {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.62);
+}
+
 .watch-group-grid,
 .trend-preview-grid {
   display: grid;
@@ -3127,6 +3283,96 @@ onUnmounted(() => {
   line-height: 1.6;
   color: var(--color-text-sec);
   font-style: normal;
+}
+
+.watch-candidate-panel,
+.watch-candidate-detail-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(126, 171, 255, 0.12);
+  background:
+    radial-gradient(circle at top right, rgba(86, 145, 255, 0.12), transparent 36%),
+    rgba(255, 255, 255, 0.028);
+}
+
+.watch-candidate-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.watch-candidate-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.watch-candidate-desc,
+.watch-candidate-summary {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.watch-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.watch-candidate-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.watch-candidate-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.watch-candidate-card-top strong {
+  display: block;
+  font-size: 14px;
+  color: #fff;
+}
+
+.watch-candidate-card-top span,
+.watch-candidate-card-meta,
+.watch-candidate-card-copy {
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.watch-candidate-card-top em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.signal-grid-candidate {
+  margin-top: 0;
+}
+
+.signal-card-candidate {
+  box-shadow: inset 0 0 0 1px rgba(126, 171, 255, 0.08);
+}
+
+.watch-candidate-more {
+  display: flex;
+  justify-content: center;
 }
 
 .stock-inline-actions {
@@ -3536,7 +3782,8 @@ onUnmounted(() => {
   }
 
   .decision-support-grid,
-  .focus-hit-inline-grid {
+  .focus-hit-inline-grid,
+  .watch-candidate-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -3553,7 +3800,8 @@ onUnmounted(() => {
   .watch-group-grid,
   .trend-preview-grid,
   .decision-support-grid,
-  .top-focus-item {
+  .top-focus-item,
+  .watch-candidate-grid {
     grid-template-columns: 1fr;
   }
 

@@ -1,6 +1,7 @@
 """
 Tushare 数据客户端
 """
+import asyncio
 import copy
 import json
 import os
@@ -65,9 +66,13 @@ class TushareClient:
     HOT_SECTOR_CACHE_TTL_SECONDS = 30
     STOCK_DETAIL_INTRADAY_CACHE_TTL_SECONDS = 20
     STOCK_DETAIL_HISTORY_CACHE_TTL_SECONDS = 6 * 60 * 60
+    STOCK_DETAIL_QUOTA_COOLDOWN_SECONDS = 15 * 60
     STOCK_BASIC_CACHE_TTL_SECONDS = 6 * 60 * 60
     EXPANDED_STOCK_LIST_CACHE_TTL_SECONDS = 5 * 60
     TRADE_DATE_RESOLUTION_CACHE_TTL_SECONDS = 6 * 60 * 60
+    DAILY_API_INTRADAY_CACHE_TTL_SECONDS = 60
+    DAILY_API_HISTORY_CACHE_TTL_SECONDS = 6 * 60 * 60
+    LOCAL_THS_SNAPSHOT_RELOAD_COOLDOWN_SECONDS = 30
 
     def __init__(self, token: Optional[str] = None):
         self.token = token or settings.tushare_token
@@ -99,6 +104,10 @@ class TushareClient:
             "mapping": {},
         }
         self._stock_detail_cache = {}
+        self._stock_detail_quota_state = {
+            "limited_until": 0.0,
+            "message": "",
+        }
         self._stock_basic_snapshot_cache = {
             "fetched_at": 0.0,
             "mapping": {},
@@ -109,8 +118,20 @@ class TushareClient:
             "mapping": {},
         }
         self._ths_member_by_stock_cache = {}
+        self._local_ths_concept_snapshot = {
+            "loaded": False,
+            "loaded_at": 0.0,
+            "sync_trade_date": "",
+            "index_map": {},
+            "stock_to_codes": {},
+        }
+        self._local_ths_concept_snapshot_lock = threading.Lock()
         self._expanded_stock_list_cache = {}
         self._trade_date_resolution_cache = {}
+        self._daily_api_cache = {}
+        self._daily_basic_api_cache = {}
+        self._index_daily_api_cache = {}
+        self._realtime_quote_cache = {}
 
     def _now_sh(self) -> datetime:
         """获取上海时区当前时间。"""
@@ -586,6 +607,500 @@ class TushareClient:
             else self.STOCK_DETAIL_HISTORY_CACHE_TTL_SECONDS
         )
 
+    def _log_tushare_api_call(
+        self,
+        api_name: str,
+        *,
+        trade_date: Optional[str] = None,
+        extra: Optional[Dict[str, object]] = None,
+    ) -> None:
+        compact_trade_date = str(trade_date or "").replace("-", "").strip()[:8] or "-"
+        extra = extra or {}
+        extra_parts = [
+            f"{key}={value}"
+            for key, value in extra.items()
+            if value not in (None, "", [])
+        ]
+        extra_text = f" {' '.join(extra_parts)}" if extra_parts else ""
+        logger.info(
+            "Tushare 调用 api={} trade_date=<yellow>【{}】</yellow>{}",
+            api_name,
+            compact_trade_date,
+            extra_text,
+        )
+
+    def _call_pro_trade_cal(
+        self,
+        *,
+        exchange: str,
+        start_date: str,
+        end_date: str,
+        fields: str,
+    ):
+        self._log_tushare_api_call(
+            "pro.trade_cal",
+            trade_date=end_date,
+            extra={"exchange": exchange, "start_date": start_date, "end_date": end_date},
+        )
+        return self.pro.trade_cal(
+            exchange=exchange,
+            start_date=start_date,
+            end_date=end_date,
+            fields=fields,
+        )
+
+    def _call_pro_stock_basic(
+        self,
+        *,
+        ts_code: Optional[str] = None,
+        fields: Optional[str] = None,
+    ):
+        self._log_tushare_api_call(
+            "pro.stock_basic",
+            extra={"ts_code": normalize_ts_code(ts_code or ""), "fields": fields},
+        )
+        if fields is None:
+            return self.pro.stock_basic(ts_code=ts_code)
+        return self.pro.stock_basic(ts_code=ts_code, fields=fields)
+
+    def _call_pro_limit_list_d(
+        self,
+        *,
+        trade_date: str,
+        limit_type: str,
+    ):
+        self._log_tushare_api_call(
+            "pro.limit_list_d",
+            trade_date=trade_date,
+            extra={"limit_type": limit_type},
+        )
+        return self.pro.limit_list_d(
+            trade_date=trade_date,
+            limit_type=limit_type,
+        )
+
+    def _call_pro_ths_index(self, **kwargs):
+        self._log_tushare_api_call("pro.ths_index", extra=kwargs)
+        return self.pro.ths_index(**kwargs)
+
+    def _call_pro_ths_member(
+        self,
+        *,
+        ts_code: Optional[str] = None,
+        con_code: Optional[str] = None,
+    ):
+        normalized_ts_code = str(ts_code or "").strip()
+        normalized_con_code = normalize_ts_code(con_code or "")
+        self._log_tushare_api_call(
+            "pro.ths_member",
+            extra={"ts_code": normalized_ts_code, "con_code": normalized_con_code},
+        )
+        kwargs = {}
+        if normalized_ts_code:
+            kwargs["ts_code"] = normalized_ts_code
+        if normalized_con_code:
+            kwargs["con_code"] = normalized_con_code
+        return self.pro.ths_member(**kwargs)
+
+    def _call_pro_ths_daily(self, *, trade_date: str):
+        self._log_tushare_api_call("pro.ths_daily", trade_date=trade_date)
+        return self.pro.ths_daily(trade_date=trade_date)
+
+    def load_local_ths_concept_snapshot(
+        self,
+        *,
+        index_map: Dict[str, Dict[str, str]],
+        stock_to_codes: Dict[str, List[str]],
+        sync_trade_date: str = "",
+        loaded: bool = True,
+    ) -> None:
+        """装载数据库中的 THS 概念映射，供同步调用链直接读取。"""
+        self._local_ths_concept_snapshot = {
+            "loaded": bool(loaded),
+            "loaded_at": time_module.time(),
+            "sync_trade_date": str(sync_trade_date or "").replace("-", "").strip(),
+            "index_map": copy.deepcopy(index_map or {}),
+            "stock_to_codes": copy.deepcopy(stock_to_codes or {}),
+        }
+
+    def _run_coroutine_sync(self, coroutine):
+        """在同步调用链中安全执行异步数据库查询。"""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coroutine)
+
+        payload: Dict[str, object] = {}
+
+        def _runner() -> None:
+            try:
+                payload["result"] = asyncio.run(coroutine)
+            except Exception as exc:  # pragma: no cover - 线程分支由集成路径覆盖
+                payload["error"] = exc
+
+        worker = threading.Thread(target=_runner, daemon=True)
+        worker.start()
+        worker.join()
+        if "error" in payload:
+            raise payload["error"]  # type: ignore[misc]
+        return payload.get("result")
+
+    async def _load_local_ths_concept_snapshot_from_db_async(self) -> Optional[Dict[str, object]]:
+        """从数据库读取当前激活的 THS 概念快照。"""
+        from collections import defaultdict
+
+        from sqlalchemy import select
+
+        from app.core.database import async_session_factory
+        from app.models.ths_concept_index import ThsConceptIndex
+        from app.models.ths_concept_member import ThsConceptMember
+        from app.models.ths_concept_sync_state import ThsConceptSyncState
+
+        async with async_session_factory() as session:
+            state_result = await session.execute(
+                select(ThsConceptSyncState).where(ThsConceptSyncState.sync_key == "ths_concept")
+            )
+            state = state_result.scalar_one_or_none()
+            active_trade_date = str(getattr(state, "active_trade_date", "") or "").strip()
+            if not active_trade_date:
+                return None
+
+            index_result = await session.execute(
+                select(ThsConceptIndex).where(ThsConceptIndex.sync_trade_date == active_trade_date)
+            )
+            member_result = await session.execute(
+                select(ThsConceptMember).where(ThsConceptMember.sync_trade_date == active_trade_date)
+            )
+            index_rows = index_result.scalars().all()
+            member_rows = member_result.scalars().all()
+
+        index_map: Dict[str, Dict[str, str]] = {}
+        stock_to_codes: Dict[str, List[str]] = defaultdict(list)
+        for row in index_rows:
+            concept_code = str(row.ts_code or "").strip()
+            if not concept_code:
+                continue
+            index_map[concept_code] = {
+                "name": str(row.concept_name or "").strip(),
+                "type": str(row.ths_type or "").strip(),
+            }
+        for row in member_rows:
+            stock_code = normalize_ts_code(str(row.stock_code or "").strip())
+            concept_code = str(row.concept_code or "").strip()
+            if not stock_code or not concept_code:
+                continue
+            if concept_code not in stock_to_codes[stock_code]:
+                stock_to_codes[stock_code].append(concept_code)
+
+        if not index_map:
+            return None
+        return {
+            "sync_trade_date": active_trade_date,
+            "index_map": index_map,
+            "stock_to_codes": dict(stock_to_codes),
+        }
+
+    def _ensure_local_ths_concept_snapshot_loaded(self) -> bool:
+        """未装载时尝试从数据库懒加载本地 THS 概念快照。"""
+        local_snapshot = getattr(self, "_local_ths_concept_snapshot", None) or {}
+        if local_snapshot.get("loaded"):
+            return True
+
+        now_ts = time_module.time()
+        if (
+            now_ts - float(local_snapshot.get("loaded_at") or 0)
+            < self.LOCAL_THS_SNAPSHOT_RELOAD_COOLDOWN_SECONDS
+        ):
+            return False
+
+        lock = getattr(self, "_local_ths_concept_snapshot_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._local_ths_concept_snapshot_lock = lock
+
+        with lock:
+            local_snapshot = getattr(self, "_local_ths_concept_snapshot", None) or {}
+            if local_snapshot.get("loaded"):
+                return True
+            if (
+                now_ts - float(local_snapshot.get("loaded_at") or 0)
+                < self.LOCAL_THS_SNAPSHOT_RELOAD_COOLDOWN_SECONDS
+            ):
+                return False
+
+            try:
+                snapshot = self._run_coroutine_sync(self._load_local_ths_concept_snapshot_from_db_async())
+            except Exception as exc:
+                logger.warning("懒加载本地 THS 概念快照失败: {}", exc)
+                self.load_local_ths_concept_snapshot(
+                    index_map={},
+                    stock_to_codes={},
+                    sync_trade_date="",
+                    loaded=False,
+                )
+                return False
+
+            if not snapshot:
+                self.load_local_ths_concept_snapshot(
+                    index_map={},
+                    stock_to_codes={},
+                    sync_trade_date="",
+                    loaded=False,
+                )
+                return False
+
+            index_map = snapshot.get("index_map") or {}
+            stock_to_codes = snapshot.get("stock_to_codes") or {}
+            sync_trade_date = str(snapshot.get("sync_trade_date") or "").strip()
+            self.load_local_ths_concept_snapshot(
+                index_map=index_map,
+                stock_to_codes=stock_to_codes,
+                sync_trade_date=sync_trade_date,
+                loaded=bool(index_map),
+            )
+            logger.info(
+                "已懒加载本地 THS 概念快照 concepts={} stocks={} trade_date={}",
+                len(index_map),
+                len(stock_to_codes),
+                sync_trade_date or "-",
+            )
+            return bool(index_map)
+
+    def fetch_remote_ths_concept_snapshot(self, trade_date: str) -> Dict[str, object]:
+        """从 Tushare 全量抓取 THS 概念定义与成分。"""
+        compact_trade_date = str(trade_date or "").replace("-", "").strip()[:8]
+        if not compact_trade_date:
+            compact_trade_date = self._now_sh().strftime("%Y%m%d")
+        concept_rows = self.fetch_remote_ths_concept_index_rows()
+        member_rows = self.fetch_remote_ths_concept_member_rows(
+            [str(row.get("ts_code") or "").strip() for row in concept_rows]
+        )
+        return {
+            "sync_trade_date": compact_trade_date,
+            "concept_rows": concept_rows,
+            "member_rows": member_rows,
+        }
+
+    def fetch_remote_ths_concept_index_rows(self) -> List[Dict[str, str]]:
+        """抓取 THS 概念定义列表。"""
+        if not getattr(self, "pro", None):
+            raise RuntimeError("Tushare 客户端未初始化，无法同步 THS 概念")
+        concept_rows: List[Dict[str, str]] = []
+        seen_concepts = set()
+        for ths_type in ("N", "TH"):
+            try:
+                df = self._call_pro_ths_index(exchange="A", type=ths_type)
+            except TypeError:
+                df = self._call_pro_ths_index(type=ths_type)
+            if df is None or df.empty:
+                continue
+            for _, row in df.iterrows():
+                concept_code = str(row.get("ts_code") or "").strip()
+                concept_name = str(row.get("name") or "").strip()
+                if not concept_code or not concept_name or concept_code in seen_concepts:
+                    continue
+                seen_concepts.add(concept_code)
+                concept_rows.append(
+                    {
+                        "ts_code": concept_code,
+                        "concept_name": concept_name,
+                        "ths_type": str(row.get("type") or ths_type).strip() or ths_type,
+                        "exchange": str(row.get("exchange") or "A").strip() or "A",
+                    }
+                )
+        return concept_rows
+
+    def fetch_remote_ths_concept_member_rows(self, concept_codes: List[str]) -> List[Dict[str, str]]:
+        """按概念代码列表抓取 THS 概念成分。"""
+        if not getattr(self, "pro", None):
+            raise RuntimeError("Tushare 客户端未初始化，无法同步 THS 概念")
+        member_rows: List[Dict[str, str]] = []
+        seen_members = set()
+        for concept_code in concept_codes:
+            normalized_concept_code = str(concept_code or "").strip()
+            if not normalized_concept_code:
+                continue
+            try:
+                df = self._call_pro_ths_member(ts_code=normalized_concept_code)
+            except TypeError:
+                continue
+            if df is None or df.empty:
+                continue
+            work = df.copy()
+            if "is_new" in work.columns:
+                work = work[work["is_new"].fillna("Y").astype(str).str.upper() == "Y"]
+            for _, row in work.iterrows():
+                stock_code = normalize_ts_code(str(row.get("con_code") or "").strip())
+                if not stock_code:
+                    continue
+                member_key = (normalized_concept_code, stock_code)
+                if member_key in seen_members:
+                    continue
+                seen_members.add(member_key)
+                member_rows.append(
+                    {
+                        "concept_code": normalized_concept_code,
+                        "stock_code": stock_code,
+                        "stock_name": str(row.get("con_name") or row.get("name") or "").strip(),
+                    }
+                )
+        return member_rows
+
+    def _call_ts_realtime_quote(self, ts_code: str, *, src: Optional[str] = None):
+        trade_date = self._now_sh().strftime("%Y%m%d")
+        self._log_tushare_api_call(
+            "ts.realtime_quote",
+            trade_date=trade_date,
+            extra={"src": src, "codes": ts_code},
+        )
+        return ts.realtime_quote(ts_code, src=src)
+
+    def _call_ts_realtime_list(self, *, src: str, page_count: Optional[int] = None):
+        trade_date = self._now_sh().strftime("%Y%m%d")
+        self._log_tushare_api_call(
+            "ts.realtime_list",
+            trade_date=trade_date,
+            extra={"src": src, "page_count": page_count},
+        )
+        return ts.realtime_list(src=src, page_count=page_count)
+
+    def _tabular_api_cache_ttl(self, trade_date: str) -> int:
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        if self._should_use_market_snapshot(compact_trade_date) or self._should_use_realtime_quote(compact_trade_date):
+            return self.DAILY_API_INTRADAY_CACHE_TTL_SECONDS
+        return self.DAILY_API_HISTORY_CACHE_TTL_SECONDS
+
+    def _get_cached_tabular_api_payload(self, cache_name: str, cache_key: str):
+        cache = getattr(self, cache_name, None)
+        if cache is None:
+            cache = {}
+            setattr(self, cache_name, cache)
+        entry = cache.get(cache_key)
+        if not entry:
+            return None
+        ttl = float(entry.get("ttl") or 0.0)
+        if ttl <= 0 or time_module.monotonic() - float(entry.get("fetched_at") or 0.0) > ttl:
+            cache.pop(cache_key, None)
+            return None
+        payload = entry.get("payload")
+        return copy.deepcopy(payload)
+
+    def _cache_tabular_api_payload(
+        self,
+        cache_name: str,
+        cache_key: str,
+        payload,
+        *,
+        trade_date: str,
+    ):
+        cache = getattr(self, cache_name, None)
+        if cache is None:
+            cache = {}
+            setattr(self, cache_name, cache)
+        cache[cache_key] = {
+            "fetched_at": time_module.monotonic(),
+            "ttl": self._tabular_api_cache_ttl(trade_date),
+            "payload": copy.deepcopy(payload),
+        }
+        return copy.deepcopy(payload)
+
+    def _cached_pro_daily(
+        self,
+        *,
+        ts_code: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        trade_date: Optional[str] = None,
+    ):
+        cache_trade_date = trade_date or end_date or start_date or ""
+        cache_key = f"{normalize_ts_code(ts_code or '')}:{start_date or ''}:{end_date or ''}:{trade_date or ''}"
+        cached = self._get_cached_tabular_api_payload("_daily_api_cache", cache_key)
+        if cached is not None:
+            return cached
+        self._log_tushare_api_call(
+            "pro.daily",
+            trade_date=cache_trade_date,
+            extra={"ts_code": normalize_ts_code(ts_code or ""), "start_date": start_date, "end_date": end_date},
+        )
+        df = self.pro.daily(
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+            trade_date=trade_date,
+        )
+        return self._cache_tabular_api_payload(
+            "_daily_api_cache",
+            cache_key,
+            df,
+            trade_date=cache_trade_date,
+        )
+
+    def _cached_pro_daily_basic(
+        self,
+        *,
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        fields: Optional[str] = None,
+    ):
+        cache_trade_date = trade_date or ""
+        cache_key = f"{normalize_ts_code(ts_code or '')}:{trade_date or ''}:{fields or ''}"
+        cached = self._get_cached_tabular_api_payload("_daily_basic_api_cache", cache_key)
+        if cached is not None:
+            return cached
+        daily_basic = getattr(self.pro, "daily_basic", None)
+        if not callable(daily_basic):
+            return None
+        self._log_tushare_api_call(
+            "pro.daily_basic",
+            trade_date=cache_trade_date,
+            extra={"ts_code": normalize_ts_code(ts_code or ""), "fields": fields},
+        )
+        try:
+            df = daily_basic(
+                ts_code=ts_code,
+                trade_date=trade_date,
+                fields=fields,
+            )
+        except TypeError:
+            df = daily_basic(
+                ts_code=ts_code,
+                trade_date=trade_date,
+            )
+        return self._cache_tabular_api_payload(
+            "_daily_basic_api_cache",
+            cache_key,
+            df,
+            trade_date=cache_trade_date,
+        )
+
+    def _cached_pro_index_daily(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+    ):
+        cache_key = f"{normalize_ts_code(ts_code)}:{start_date}:{end_date}"
+        cached = self._get_cached_tabular_api_payload("_index_daily_api_cache", cache_key)
+        if cached is not None:
+            return cached
+        self._log_tushare_api_call(
+            "pro.index_daily",
+            trade_date=end_date,
+            extra={"ts_code": normalize_ts_code(ts_code), "start_date": start_date, "end_date": end_date},
+        )
+        df = self.pro.index_daily(
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return self._cache_tabular_api_payload(
+            "_index_daily_api_cache",
+            cache_key,
+            df,
+            trade_date=end_date,
+        )
+
     def _get_cached_stock_detail(self, ts_code: str, trade_date: str) -> Optional[Dict]:
         cache = getattr(self, "_stock_detail_cache", None)
         if cache is None:
@@ -627,6 +1142,99 @@ class TushareClient:
         if compact_resolved_trade_date and compact_resolved_trade_date != compact_request_trade_date:
             cache[f"{normalize_ts_code(ts_code)}:{compact_resolved_trade_date}"] = entry
         return copy.deepcopy(payload)
+
+    def _is_tushare_quota_error(self, exc: Exception) -> bool:
+        message = str(exc or "")
+        return "每天最多访问该接口10000次" in message or "doc_id=108" in message
+
+    def _build_data_error_meta(self, exc: Exception) -> Dict[str, str]:
+        message = str(exc or "").strip()
+        if "每分钟最多访问该接口500次" in message:
+            return {
+                "data_status": "rate_limited",
+                "data_message": "候选链路触发 Tushare 分钟频控，当前结果可能不完整。",
+            }
+        if self._is_tushare_quota_error(exc):
+            return {
+                "data_status": "quota_limited",
+                "data_message": "候选链路触发 Tushare 配额限制，当前结果可能不完整。",
+            }
+        return {
+            "data_status": "error",
+            "data_message": f"候选链路异常：{message or '未知错误'}",
+        }
+
+    def _is_stock_detail_quota_limited(self) -> bool:
+        state = getattr(self, "_stock_detail_quota_state", None) or {}
+        return time_module.monotonic() < float(state.get("limited_until") or 0.0)
+
+    def _mark_stock_detail_quota_limited(self, exc: Exception) -> None:
+        state = getattr(self, "_stock_detail_quota_state", None)
+        if state is None:
+            state = {"limited_until": 0.0, "message": ""}
+            self._stock_detail_quota_state = state
+        state["limited_until"] = time_module.monotonic() + self.STOCK_DETAIL_QUOTA_COOLDOWN_SECONDS
+        state["message"] = str(exc or "")
+
+    def _clear_stock_detail_quota_limited(self) -> None:
+        state = getattr(self, "_stock_detail_quota_state", None)
+        if state is None:
+            return
+        state["limited_until"] = 0.0
+        state["message"] = ""
+
+    def _empty_stock_detail(
+        self,
+        ts_code: str,
+        *,
+        stock_name: Optional[str] = None,
+        sector_name: Optional[str] = None,
+        data_source: str = "lightweight_fallback",
+    ) -> Dict:
+        normalized_code = normalize_ts_code(ts_code)
+        return {
+            "ts_code": normalized_code,
+            "stock_name": str(stock_name or normalized_code),
+            "sector_name": str(sector_name or "未知") or "未知",
+            "close": 0.0,
+            "change_pct": 0.0,
+            "turnover_rate": 0.0,
+            "amount": 0,
+            "vol_ratio": 1.0,
+            "high": 0.0,
+            "low": 0.0,
+            "open": 0.0,
+            "pre_close": 0.0,
+            "volume": None,
+            "avg_price": None,
+            "intraday_volume_ratio": None,
+            "quote_time": None,
+            "data_source": data_source,
+            "concept_names": [],
+        }
+
+    def _build_lightweight_stock_detail(
+        self,
+        ts_code: str,
+        trade_date: str,
+        *,
+        stock_meta_map: Optional[Dict[str, Dict[str, str]]] = None,
+        data_source: str = "lightweight_fallback",
+    ) -> Dict:
+        normalized_code = normalize_ts_code(ts_code)
+        meta_map = stock_meta_map if stock_meta_map is not None else (self._get_stock_basic_snapshot_map() or {})
+        stock_meta = meta_map.get(normalized_code) or {}
+        detail = self._empty_stock_detail(
+            normalized_code,
+            stock_name=str(stock_meta.get("stock_name") or normalized_code),
+            sector_name=str(stock_meta.get("industry") or "未知") or "未知",
+            data_source=data_source,
+        )
+        return self._overlay_realtime_detail_with_options(
+            detail,
+            trade_date,
+            allow_intraday_volume_ratio=False,
+        )
 
     def _fetch_public_page_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
         """通过公开网页首屏埋点补充盘中涨跌停统计。"""
@@ -844,7 +1452,7 @@ class TushareClient:
     def _fetch_public_aggregate_stock_rows(self, trade_date: str) -> Optional[Dict[str, object]]:
         """通过东财公开聚合接口获取全市场实时个股行级数据。"""
         compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
-        if not self._should_use_realtime_quote(compact_trade_date):
+        if not self._should_use_market_snapshot(compact_trade_date):
             return None
         if self._is_realtime_source_in_cooldown("aggregate_em"):
             return None
@@ -906,6 +1514,17 @@ class TushareClient:
         if not normalized_codes:
             return {}
 
+        cache = getattr(self, "_realtime_quote_cache", None)
+        if cache is None:
+            cache = {}
+            self._realtime_quote_cache = cache
+
+        cache_key = ",".join(normalized_codes)
+        cached = cache.get(cache_key)
+        now_ts = time_module.monotonic()
+        if cached and now_ts - float(cached.get("fetched_at") or 0.0) <= self.REALTIME_MARKET_CACHE_TTL_SECONDS:
+            return copy.deepcopy(cached.get("payload") or {})
+
         quote_map: Dict[str, Dict] = {}
         for idx in range(0, len(normalized_codes), self.REALTIME_CHUNK_SIZE):
             chunk = normalized_codes[idx: idx + self.REALTIME_CHUNK_SIZE]
@@ -914,7 +1533,7 @@ class TushareClient:
             last_error = None
             for source in self._iter_realtime_sources():
                 try:
-                    df = ts.realtime_quote(
+                    df = self._call_ts_realtime_quote(
                         ",".join(chunk),
                         src=source,
                     )
@@ -967,6 +1586,10 @@ class TushareClient:
                     "data_source": f"realtime_{used_source or self.REALTIME_SOURCE}",
                 }
 
+        cache[cache_key] = {
+            "fetched_at": now_ts,
+            "payload": copy.deepcopy(quote_map),
+        }
         return quote_map
 
     def _apply_realtime_overlay_to_stocks(
@@ -1052,7 +1675,10 @@ class TushareClient:
             source_sample_total = None
             for _ in range(2):
                 try:
-                    df = ts.realtime_list(src=source, page_count=1 if source == "sina" else None)
+                    df = self._call_ts_realtime_list(
+                        src=source,
+                        page_count=1 if source == "sina" else None,
+                    )
                     if df is not None and not df.empty:
                         total = len(df)
                         if total >= self.REALTIME_MARKET_MIN_TOTAL:
@@ -1119,7 +1745,10 @@ class TushareClient:
 
     def _fetch_realtime_market_snapshot(self, trade_date: str) -> Optional[Dict[str, object]]:
         """获取实时市场状态：新浪接口优先，网页/缓存次之，Tushare 扫描兜底。"""
-        if not self._should_use_market_snapshot(trade_date):
+        if not (
+            self._should_use_market_snapshot(trade_date)
+            or self._should_use_realtime_quote(trade_date)
+        ):
             return None
 
         lock = getattr(self, "_realtime_market_fetch_lock", None)
@@ -1320,11 +1949,11 @@ class TushareClient:
             from datetime import datetime, timedelta
             end_dt = datetime.strptime(trade_date, "%Y%m%d")
             start_dt = end_dt - timedelta(days=14)
-            cal_df = self.pro.trade_cal(
+            cal_df = self._call_pro_trade_cal(
                 exchange="SSE",
                 start_date=start_dt.strftime("%Y%m%d"),
                 end_date=trade_date,
-                fields="cal_date,is_open"
+                fields="cal_date,is_open",
             )
             if not cal_df.empty:
                 open_days = cal_df[cal_df["is_open"] == 1]["cal_date"]
@@ -1366,7 +1995,7 @@ class TushareClient:
 
             start_dt = datetime.strptime(trade_date, "%Y%m%d") + timedelta(days=1)
             end_dt = start_dt + timedelta(days=14)
-            cal_df = self.pro.trade_cal(
+            cal_df = self._call_pro_trade_cal(
                 exchange="SSE",
                 start_date=start_dt.strftime("%Y%m%d"),
                 end_date=end_dt.strftime("%Y%m%d"),
@@ -1404,7 +2033,7 @@ class TushareClient:
 
             start_dt = datetime.strptime(trade_date, "%Y%m%d") + timedelta(days=1)
             end_dt = start_dt + timedelta(days=20)
-            cal_df = self.pro.trade_cal(
+            cal_df = self._call_pro_trade_cal(
                 exchange="SSE",
                 start_date=start_dt.strftime("%Y%m%d"),
                 end_date=end_dt.strftime("%Y%m%d"),
@@ -1469,10 +2098,10 @@ class TushareClient:
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
                 result = []
                 for ts_code in index_codes:
-                    df = self.pro.index_daily(
+                    df = self._cached_pro_index_daily(
                         ts_code=ts_code,
                         start_date=data_trade_date,
-                        end_date=data_trade_date
+                        end_date=data_trade_date,
                     )
                     if df is None or df.empty:
                         continue
@@ -1587,11 +2216,11 @@ class TushareClient:
                 }
             effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
-                df_up = self.pro.limit_list_d(
+                df_up = self._call_pro_limit_list_d(
                     trade_date=data_trade_date,
                     limit_type='U',
                 )
-                df_down = self.pro.limit_list_d(
+                df_down = self._call_pro_limit_list_d(
                     trade_date=data_trade_date,
                     limit_type='D',
                 )
@@ -1668,7 +2297,7 @@ class TushareClient:
 
             end_dt = datetime.strptime(trade_date, "%Y%m%d")
             start_dt = end_dt - timedelta(days=20)
-            cal_df = self.pro.trade_cal(
+            cal_df = self._call_pro_trade_cal(
                 exchange="SSE",
                 start_date=start_dt.strftime("%Y%m%d"),
                 end_date=trade_date,
@@ -1700,9 +2329,9 @@ class TushareClient:
 
         try:
             try:
-                df = self.pro.stock_basic(fields="ts_code,name,industry")
+                df = self._call_pro_stock_basic(fields="ts_code,name,industry")
             except TypeError:
-                df = self.pro.stock_basic()
+                df = self._call_pro_stock_basic()
 
             if df is None or df.empty:
                 return dict(cache.get("mapping") or {}) if cache else {}
@@ -1893,7 +2522,7 @@ class TushareClient:
             )
             industry_map = self._get_stock_basic_industry_map()
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
-                df = self.pro.daily(trade_date=data_trade_date)
+                df = self._cached_pro_daily(trade_date=data_trade_date)
                 source_df = self._build_daily_sector_source_df(df, industry_map)
                 sectors = self._aggregate_sector_rows(
                     source_df,
@@ -1981,15 +2610,15 @@ class TushareClient:
                 }
             effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
-                sh_df = self.pro.index_daily(
+                sh_df = self._cached_pro_index_daily(
                     ts_code="000001.SH",
                     start_date=data_trade_date,
-                    end_date=data_trade_date
+                    end_date=data_trade_date,
                 )
-                sz_df = self.pro.index_daily(
+                sz_df = self._cached_pro_index_daily(
                     ts_code="399001.SZ",
                     start_date=data_trade_date,
-                    end_date=data_trade_date
+                    end_date=data_trade_date,
                 )
                 total = 0.0
                 if sh_df is not None and not sh_df.empty:
@@ -2075,7 +2704,7 @@ class TushareClient:
                 }
             effective_trade_date = self._resolve_eod_fallback_start_trade_date(trade_date)
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
-                df = self.pro.daily(trade_date=data_trade_date)
+                df = self._cached_pro_daily(trade_date=data_trade_date)
                 if df is None or df.empty:
                     logger.warning(f"daily 无数据（{data_trade_date}）")
                     continue
@@ -2175,6 +2804,11 @@ class TushareClient:
 
     def _get_ths_concept_index_map(self) -> Dict[str, Dict[str, str]]:
         """获取同花顺题材指数映射，并做进程内缓存。"""
+        self._ensure_local_ths_concept_snapshot_loaded()
+        local_snapshot = getattr(self, "_local_ths_concept_snapshot", None) or {}
+        if local_snapshot.get("loaded") and local_snapshot.get("index_map"):
+            return dict(local_snapshot.get("index_map") or {})
+
         cache = getattr(self, "_ths_concept_index_cache", None)
         now_ts = time_module.time()
         if (
@@ -2191,9 +2825,9 @@ class TushareClient:
             return {}
         for ths_type in ("N", "TH"):
             try:
-                df = ths_index(exchange="A", type=ths_type)
+                df = self._call_pro_ths_index(exchange="A", type=ths_type)
             except TypeError:
-                df = ths_index(type=ths_type)
+                df = self._call_pro_ths_index(type=ths_type)
             if df is None or df.empty:
                 continue
             for _, row in df.iterrows():
@@ -2219,6 +2853,11 @@ class TushareClient:
         if not normalized:
             return []
 
+        self._ensure_local_ths_concept_snapshot_loaded()
+        local_snapshot = getattr(self, "_local_ths_concept_snapshot", None) or {}
+        if local_snapshot.get("loaded"):
+            return list((local_snapshot.get("stock_to_codes") or {}).get(normalized) or [])
+
         cache = getattr(self, "_ths_member_by_stock_cache", None)
         if cache is None:
             cache = {}
@@ -2237,7 +2876,7 @@ class TushareClient:
             }
             return []
 
-        df = ths_member(con_code=normalized)
+        df = self._call_pro_ths_member(con_code=normalized)
         codes: List[str] = []
         if df is not None and not df.empty:
             work = df.copy()
@@ -2278,7 +2917,7 @@ class TushareClient:
         - 成交额与扩散度仍按涨停股聚合
         """
         try:
-            limitup_df = self.pro.limit_list_d(
+            limitup_df = self._call_pro_limit_list_d(
                 trade_date=trade_date,
                 limit_type="U",
             )
@@ -2360,7 +2999,7 @@ class TushareClient:
 
             concept_quote_map: Dict[str, Dict[str, float]] = {}
             try:
-                quote_df = self.pro.ths_daily(trade_date=trade_date)
+                quote_df = self._call_pro_ths_daily(trade_date=trade_date)
                 if quote_df is not None and not quote_df.empty and "ts_code" in quote_df.columns:
                     quote_df = quote_df.copy()
                     quote_df["ts_code"] = quote_df["ts_code"].astype(str).str.strip()
@@ -2419,7 +3058,7 @@ class TushareClient:
     def _get_concept_sectors_from_limitup_theme_with_meta(self, trade_date: str) -> Dict[str, object]:
         """按涨停板附带的 theme 字段聚合题材概念板块。"""
         try:
-            df = self.pro.limit_list_d(
+            df = self._call_pro_limit_list_d(
                 trade_date=trade_date,
                 limit_type="U",
             )
@@ -2540,7 +3179,7 @@ class TushareClient:
             }
 
         try:
-            df = self.pro.limit_list_d(
+            df = self._call_pro_limit_list_d(
                 trade_date=effective_trade_date,
                 limit_type="U",
             )
@@ -2870,7 +3509,7 @@ class TushareClient:
             else self.get_last_completed_trade_date(trade_date)
         )
         for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
-            df = self.pro.daily(trade_date=data_trade_date)
+            df = self._cached_pro_daily(trade_date=data_trade_date)
             if df is None or df.empty:
                 logger.warning(f"daily 个股数据为空（{data_trade_date}）")
                 continue
@@ -2904,15 +3543,10 @@ class TushareClient:
 
             stock_meta_map = self._get_stock_basic_snapshot_map()
             daily_basic_df = None
-            daily_basic = getattr(self.pro, "daily_basic", None)
-            if callable(daily_basic):
-                try:
-                    daily_basic_df = daily_basic(
-                        trade_date=effective_trade_date,
-                        fields="ts_code,turnover_rate,volume_ratio",
-                    )
-                except TypeError:
-                    daily_basic_df = daily_basic(trade_date=effective_trade_date)
+            daily_basic_df = self._cached_pro_daily_basic(
+                trade_date=effective_trade_date,
+                fields="ts_code,turnover_rate,volume_ratio",
+            )
 
             source_df = self._build_daily_stock_source_df(
                 df,
@@ -3147,7 +3781,7 @@ class TushareClient:
                     }
 
             # B: 涨停全量，题材覆盖 sector_name
-            df_up = self.pro.limit_list_d(
+            df_up = self._call_pro_limit_list_d(
                 trade_date=effective_trade_date,
                 limit_type="U",
             )
@@ -3209,15 +3843,19 @@ class TushareClient:
                 "rows": result,
                 "data_trade_date": effective_trade_date,
                 "used_mock": False,
+                "data_status": "ok",
+                "data_message": "",
             }
             self._cache_expanded_stock_list(cache_key, response, compact_trade_date, effective_trade_date)
             return copy.deepcopy(response)
         except Exception as e:
             logger.error(f"获取扩展个股列表失败: {e}")
+            error_meta = self._build_data_error_meta(e)
             result = {
                 "rows": [],
                 "data_trade_date": compact_trade_date,
                 "used_mock": False,
+                **error_meta,
             }
             self._cache_expanded_stock_list(cache_key, result, compact_trade_date, compact_trade_date)
             return result
@@ -3277,20 +3915,34 @@ class TushareClient:
         cached_detail = self._get_cached_stock_detail(ts_code, trade_date)
         if cached_detail is not None:
             return cached_detail
-        detail = self._mock_stock_detail(ts_code)
+
+        stock_meta_map = self._get_stock_basic_snapshot_map() if self.token else {}
+        detail = self._build_lightweight_stock_detail(
+            ts_code,
+            trade_date,
+            stock_meta_map=stock_meta_map,
+        )
 
         if not self.token:
             return self._cache_stock_detail(
                 ts_code,
                 trade_date,
-                self._overlay_realtime_detail(detail, trade_date),
+                detail,
+                resolved_trade_date=trade_date,
+            )
+
+        if self._is_stock_detail_quota_limited():
+            return self._cache_stock_detail(
+                ts_code,
+                trade_date,
+                detail,
                 resolved_trade_date=trade_date,
             )
 
         try:
             effective_trade_date = self._resolve_trade_date(trade_date)
 
-            stock_meta = (self._get_stock_basic_snapshot_map().get(ts_code) or {})
+            stock_meta = (stock_meta_map.get(ts_code) or {})
             if stock_meta:
                 detail["stock_name"] = str(
                     stock_meta.get("stock_name") or detail["stock_name"] or ts_code
@@ -3298,16 +3950,33 @@ class TushareClient:
                 detail["sector_name"] = str(
                     stock_meta.get("industry") or detail["sector_name"] or "未知"
                 )
-            detail["concept_names"] = self._get_ths_concept_names_for_stock(ts_code)
+            try:
+                detail["concept_names"] = self._get_ths_concept_names_for_stock(ts_code)
+            except Exception as e:
+                if self._is_tushare_quota_error(e):
+                    self._mark_stock_detail_quota_limited(e)
+                logger.debug(f"个股题材补全失败 {ts_code}: {e}")
+                detail["concept_names"] = []
 
             daily_basic = getattr(self.pro, "daily_basic", None)
 
             for data_trade_date in self._recent_open_dates(effective_trade_date, count=5):
-                df = self.pro.daily(
-                    ts_code=ts_code,
-                    start_date=data_trade_date,
-                    end_date=data_trade_date,
-                )
+                try:
+                    df = self._cached_pro_daily(
+                        ts_code=ts_code,
+                        start_date=data_trade_date,
+                        end_date=data_trade_date,
+                    )
+                except Exception as e:
+                    if self._is_tushare_quota_error(e):
+                        self._mark_stock_detail_quota_limited(e)
+                        return self._cache_stock_detail(
+                            ts_code,
+                            trade_date,
+                            detail,
+                            resolved_trade_date=trade_date,
+                        )
+                    raise
                 if df is None or df.empty:
                     continue
 
@@ -3316,16 +3985,25 @@ class TushareClient:
                 vol_ratio = 1.5
                 if callable(daily_basic):
                     try:
-                        basic_df = daily_basic(
+                        basic_df = self._cached_pro_daily_basic(
                             ts_code=ts_code,
                             trade_date=data_trade_date,
                             fields="ts_code,turnover_rate,volume_ratio",
                         )
-                    except TypeError:
-                        basic_df = daily_basic(
-                            ts_code=ts_code,
-                            trade_date=data_trade_date,
-                        )
+                    except Exception as e:
+                        if self._is_tushare_quota_error(e):
+                            self._mark_stock_detail_quota_limited(e)
+                            return self._cache_stock_detail(
+                                ts_code,
+                                trade_date,
+                                self._overlay_realtime_detail_with_options(
+                                    detail,
+                                    trade_date,
+                                    allow_intraday_volume_ratio=False,
+                                ),
+                                resolved_trade_date=data_trade_date,
+                            )
+                        raise
                     if basic_df is not None and not basic_df.empty:
                         basic_row = basic_df.iloc[0]
                         turnover_rate = float(
@@ -3349,6 +4027,7 @@ class TushareClient:
                         "data_source": "daily",
                     }
                 )
+                self._clear_stock_detail_quota_limited()
                 return self._cache_stock_detail(
                     ts_code,
                     trade_date,
@@ -3363,11 +4042,13 @@ class TushareClient:
                 resolved_trade_date=effective_trade_date,
             )
         except Exception as e:
+            if self._is_tushare_quota_error(e):
+                self._mark_stock_detail_quota_limited(e)
             logger.error(f"获取个股详情失败: {e}")
             return self._cache_stock_detail(
                 ts_code,
                 trade_date,
-                self._overlay_realtime_detail(detail, trade_date),
+                detail,
                 resolved_trade_date=trade_date,
             )
 
@@ -3398,15 +4079,10 @@ class TushareClient:
             stock_meta_map = self._get_stock_basic_snapshot_map()
 
             daily_basic_df = None
-            daily_basic = getattr(self.pro, "daily_basic", None)
-            if callable(daily_basic):
-                try:
-                    daily_basic_df = daily_basic(
-                        trade_date=effective_trade_date,
-                        fields="ts_code,turnover_rate,volume_ratio",
-                    )
-                except TypeError:
-                    daily_basic_df = daily_basic(trade_date=effective_trade_date)
+            daily_basic_df = self._cached_pro_daily_basic(
+                trade_date=effective_trade_date,
+                fields="ts_code,turnover_rate,volume_ratio",
+            )
 
             source_df = self._build_daily_stock_source_df(
                 daily_df,
@@ -3461,6 +4137,20 @@ class TushareClient:
 
     def _overlay_realtime_detail(self, detail: Dict, trade_date: str) -> Dict:
         """对单只股票详情做盘中价格覆盖。"""
+        return self._overlay_realtime_detail_with_options(
+            detail,
+            trade_date,
+            allow_intraday_volume_ratio=True,
+        )
+
+    def _overlay_realtime_detail_with_options(
+        self,
+        detail: Dict,
+        trade_date: str,
+        *,
+        allow_intraday_volume_ratio: bool = True,
+    ) -> Dict:
+        """对单只股票详情做盘中价格覆盖。"""
         if not detail:
             return detail
         if not self._should_use_realtime_quote(trade_date):
@@ -3473,14 +4163,19 @@ class TushareClient:
             detail.setdefault("data_source", "daily_fallback")
             return detail
 
-        intraday_volume_ratio = self._infer_intraday_volume_ratio(
-            detail.get("ts_code", ""),
-            trade_date,
-            float(realtime.get("close") or 0),
-            float(realtime.get("amount") or 0),
-            float(realtime.get("volume") or 0),
-            realtime.get("quote_time"),
-        )
+        intraday_volume_ratio = None
+        if allow_intraday_volume_ratio:
+            try:
+                intraday_volume_ratio = self._infer_intraday_volume_ratio(
+                    detail.get("ts_code", ""),
+                    trade_date,
+                    float(realtime.get("close") or 0),
+                    float(realtime.get("amount") or 0),
+                    float(realtime.get("volume") or 0),
+                    realtime.get("quote_time"),
+                )
+            except Exception as e:
+                logger.debug(f"实时详情量比推断失败 {detail.get('ts_code')}: {e}")
 
         detail.update(
             {
@@ -3616,6 +4311,15 @@ class TushareClient:
             if not query_dates:
                 return None
 
+            self._log_tushare_api_call(
+                "pro.daily",
+                trade_date=query_dates[0],
+                extra={
+                    "ts_code": normalize_ts_code(ts_code),
+                    "start_date": query_dates[-1],
+                    "end_date": query_dates[0],
+                },
+            )
             df = self.pro.daily(
                 ts_code=normalize_ts_code(ts_code),
                 start_date=query_dates[-1],
@@ -3694,7 +4398,7 @@ class TushareClient:
         """模拟个股详情"""
         # 先尝试从 Tushare 获取
         try:
-            stock_info = self.pro.stock_basic(ts_code=ts_code)
+            stock_info = self._call_pro_stock_basic(ts_code=ts_code)
             if not stock_info.empty:
                 stock_name = stock_info.iloc[0].get("name", ts_code)
                 industry = stock_info.iloc[0].get("industry", "未知")
