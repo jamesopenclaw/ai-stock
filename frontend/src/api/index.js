@@ -307,7 +307,11 @@ export const stockApi = {
 // Decision API
 export const decisionApi = {
   buyPoint: (tradeDate, limit, options = {}) => api.get('/decision/buy-point', {
-    params: { trade_date: tradeDate, limit },
+    params: {
+      trade_date: tradeDate,
+      limit,
+      refresh: Boolean(options.refresh),
+    },
     timeout: options.timeout
   }),
   sellPoint: (tradeDate, options = {}) => api.get('/decision/sell-point', {
@@ -315,7 +319,8 @@ export const decisionApi = {
       trade_date: tradeDate,
       refresh: Boolean(options.refresh),
       force_llm_refresh: Boolean(options.forceLlmRefresh),
-      include_llm: options.includeLlm !== undefined ? Boolean(options.includeLlm) : true
+      include_llm: options.includeLlm !== undefined ? Boolean(options.includeLlm) : true,
+      include_add_signals: options.includeAddSignals !== undefined ? Boolean(options.includeAddSignals) : true
     },
     timeout: options.timeout
   }),

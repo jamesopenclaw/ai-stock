@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Dict, List, Optional
 
+from loguru import logger
+
 from app.data.tushare_client import normalize_ts_code
 from app.models.schemas import (
     AccountPosition,
@@ -62,13 +64,88 @@ class SellPointSopService:
         trade_date: str,
         account_id: Optional[str] = None,
     ) -> SellPointSopResponse:
-        normalized_code = normalize_ts_code(ts_code)
         context = await decision_context_service.build_context(
             trade_date,
             top_gainers=120,
             include_holdings=True,
             account_id=account_id,
         )
+        scored_stocks = stock_filter_service.filter_with_context(
+            trade_date,
+            context.stocks,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            account=context.account,
+            holdings=context.holdings_list,
+        )
+        full_sell_analysis = sell_point_service.analyze(
+            trade_date,
+            context.holdings,
+            market_env=getattr(context, "realtime_market_env", None) or context.market_env,
+            sector_scan=context.sector_scan,
+        )
+        return self._analyze_from_context(
+            normalize_ts_code(ts_code),
+            trade_date,
+            context,
+            scored_stocks,
+            full_sell_analysis,
+        )
+
+    async def analyze_many(
+        self,
+        ts_codes: List[str],
+        trade_date: str,
+        account_id: Optional[str] = None,
+    ) -> Dict[str, SellPointSopResponse]:
+        """批量生成 SOP，复用同一次决策上下文，避免卖点页 N 次重复全量计算。"""
+        normalized_codes = [normalize_ts_code(code) for code in ts_codes if code]
+        if not normalized_codes:
+            return {}
+
+        context = await decision_context_service.build_context(
+            trade_date,
+            top_gainers=120,
+            include_holdings=True,
+            account_id=account_id,
+        )
+        scored_stocks = stock_filter_service.filter_with_context(
+            trade_date,
+            context.stocks,
+            market_env=context.market_env,
+            sector_scan=context.sector_scan,
+            account=context.account,
+            holdings=context.holdings_list,
+        )
+        full_sell_analysis = sell_point_service.analyze(
+            trade_date,
+            context.holdings,
+            market_env=getattr(context, "realtime_market_env", None) or context.market_env,
+            sector_scan=context.sector_scan,
+        )
+
+        results: Dict[str, SellPointSopResponse] = {}
+        for code in normalized_codes:
+            try:
+                results[code] = self._analyze_from_context(
+                    code,
+                    trade_date,
+                    context,
+                    scored_stocks,
+                    full_sell_analysis,
+                )
+            except Exception as exc:
+                logger.warning(f"批量卖点 SOP 生成失败 ts_code={code}: {exc}")
+        return results
+
+    def _analyze_from_context(
+        self,
+        normalized_code: str,
+        trade_date: str,
+        context,
+        scored_stocks: List[StockOutput],
+        full_sell_analysis,
+    ) -> SellPointSopResponse:
         stable_market_env = context.market_env
         realtime_market_env = getattr(context, "realtime_market_env", None) or stable_market_env
         target_holding = self._find_holding(context.holdings, normalized_code)
@@ -93,21 +170,7 @@ class SellPointSopService:
             if getattr(target_holding, "market_price", None):
                 target_input.close = target_holding.market_price
 
-        scored_stocks = stock_filter_service.filter_with_context(
-            trade_date,
-            context.stocks,
-            market_env=context.market_env,
-            sector_scan=context.sector_scan,
-            account=context.account,
-            holdings=context.holdings_list,
-        )
         target_scored = self._find_scored_stock(scored_stocks, normalized_code)
-        full_sell_analysis = sell_point_service.analyze(
-            trade_date,
-            context.holdings,
-            market_env=realtime_market_env,
-            sector_scan=context.sector_scan,
-        )
         target_sell_point = self._find_sell_point(full_sell_analysis, normalized_code)
         if target_sell_point is None:
             raise ValueError("未找到目标持仓的卖点结果")

@@ -388,6 +388,92 @@ async def test_buy_point_prefers_cached_stock_pools_snapshot(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_buy_point_refresh_bypasses_cached_stock_pools_snapshot(monkeypatch):
+    pools = StockPoolsOutput(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_scan_trade_date="2026-03-24",
+        sector_scan_resolved_trade_date="2026-03-24",
+        snapshot_version=decision.STOCK_POOLS_SNAPSHOT_VERSION,
+        market_watch_pool=[],
+        account_executable_pool=[],
+        holding_process_pool=[],
+        total_count=0,
+    )
+    context = type(
+        "Context",
+        (),
+        {
+            "stocks": [],
+            "account": AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.2,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            "market_env": type(
+                "Env",
+                (),
+                {"market_env_tag": MarketEnvTag.NEUTRAL},
+            )(),
+            "sector_scan": None,
+        },
+    )()
+    bundle = type(
+        "Bundle",
+        (),
+        {
+            "context": context,
+            "scored_stocks": [],
+            "stock_pools": pools,
+            "review_bias_profile": {"exact": {}, "bucket": {}},
+        },
+    )()
+    buy_result = BuyPointResponse(
+        trade_date="2026-03-24",
+        market_env_tag=MarketEnvTag.NEUTRAL,
+        available_buy_points=[],
+        observe_buy_points=[],
+        not_buy_points=[],
+        total_count=0,
+    )
+    build_calls = []
+
+    async def fake_build_candidate_analysis(*args, **kwargs):
+        build_calls.append(kwargs)
+        return bundle
+
+    async def fake_get_page_snapshot(*args, **kwargs):
+        raise AssertionError("refresh should skip buy-point stock pools cache lookup")
+
+    async def fake_get_review_bias_profile(*args, **kwargs):
+        return {"exact": {}, "bucket": {}}
+
+    async def fake_save_snapshot(*args, **kwargs):
+        return 1
+
+    async def fake_save_page_snapshot(*args, **kwargs):
+        return 1
+
+    async def fake_resolve_snapshot_lookup_trade_date(trade_date):
+        return trade_date
+
+    monkeypatch.setattr(decision.decision_flow_service, "build_candidate_analysis", fake_build_candidate_analysis)
+    monkeypatch.setattr(decision.review_snapshot_service, "get_stock_pools_page_snapshot", fake_get_page_snapshot)
+    monkeypatch.setattr(decision.review_snapshot_service, "get_review_bias_profile_safe", fake_get_review_bias_profile)
+    monkeypatch.setattr(decision.review_snapshot_service, "save_analysis_snapshot_safe", fake_save_snapshot)
+    monkeypatch.setattr(decision.review_snapshot_service, "save_stock_pools_page_snapshot_safe", fake_save_page_snapshot)
+    monkeypatch.setattr(decision.buy_point_service, "analyze", lambda *args, **kwargs: buy_result)
+    monkeypatch.setattr(decision, "resolve_snapshot_lookup_trade_date", fake_resolve_snapshot_lookup_trade_date)
+
+    response = await decision.analyze_buy_point(trade_date="2026-03-24", limit=20, refresh=True)
+
+    assert response.code == 200
+    assert build_calls
+
+
+@pytest.mark.asyncio
 async def test_decision_summary_uses_lightweight_account_context(monkeypatch):
     market_env = MarketEnvOutput(
         trade_date="2026-03-24",

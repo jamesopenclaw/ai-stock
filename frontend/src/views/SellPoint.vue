@@ -429,7 +429,6 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { decisionApi, stockApi } from '../api'
-import { authState } from '../auth'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
@@ -452,8 +451,6 @@ const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, cu
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型' })
 const priceRefreshingMap = ref({})
-const SELL_POINT_CACHE_PREFIX = 'sell_point_snapshot_v2'
-const DASHBOARD_CACHE_PREFIX = 'dashboard_snapshot_v2'
 const notificationAction = computed(() => String(route.query.notification_action || '').trim())
 const notificationTsCode = computed(() => String(route.query.ts_code || '').trim())
 const notificationStockName = computed(() => String(route.query.stock_name || '').trim())
@@ -520,16 +517,6 @@ const topActions = computed(() => {
     orderLabel: orderLabel(index, item.sell_signal_tag),
   }))
 })
-
-const resolveCacheKey = (tradeDate) => {
-  const accountId = authState.account?.id || 'guest'
-  return `${SELL_POINT_CACHE_PREFIX}:${accountId}:${tradeDate}`
-}
-
-const resolveDashboardCacheKey = () => {
-  const accountId = authState.account?.id || 'guest'
-  return `${DASHBOARD_CACHE_PREFIX}:${accountId}`
-}
 
 const getLocalDate = () => {
   const now = new Date()
@@ -793,7 +780,6 @@ const refreshPointPrice = async (point) => {
       }
     }
 
-    persistSellPointCache()
     ElMessage.success(`${point.stock_name || point.ts_code} 最新价已更新`)
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '刷新价格失败'
@@ -803,57 +789,11 @@ const refreshPointPrice = async (point) => {
   }
 }
 
-const persistSellPointCache = () => {
-  if (typeof window === 'undefined' || !displayDate.value) return
-  const payload = {
-    displayDate: displayDate.value,
-    sellData: sellData.value,
-    activeTab: activeTab.value,
-    updatedAt: Date.now(),
-  }
-  window.sessionStorage.setItem(resolveCacheKey(displayDate.value), JSON.stringify(payload))
-}
-
-const hydrateSellPointCache = (tradeDate) => {
-  if (typeof window === 'undefined') return false
-  const raw = window.sessionStorage.getItem(resolveCacheKey(tradeDate))
-  if (!raw) return false
-  try {
-    const payload = JSON.parse(raw)
-    displayDate.value = payload.displayDate || tradeDate
-    sellData.value = payload.sellData || { sell_positions: [], reduce_positions: [], hold_positions: [], llm_status: null }
-    activeTab.value = payload.activeTab || 'sell'
-    return true
-  } catch (error) {
-    window.sessionStorage.removeItem(resolveCacheKey(tradeDate))
-    return false
-  }
-}
-
-const hydrateDashboardSellPointCache = (tradeDate) => {
-  if (typeof window === 'undefined') return false
-  const raw = window.sessionStorage.getItem(resolveDashboardCacheKey())
-  if (!raw) return false
-  try {
-    const payload = JSON.parse(raw)
-    const dashboardSellData = payload.sellPoints || null
-    if (!dashboardSellData || !hasAnyLlmContent(dashboardSellData)) return false
-    displayDate.value = tradeDate
-    sellData.value = dashboardSellData
-    if (dashboardSellData.sell_positions?.length) activeTab.value = 'sell'
-    else if (dashboardSellData.reduce_positions?.length) activeTab.value = 'reduce'
-    else activeTab.value = 'hold'
-    persistSellPointCache()
-    return true
-  } catch (error) {
-    return false
-  }
-}
-
 const loadData = async (options = {}) => {
   const refresh = Boolean(options.refresh)
   const forceLlmRefresh = Boolean(options.forceLlmRefresh)
-  const includeLlm = true
+  const includeLlm = options.includeLlm !== undefined ? Boolean(options.includeLlm) : Boolean(forceLlmRefresh)
+  const includeAddSignals = options.includeAddSignals !== undefined ? Boolean(options.includeAddSignals) : false
   const silent = Boolean(options.silent)
   const hasRenderableData = Boolean(
     sellData.value?.sell_positions?.length
@@ -870,6 +810,7 @@ const loadData = async (options = {}) => {
       refresh,
       forceLlmRefresh,
       includeLlm,
+      includeAddSignals,
       timeout: 90000
     })
     const nextData = res.data.data
@@ -921,7 +862,6 @@ const loadData = async (options = {}) => {
     if (sellData.value.sell_positions?.length) activeTab.value = 'sell'
     else if (sellData.value.reduce_positions?.length) activeTab.value = 'reduce'
     else activeTab.value = 'hold'
-    persistSellPointCache()
     handleNotificationQuery()
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '加载失败'
@@ -938,14 +878,13 @@ const loadData = async (options = {}) => {
 }
 
 const refreshLlm = async () => {
-  await loadData({ forceLlmRefresh: true })
+  await loadData({ forceLlmRefresh: true, includeLlm: true })
 }
 
 onMounted(() => {
   const tradeDate = getLocalDate()
   displayDate.value = tradeDate
-  const hydrated = hydrateSellPointCache(tradeDate) || hydrateDashboardSellPointCache(tradeDate)
-  loadData({ silent: hydrated })
+  loadData()
 })
 
 watch(

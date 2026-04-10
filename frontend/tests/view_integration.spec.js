@@ -647,7 +647,7 @@ describe('关键页面联调', () => {
 
     expect(decisionApi.buyPoint).toHaveBeenCalledOnce()
     expect(decisionApi.reviewStats).toHaveBeenCalled()
-    expect(decisionApi.buyPoint).toHaveBeenCalledWith(expect.any(String), 30, expect.objectContaining({ timeout: 90000 }))
+    expect(decisionApi.buyPoint).toHaveBeenCalledWith(expect.any(String), 30, expect.objectContaining({ refresh: true, timeout: 90000 }))
     expect(wrapper.text()).toContain('买点分析')
     expect(wrapper.text()).toContain('机器人先锋')
     expect(wrapper.text()).toContain('主执行名单')
@@ -1481,7 +1481,7 @@ describe('关键页面联调', () => {
     )
   })
 
-  it('SellPoint 页面不会被 Dashboard 的无 LLM 缓存污染，且会保留已有 LLM 解读', async () => {
+  it('SellPoint 页面打开时忽略本地缓存并使用接口最新结果', async () => {
     authState.account = {
       id: 'acct-1',
       account_code: 'DEFAULT-001',
@@ -1579,7 +1579,12 @@ describe('关键页面联调', () => {
     const { default: SellPointView } = await import('../src/views/SellPoint.vue')
     const wrapper = await mountView(SellPointView)
 
-    expect(wrapper.text()).toContain('缓存里的正确解读。')
+    expect(decisionApi.sellPoint).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ refresh: true }),
+    )
+    expect(wrapper.text()).toContain('接口返回但未带 LLM')
+    expect(wrapper.text()).not.toContain('缓存里的正确解读。')
     expect(wrapper.text()).not.toContain('Dashboard 无 LLM 数据')
   })
 

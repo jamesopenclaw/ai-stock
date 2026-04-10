@@ -645,7 +645,6 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { decisionApi } from '../api'
-import { authState } from '../auth'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
@@ -674,7 +673,6 @@ const BUY_POINT_TIMEOUT = 90000
 const loadError = ref('')
 const route = useRoute()
 const router = useRouter()
-const BUY_POINT_CACHE_PREFIX = 'ai_stock_buy_point_v3'
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const focusSectorSourceType = computed(() => String(route.query.focus_sector_source_type || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
@@ -977,11 +975,6 @@ const getLocalDate = () => {
   return `${y}-${m}-${d}`
 }
 
-const resolveCacheKey = (tradeDate) => {
-  const accountId = authState.account?.id || 'guest'
-  return `${BUY_POINT_CACHE_PREFIX}:${accountId}:${tradeDate}`
-}
-
 const applyBuyData = (payload) => {
   buyData.value = payload || {
     market_env_tag: '',
@@ -992,33 +985,6 @@ const applyBuyData = (payload) => {
     not_buy_points: [],
   }
   activeTab.value = resolveDefaultTab(buyData.value)
-}
-
-const persistBuyPointCache = () => {
-  if (typeof window === 'undefined' || !displayDate.value) return
-  const payload = {
-    displayDate: displayDate.value,
-    buyData: buyData.value,
-    reviewStatsData: reviewStatsData.value,
-    updatedAt: Date.now(),
-  }
-  window.sessionStorage.setItem(resolveCacheKey(displayDate.value), JSON.stringify(payload))
-}
-
-const hydrateBuyPointCache = (tradeDate) => {
-  if (typeof window === 'undefined') return false
-  const raw = window.sessionStorage.getItem(resolveCacheKey(tradeDate))
-  if (!raw) return false
-  try {
-    const payload = JSON.parse(raw)
-    displayDate.value = payload.displayDate || tradeDate
-    applyBuyData(payload.buyData)
-    reviewStatsData.value = payload.reviewStatsData || null
-    return true
-  } catch (error) {
-    window.sessionStorage.removeItem(resolveCacheKey(tradeDate))
-    return false
-  }
 }
 
 const scheduleReviewInsightLoad = () => {
@@ -1527,14 +1493,13 @@ const loadData = async ({ silent = false } = {}) => {
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
-    const res = await decisionApi.buyPoint(tradeDate, 30, { timeout: BUY_POINT_TIMEOUT })
+    const res = await decisionApi.buyPoint(tradeDate, 30, { refresh: true, timeout: BUY_POINT_TIMEOUT })
     const payload = res.data || {}
     const responseCode = payload.code ?? 200
     if (responseCode !== 200 || !payload.data) {
       throw new Error(payload.message || '买点数据加载失败，请刷新重试。')
     }
     applyBuyData(payload.data)
-    persistBuyPointCache()
     handleNotificationQuery()
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '买点数据加载失败，请刷新重试。'
@@ -1547,9 +1512,8 @@ const loadData = async ({ silent = false } = {}) => {
 
 const loadReviewInsight = async () => {
   try {
-    const res = await decisionApi.reviewStats(10, { timeout: REVIEW_STATS_TIMEOUT })
+    const res = await decisionApi.reviewStats(10, { refresh: true, timeout: REVIEW_STATS_TIMEOUT })
     reviewStatsData.value = res.data.data || null
-    persistBuyPointCache()
   } catch (error) {
     reviewStatsData.value = null
   }
@@ -1558,8 +1522,7 @@ const loadReviewInsight = async () => {
 onMounted(() => {
   const tradeDate = getLocalDate()
   displayDate.value = tradeDate
-  const hydrated = hydrateBuyPointCache(tradeDate)
-  loadData({ silent: hydrated })
+  loadData()
   scheduleReviewInsightLoad()
 })
 

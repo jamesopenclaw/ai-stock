@@ -30,7 +30,7 @@ from app.services.stock_filter import stock_filter_service, merge_holdings_into_
 from app.services.buy_point import buy_point_service
 from app.services.buy_point_sop import buy_point_sop_service
 from app.services.sell_point_sop import sell_point_sop_service
-from app.data.tushare_client import tushare_client
+from app.data.tushare_client import normalize_ts_code, tushare_client
 from app.models.schemas import StockInput
 from app.services.decision_context import decision_context_service
 from app.services.decision_flow import decision_flow_service
@@ -58,8 +58,9 @@ def _sell_point_cache_key(
     trade_date: str,
     account_id: Optional[str],
     include_llm: bool,
+    include_add_signals: bool,
 ) -> str:
-    return f"{trade_date}:{account_id or ''}:{int(include_llm)}"
+    return f"{trade_date}:{account_id or ''}:{int(include_llm)}:{int(include_add_signals)}"
 
 
 def _get_cached_sell_point_payload(cache_key: str) -> Optional[dict]:
@@ -176,15 +177,19 @@ async def _align_sell_point_display_with_sop(
     if not ordered_points:
         return result
 
+    try:
+        sop_map = await sell_point_sop_service.analyze_many(
+            [point.ts_code for point in ordered_points],
+            trade_date,
+            account_id=account_id,
+        )
+    except Exception as exc:
+        logger.warning("sell-point sop batch align failed error=%s", exc)
+        sop_map = {}
+
     async def enrich_point(point: SellPointOutput) -> SellPointOutput:
-        try:
-            sop = await sell_point_sop_service.analyze(
-                point.ts_code,
-                trade_date,
-                account_id=account_id,
-            )
-        except Exception as exc:
-            logger.warning("sell-point sop align failed ts_code=%s error=%s", point.ts_code, exc)
+        sop = sop_map.get(normalize_ts_code(point.ts_code))
+        if sop is None:
             return point
 
         execution = getattr(sop, "execution", None)
@@ -378,6 +383,7 @@ async def analyze_sell_point(
     refresh: bool = Query(False, description="是否跳过卖点页短缓存"),
     force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 解读缓存"),
     include_llm: bool = Query(True, description="是否包含 LLM 卖点解读"),
+    include_add_signals: bool = Query(True, description="是否为持有观察票补充加仓提示"),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """
@@ -390,11 +396,13 @@ async def analyze_sell_point(
     """
     if not trade_date:
         trade_date = datetime.now().strftime("%Y-%m-%d")
+    include_llm = include_llm if isinstance(include_llm, bool) else True
+    include_add_signals = include_add_signals if isinstance(include_add_signals, bool) else True
 
     try:
         account_id = _resolve_account_id(current_account)
         should_use_cache = not refresh and not force_llm_refresh and not include_llm
-        cache_key = _sell_point_cache_key(trade_date, account_id, include_llm)
+        cache_key = _sell_point_cache_key(trade_date, account_id, include_llm, include_add_signals)
         if should_use_cache:
             cached_payload = _get_cached_sell_point_payload(cache_key)
             if cached_payload is not None:
@@ -424,17 +432,18 @@ async def analyze_sell_point(
             account_id,
             result,
         )
-        buy_sop_results = await _enrich_hold_positions_with_add_signals(
-            trade_date,
-            result.hold_positions,
-            account_id,
-        )
-        snapshot_kwargs = {"account_id": account_id} if account_id else {}
-        await review_snapshot_service.save_analysis_snapshot_safe(
-            trade_date,
-            add_position_analysis=_build_add_position_snapshot_inputs(result.hold_positions, buy_sop_results),
-            **snapshot_kwargs,
-        )
+        if include_add_signals:
+            buy_sop_results = await _enrich_hold_positions_with_add_signals(
+                trade_date,
+                result.hold_positions,
+                account_id,
+            )
+            snapshot_kwargs = {"account_id": account_id} if account_id else {}
+            await review_snapshot_service.save_analysis_snapshot_safe(
+                trade_date,
+                add_position_analysis=_build_add_position_snapshot_inputs(result.hold_positions, buy_sop_results),
+                **snapshot_kwargs,
+            )
         llm_summary = None
         llm_status = LlmCallStatus(
             enabled=False,
@@ -527,6 +536,7 @@ async def get_decision_summary(
 async def analyze_buy_point(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
     limit: int = Query(20, description="返回数量限制", ge=1, le=100),
+    refresh: bool = Query(False, description="是否跳过三池快照缓存"),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """
@@ -540,13 +550,16 @@ async def analyze_buy_point(
     try:
         account_id = _resolve_account_id(current_account)
         candidate_limit = max(100, min(limit, 200))
+        refresh_requested = refresh if isinstance(refresh, bool) else False
         expected_sector_scan_trade_date = await resolve_snapshot_lookup_trade_date(trade_date)
         snapshot_kwargs = {"account_id": account_id} if account_id else {}
-        cached_stock_pools = await review_snapshot_service.get_stock_pools_page_snapshot(
-            trade_date,
-            candidate_limit,
-            **snapshot_kwargs,
-        )
+        cached_stock_pools = None
+        if not refresh_requested:
+            cached_stock_pools = await review_snapshot_service.get_stock_pools_page_snapshot(
+                trade_date,
+                candidate_limit,
+                **snapshot_kwargs,
+            )
         use_cached_stock_pools = _stock_pools_snapshot_valid(
             cached_stock_pools,
             expected_sector_scan_trade_date,
