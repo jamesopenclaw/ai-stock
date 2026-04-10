@@ -133,6 +133,38 @@ class StockFilterService:
         self.ACCOUNT_EXECUTABLE_LIMIT = self.strategy.account_executable_limit
         self.SECTOR_REPRESENTATIVE_LIMIT = self.strategy.sector_representative_limit
 
+    def _bucket_structure_bonus(self, bucket_tag: Optional[str], *, lane: str = "generic") -> float:
+        bucket = str(bucket_tag or "").strip()
+        if bucket == "强势确认":
+            return {
+                "execution": 8.0,
+                "account": 6.0,
+                "watch": 4.0,
+            }.get(lane, 4.0)
+        if bucket == "趋势回踩":
+            return {
+                "execution": 3.0,
+                "account": 2.0,
+                "watch": 1.5,
+            }.get(lane, 2.0)
+        if bucket == "异动预备":
+            return {
+                "execution": -10.0,
+                "account": -8.0,
+                "watch": -6.0,
+            }.get(lane, -6.0)
+        return 0.0
+
+    def _bucket_review_adjustment(self, bucket_tag: Optional[str], *, snapshot_type: str) -> tuple[float, Optional[str]]:
+        bucket = str(bucket_tag or "").strip()
+        if bucket == "强势确认":
+            return 1.5, "结构优先"
+        if bucket == "趋势回踩":
+            return 0.5, "结构保留"
+        if bucket == "异动预备":
+            return -2.5, "结构降权"
+        return 0.0, None
+
     def filter(self, trade_date: str, stocks: List[StockInput]) -> List[StockOutput]:
         return self.filter_with_context(trade_date, stocks)
 
@@ -664,6 +696,7 @@ class StockFilterService:
             key=lambda stock: (
                 self._market_watch_vote_count(stock),
                 float(stock.review_bias_score or 0),
+                self._bucket_structure_bonus(getattr(stock, "candidate_bucket_tag", None), lane="watch"),
                 self._representative_total_score(stock),
                 float(stock.market_strength_score or 0),
                 float(stock.stock_score or 0),
@@ -871,9 +904,18 @@ class StockFilterService:
                     names.append(name)
             return names
 
+        def _append_unique(target: List[str], names: List[str], limit: Optional[int] = None) -> None:
+            for name in names:
+                if name and name not in target:
+                    target.append(name)
+                if limit and len(target) >= limit:
+                    return
+
         candidate_names: List[str] = []
         if SectorProfileTag.A_MAINLINE in allowed_profiles:
-            candidate_names.extend(_visible_names(getattr(sector_scan, "mainline_sectors", []), 5))
+            _append_unique(candidate_names, _visible_names(getattr(sector_scan, "theme_leaders", []), 3), 5)
+            _append_unique(candidate_names, _visible_names(getattr(sector_scan, "industry_leaders", []), 2), 5)
+            _append_unique(candidate_names, _visible_names(getattr(sector_scan, "mainline_sectors", []), 5), 5)
         if SectorProfileTag.B_SUB_MAINLINE in allowed_profiles:
             strengthening_names = self._select_strengthening_sector_names(
                 getattr(sector_scan, "sub_mainline_sectors", []),
@@ -911,6 +953,12 @@ class StockFilterService:
         # 这时不应把 allowed_sector_names 直接收成空集，而是退回到候选里实际命中的 A/B 主线名称。
         fallback_scope = set()
         if SectorProfileTag.A_MAINLINE in allowed_profiles:
+            fallback_scope.update(
+                _visible_names(getattr(sector_scan, "theme_leaders", []), 50)
+            )
+            fallback_scope.update(
+                _visible_names(getattr(sector_scan, "industry_leaders", []), 50)
+            )
             fallback_scope.update(
                 _visible_names(getattr(sector_scan, "mainline_sectors", []), 50)
             )
@@ -1089,6 +1137,7 @@ class StockFilterService:
             sector_stocks,
             key=lambda stock: (
                 float(stock.review_bias_score or 0),
+                self._bucket_structure_bonus(getattr(stock, "candidate_bucket_tag", None), lane="watch"),
                 self._representative_total_score(stock),
                 float(stock.stock_score or 0),
                 float(stock.account_entry_score or 0),
@@ -1172,6 +1221,7 @@ class StockFilterService:
             selected,
             key=lambda stock: (
                 float(stock.review_bias_score or 0),
+                self._bucket_structure_bonus(getattr(stock, "candidate_bucket_tag", None), lane="watch"),
                 self._representative_total_score(stock),
                 float(stock.market_strength_score or 0),
             ),
@@ -1365,6 +1415,7 @@ class StockFilterService:
             account_executable,
             key=lambda stock: (
                 float(stock.review_bias_score or 0),
+                self._bucket_structure_bonus(getattr(stock, "candidate_bucket_tag", None), lane="account"),
                 float(stock.execution_opportunity_score or 0),
                 float(stock.account_entry_score or 0),
                 float(stock.market_strength_score or 0),
@@ -1404,6 +1455,7 @@ class StockFilterService:
             visible[:limit],
             key=lambda stock: (
                 float(stock.review_bias_score or 0),
+                self._bucket_structure_bonus(getattr(stock, "candidate_bucket_tag", None), lane="account"),
                 float(stock.execution_opportunity_score or 0),
                 float(stock.account_entry_score or 0),
                 float(stock.market_strength_score or 0),
@@ -1839,10 +1891,16 @@ class StockFilterService:
         entry = exact or bucket_entry
         if not entry:
             return {"score": 0.0, "label": None, "reason": None}
+        structure_delta, structure_label = self._bucket_review_adjustment(bucket, snapshot_type=snapshot_type)
+        score = round(float(entry.get("score") or 0.0) + structure_delta, 2)
+        reason = entry.get("reason")
+        if structure_label:
+            suffix = f" 结构修正：{bucket}{structure_label}。"
+            reason = f"{reason}{suffix}" if reason else suffix.strip()
         return {
-            "score": float(entry.get("score") or 0.0),
-            "label": entry.get("label"),
-            "reason": entry.get("reason"),
+            "score": score,
+            "label": entry.get("label") or structure_label,
+            "reason": reason,
         }
 
     def _build_watch_only_reason(self, stock: StockOutput, not_other_pools: List[str]) -> Optional[str]:
@@ -2613,6 +2671,8 @@ class StockFilterService:
         """构建板块映射（包含全部分类，确保个股都能找到所属板块）"""
         sector_map = {}
         for group in [
+            getattr(sector_scan, "theme_leaders", []),
+            getattr(sector_scan, "industry_leaders", []),
             sector_scan.mainline_sectors,
             sector_scan.sub_mainline_sectors,
             sector_scan.follow_sectors,
@@ -2910,6 +2970,8 @@ class StockFilterService:
                 "衰减中": -10.0,
             }.get(rotation_state, 0.0)
 
+        score += self._bucket_structure_bonus(getattr(stock, "candidate_bucket_tag", None), lane="execution")
+
         return round(max(0.0, min(100.0, score)), 1)
 
     def _calculate_account_entry_score(
@@ -2981,6 +3043,8 @@ class StockFilterService:
                 score += 2
         elif next_tradeability_tag == NextTradeabilityTag.LOW_SUCK and (stock.vol_ratio or 0) >= 2:
             score += 2
+
+        score += self._bucket_structure_bonus(getattr(stock, "candidate_bucket_tag", None), lane="account")
 
         return round(max(score, 0.0), 1)
 

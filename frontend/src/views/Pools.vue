@@ -70,7 +70,7 @@
               <span class="ops-context-chip">{{ isRadarMode ? '实时雷达' : '稳定模式' }}</span>
               <span class="ops-context-chip">{{ marketEnvironmentTagLabel }}</span>
               <span v-if="primaryDirectionItems.length" class="ops-context-chip">
-                主线 {{ primaryDirectionItems[0].name }}
+                {{ primaryDirectionItems[0].sourceLabel }} {{ primaryDirectionItems[0].name }}
               </span>
               <span class="ops-context-chip">{{ globalTradeGate.status }}</span>
             </div>
@@ -90,10 +90,10 @@
                 <em>{{ step.countLabel }}</em>
               </span>
             </button>
-            <el-button text type="primary" @click="router.push({ path: '/buy', query: focusSector ? { focus_sector: focusSector } : {} })">
+            <el-button text type="primary" @click="goToBuyPage(focusSector, focusSectorSourceType)">
               去买点分析
             </el-button>
-            <el-button text @click="goToSectors(focusSector)">
+            <el-button text @click="goToSectors(focusSector, focusSectorSourceType)">
               看板块扫描
             </el-button>
           </div>
@@ -160,7 +160,7 @@
           <article class="summary-card summary-card-direction">
             <div class="summary-card-head summary-card-head-direction">
               <div>
-                <div class="summary-kicker">今日主线</div>
+                <div class="summary-kicker">双主线</div>
                 <div class="summary-headline">{{ directionHeadline }}</div>
               </div>
               <el-button text type="primary" @click="goToSectors()">
@@ -174,7 +174,7 @@
                 :key="`${item.name}-${item.state}`"
                 type="button"
                 :class="['direction-card', { 'direction-card-lead': index === 0 }]"
-                @click="goToSectors(item.name)"
+                @click="goToSectors(item.name, item.sectorSourceType)"
               >
                 <div class="direction-card-top">
                   <div class="direction-card-title-group">
@@ -186,6 +186,7 @@
                   </span>
                 </div>
                 <div class="direction-card-tags">
+                  <span class="direction-badge direction-badge-tier">{{ item.sourceLabel }}</span>
                   <span class="direction-badge direction-badge-mainline">{{ item.mainlineTag }}</span>
                   <span v-if="item.tier" class="direction-badge direction-badge-tier">{{ item.tier }}类</span>
                   <span
@@ -253,7 +254,7 @@
           </div>
           <div v-if="focusSector" class="focus-context">
             <div class="focus-context-copy">
-              当前按 <strong>{{ focusSector }}</strong> 方向查看三池，相关标的会优先排到前面。
+              当前按 <strong>{{ focusSectorLabel }}</strong><strong>{{ focusSector }}</strong> 方向查看三池，相关标的会优先排到前面。
             </div>
             <div class="focus-context-actions">
               <el-switch v-model="focusOnly" size="small" inline-prompt active-text="只看当前方向" inactive-text="全部" />
@@ -267,8 +268,8 @@
                 <div class="section-title">今天先盯谁，以及哪些信号该加权或降权</div>
               </div>
               <div class="section-actions">
-                <el-button v-if="focusSector" text @click="router.push('/sectors')">回板块扫描</el-button>
-                <el-button text type="primary" @click="router.push({ path: '/buy', query: focusSector ? { focus_sector: focusSector } : {} })">
+                <el-button v-if="focusSector" text @click="goToSectors(focusSector, focusSectorSourceType)">回板块扫描</el-button>
+                <el-button text type="primary" @click="goToBuyPage(focusSector, focusSectorSourceType)">
                   去买点分析
                 </el-button>
               </div>
@@ -394,8 +395,9 @@
                   </div>
                   <div class="action-grid">
                     <div class="action-block">
-                      <span class="action-block-label">执行方式</span>
+                      <span class="action-block-label">当前动作</span>
                       <strong>{{ executionMethodLabel(stock) }}</strong>
+                      <span v-if="executionMethodSubLabel(stock)" class="action-block-hint">{{ executionMethodSubLabel(stock) }}</span>
                     </div>
                     <div class="action-block">
                       <span class="action-block-label">仓位提示</span>
@@ -440,8 +442,9 @@
                   </div>
                   <div class="action-grid">
                     <div class="action-block">
-                      <span class="action-block-label">执行方式</span>
+                      <span class="action-block-label">当前动作</span>
                       <strong>{{ executionMethodLabel(stock) }}</strong>
+                      <span v-if="executionMethodSubLabel(stock)" class="action-block-hint">{{ executionMethodSubLabel(stock) }}</span>
                     </div>
                     <div class="action-block">
                       <span class="action-block-label">仓位提示</span>
@@ -480,8 +483,9 @@
                   <div class="action-judgement">{{ executionJudgementLine(stock) }}</div>
                   <div class="action-grid">
                     <div class="action-block">
-                      <span class="action-block-label">执行方式</span>
+                      <span class="action-block-label">当前动作</span>
                       <strong>{{ executionMethodLabel(stock) }}</strong>
+                      <span v-if="executionMethodSubLabel(stock)" class="action-block-hint">{{ executionMethodSubLabel(stock) }}</span>
                     </div>
                     <div class="action-block">
                       <span class="action-block-label">仓位提示</span>
@@ -520,8 +524,9 @@
                   <div class="action-judgement">{{ executionJudgementLine(stock) }}</div>
                   <div class="action-grid">
                     <div class="action-block">
-                      <span class="action-block-label">执行方式</span>
+                      <span class="action-block-label">当前动作</span>
                       <strong>{{ executionMethodLabel(stock) }}</strong>
+                      <span v-if="executionMethodSubLabel(stock)" class="action-block-hint">{{ executionMethodSubLabel(stock) }}</span>
                     </div>
                     <div class="action-block">
                       <span class="action-block-label">仓位提示</span>
@@ -1210,6 +1215,8 @@ const poolsData = ref({
   sector_scan_trade_date: '',
   sector_scan_resolved_trade_date: '',
   market_env: null,
+  theme_leaders: [],
+  industry_leaders: [],
   mainline_sectors: [],
   sub_mainline_sectors: [],
   global_trade_gate: null,
@@ -1239,6 +1246,7 @@ const waitingForRefreshResult = ref(false)
 const watchCandidatesExpanded = ref(false)
 
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
+const focusSectorSourceType = computed(() => String(route.query.focus_sector_source_type || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
 const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
 const isRadarMode = computed(() => poolMode.value === 'radar')
@@ -1529,17 +1537,20 @@ const directionStateBadgeClass = (state) => {
   return 'direction-badge-state-neutral'
 }
 
-const summarizedMainlineSectors = computed(() => {
-  const mainline = (poolsData.value.mainline_sectors || []).slice(0, 3)
-  if (mainline.length >= 3) return mainline
-  const strengtheningSubs = (poolsData.value.sub_mainline_sectors || [])
-    .filter((sector) => ['强化中', '切换中', '盘中强化', '稳定主线'].includes(directionStateLabel(sector)))
-    .slice(0, Math.max(0, 3 - mainline.length))
-  return [...mainline, ...strengtheningSubs]
-})
+const directionSourceLabel = (sourceType) => {
+  if (sourceType === 'concept') return '主线题材'
+  if (sourceType === 'industry' || sourceType === 'limitup_industry') return '承接行业'
+  return '主线候选'
+}
 
-const primaryDirectionItems = computed(() => summarizedMainlineSectors.value.map((sector) => ({
+const focusSectorLabel = computed(() => (
+  focusSectorSourceType.value ? `${directionSourceLabel(focusSectorSourceType.value)} ` : ''
+))
+
+const buildDirectionItem = (sector, sourceLabel) => ({
   name: sector.sector_name,
+  sectorSourceType: String(sector.sector_source_type || '').trim(),
+  sourceLabel,
   changePct: Number(sector.sector_change_pct || 0),
   state: directionStateLabel(sector),
   mainlineTag: directionMainlineLabel(sector),
@@ -1547,35 +1558,77 @@ const primaryDirectionItems = computed(() => summarizedMainlineSectors.value.map
   actionHint: String(sector.sector_action_hint || '').trim(),
   subtitle: String(sector.sector_news_summary || '').trim(),
   reason: sector.sector_summary_reason || sector.sector_rotation_reason || sector.sector_comment || '先盯联动是否延续，再决定要不要往执行层下钻。',
-})))
+})
+
+const summarizedMainlineSectors = computed(() => {
+  const theme = (poolsData.value.theme_leaders || []).slice(0, 2).map((sector) => buildDirectionItem(sector, '主线题材'))
+  const industry = (poolsData.value.industry_leaders || []).slice(0, 2).map((sector) => buildDirectionItem(sector, '承接行业'))
+  const dualLeaders = [...theme, ...industry]
+  if (dualLeaders.length) return dualLeaders
+
+  const mainline = (poolsData.value.mainline_sectors || []).slice(0, 3)
+  if (mainline.length >= 3) {
+    return mainline.map((sector) => buildDirectionItem(sector, directionSourceLabel(sector?.sector_source_type)))
+  }
+  const strengtheningSubs = (poolsData.value.sub_mainline_sectors || [])
+    .filter((sector) => ['强化中', '切换中', '盘中强化', '稳定主线'].includes(directionStateLabel(sector)))
+    .slice(0, Math.max(0, 3 - mainline.length))
+  return [...mainline, ...strengtheningSubs].map((sector) => (
+    buildDirectionItem(sector, directionSourceLabel(sector?.sector_source_type))
+  ))
+})
+
+const primaryDirectionItems = computed(() => summarizedMainlineSectors.value)
 
 const directionHeadline = computed(() => {
+  const themeLead = primaryDirectionItems.value.find((item) => item.sourceLabel === '主线题材')
+  const industryLead = primaryDirectionItems.value.find((item) => item.sourceLabel === '承接行业')
+  if (themeLead && industryLead) return `${themeLead.name} 做题材主线，${industryLead.name} 做行业承接`
+  if (themeLead) return `${themeLead.name} 是今天优先看的题材主线`
+  if (industryLead) return `${industryLead.name} 是今天优先看的承接行业`
   const lead = primaryDirectionItems.value[0]
   if (!lead) return '按正式板块扫描判断主线'
-  const suffix = primaryDirectionItems.value.length > 1 ? `，带看 ${primaryDirectionItems.value.length} 个方向` : ''
-  return `${lead.name} 领看${suffix}`
+  return `${lead.name} 领看`
 })
 
 const directionOverviewCopy = computed(() => {
-  const mainline = poolsData.value.mainline_sectors || []
-  const leadSector = mainline[0]
+  const themeLead = poolsData.value.theme_leaders?.[0]
+  const industryLead = poolsData.value.industry_leaders?.[0]
+  if (themeLead && industryLead) {
+    return `${themeLead.sector_summary_reason || themeLead.sector_comment || `${themeLead.sector_name} 是当前最强题材线`}；承接上优先看 ${industryLead.sector_name}${industryLead.sector_summary_reason ? `，${industryLead.sector_summary_reason}` : ' 的扩散强度'}。`
+  }
+  if (themeLead) {
+    return themeLead.sector_summary_reason || themeLead.sector_comment || `优先围绕 ${themeLead.sector_name} 这个题材主线做取舍。`
+  }
+  if (industryLead) {
+    return industryLead.sector_summary_reason || industryLead.sector_comment || `当前没有明确题材主线，先看 ${industryLead.sector_name} 这条行业承接线。`
+  }
   const secondaryNames = primaryDirectionItems.value.slice(1).map((item) => item.name)
-  if (leadSector?.sector_summary_reason) {
-    if (!secondaryNames.length) return leadSector.sector_summary_reason
-    return `${leadSector.sector_summary_reason}；同时留意 ${secondaryNames.join('、')}。`
-  }
-  if (leadSector?.sector_comment) {
-    if (!secondaryNames.length) return leadSector.sector_comment
-    return `${leadSector.sector_comment}；同时留意 ${secondaryNames.join('、')}。`
-  }
   if (!primaryDirectionItems.value.length) return '当前没有足够清晰的主线板块，优先看账户和持仓约束。'
   if (secondaryNames.length) return `优先看 ${primaryDirectionItems.value[0].name}，同时留意 ${secondaryNames.join('、')}。`
   return `今天先围绕 ${primaryDirectionItems.value[0].name} 这个方向做取舍。`
 })
 
-const goToSectors = (sectorName = '') => {
-  if (sectorName) {
-    router.push({ path: '/sectors', query: { focus_sector: sectorName } })
+const buildFocusQuery = (sectorName = '', sectorSourceType = '') => {
+  const query = {}
+  if (sectorName) query.focus_sector = sectorName
+  if (sectorSourceType) query.focus_sector_source_type = sectorSourceType
+  return query
+}
+
+const goToBuyPage = (sectorName = '', sectorSourceType = '') => {
+  const query = buildFocusQuery(sectorName, sectorSourceType)
+  if (Object.keys(query).length) {
+    router.push({ path: '/buy', query })
+    return
+  }
+  router.push('/buy')
+}
+
+const goToSectors = (sectorName = '', sectorSourceType = '') => {
+  const query = buildFocusQuery(sectorName, sectorSourceType)
+  if (Object.keys(query).length) {
+    router.push({ path: '/sectors', query })
     return
   }
   router.push('/sectors')
@@ -1874,13 +1927,14 @@ const openFocusAnalysis = (item) => {
 
 const focusSummary = computed(() => {
   if (!focusSector.value) return ''
+  const focusPrefix = focusSectorLabel.value ? `${focusSectorLabel.value}${focusSector.value}` : focusSector.value
   if (focusMatches.value.account) {
-    return `${focusSector.value} 已经有 ${focusMatches.value.account} 只进入账户可参与池，可以先看账户池，再去买点页确认执行位。`
+    return `${focusPrefix} 已经有 ${focusMatches.value.account} 只进入账户可参与池，可以先看账户池，再去买点页确认执行位。`
   }
   if (focusMatches.value.market) {
-    return `${focusSector.value} 目前更多停留在市场观察池，说明这条线还在观察期，先看板块一致性和量能。`
+    return `${focusPrefix} 目前更多停留在市场观察池，说明这条线还在观察期，先看板块一致性和量能。`
   }
-  return `${focusSector.value} 当前没有明显命中三池核心候选，说明这条线今天暂时不是主执行方向。`
+  return `${focusPrefix} 当前没有明显命中三池核心候选，说明这条线今天暂时不是主执行方向。`
 })
 
 const topFocusItems = computed(() => {
@@ -2147,12 +2201,28 @@ const holdingOrderLabel = (index) => {
 }
 
 const executionMethodLabel = (stock) => {
+  const rawContext = executionContextLabel(stock)
+  if (rawContext === '突破确认' && stock.execution_proximity_tag === '已过确认位') return '突破后回踩'
   if (['低吸预备', '有低吸点'].includes(stock.next_tradeability_tag)) return '低吸'
   if (['回踩确认', '有回踩确认点'].includes(stock.next_tradeability_tag)) return '回踩确认'
   if (['突破确认', '有突破点'].includes(stock.next_tradeability_tag)) return '突破确认'
   if (accountEntryMode(stock) === 'defense_trial') return '轻仓确认 / 不追高'
   if (accountEntryMode(stock) === 'aggressive_trial') return '分歧转强 / 放量确认'
   return '观察'
+}
+
+const executionContextLabel = (stock) => {
+  if (['低吸预备', '有低吸点'].includes(stock.next_tradeability_tag)) return '低吸预备'
+  if (['回踩确认', '有回踩确认点'].includes(stock.next_tradeability_tag)) return '回踩确认'
+  if (['突破确认', '有突破点'].includes(stock.next_tradeability_tag)) return '突破确认'
+  return ''
+}
+
+const executionMethodSubLabel = (stock) => {
+  const method = executionMethodLabel(stock)
+  const rawContext = executionContextLabel(stock)
+  if (rawContext && rawContext !== method) return `原始语境 ${rawContext}`
+  return ''
 }
 
 const executionPositionLabel = (stock) => {
@@ -2229,6 +2299,7 @@ const handleRefresh = async () => {
 const clearFocusSector = () => {
   const query = { ...route.query }
   delete query.focus_sector
+  delete query.focus_sector_source_type
   router.replace({ query })
 }
 
@@ -2254,6 +2325,8 @@ const loadData = async (options = {}) => {
       sector_scan_trade_date: '',
       sector_scan_resolved_trade_date: '',
       market_env: null,
+      theme_leaders: [],
+      industry_leaders: [],
       mainline_sectors: [],
       sub_mainline_sectors: [],
       refresh_in_progress: false,
@@ -3222,6 +3295,11 @@ onUnmounted(() => {
 .action-block strong {
   color: #fff;
   font-size: 14px;
+}
+
+.action-block-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.54);
 }
 
 .action-reason,

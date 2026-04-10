@@ -34,8 +34,8 @@
             <span class="total-text">共 {{ scanData.total_sectors }} 个板块</span>
           </div>
           <div class="scan-hero-actions">
-            <el-button type="primary" @click="goToPage('/pools', primaryLeaderSector?.sector_name)">去三池分类</el-button>
-            <el-button @click="goToPage('/buy', primaryLeaderSector?.sector_name)">去买点分析</el-button>
+            <el-button type="primary" @click="goToPage('/pools', primaryLeaderSector)">去三池分类</el-button>
+            <el-button @click="goToPage('/buy', primaryLeaderSector)">去买点分析</el-button>
           </div>
         </div>
         <div class="scan-hero-side">
@@ -45,11 +45,11 @@
             <div class="hero-side-copy">{{ marketEnvTitle }}</div>
           </div>
         <div class="hero-side-card">
-          <div class="hero-side-label">风向板块</div>
-          <div class="hero-side-value">{{ primaryLeaderSector?.sector_name || '暂无' }}</div>
-          <div class="hero-side-copy">{{ leaderStockSummary }}</div>
+          <div class="hero-side-label">主线题材</div>
+          <div class="hero-side-value">{{ themeLeaderSector?.sector_name || '暂无明确题材主线' }}</div>
+          <div class="hero-side-copy">{{ themeLeaderSummary }}</div>
           <el-button
-            v-if="primaryLeaderSector && !leaderLoading && !leaderLoaded"
+            v-if="themeLeaderSector && !leaderLoading && !leaderLoaded"
             type="primary"
             link
             size="small"
@@ -58,7 +58,30 @@
             加载风向标
           </el-button>
           <el-button
-            v-else-if="primaryLeaderSector && leaderLoading"
+            v-else-if="themeLeaderSector && leaderLoading"
+            type="primary"
+            link
+            size="small"
+            loading
+          >
+            加载中
+          </el-button>
+        </div>
+        <div class="hero-side-card">
+          <div class="hero-side-label">承接行业</div>
+          <div class="hero-side-value">{{ industryLeaderSector?.sector_name || '暂无明确承接行业' }}</div>
+          <div class="hero-side-copy">{{ industryLeaderSummary }}</div>
+          <el-button
+            v-if="industryLeaderSector && !leaderLoading && !leaderLoaded"
+            type="primary"
+            link
+            size="small"
+            @click="loadLeaderData()"
+          >
+            加载风向标
+          </el-button>
+          <el-button
+            v-else-if="industryLeaderSector && leaderLoading"
             type="primary"
             link
             size="small"
@@ -134,16 +157,16 @@
       <div v-if="focusRows.length" class="focus-board">
         <div class="focus-board-head">
           <div>
-            <div class="focus-board-title">今日焦点板块</div>
-            <div class="focus-board-desc">先把最值得盯的方向排出来，再决定要不要去三池和买点页细看。</div>
+            <div class="focus-board-title">双主线视图</div>
+            <div class="focus-board-desc">先区分题材主线和承接行业，再决定要不要去三池和买点页细看。</div>
           </div>
         </div>
         <div class="focus-board-grid">
-          <article v-for="row in focusRows" :key="`focus-${row.sector_name}`" class="focus-card">
+          <article v-for="row in focusRows" :key="`focus-${row.sector_name}-${row.sector_source_type}`" class="focus-card">
             <div class="focus-card-top">
               <div>
                 <div class="focus-card-title">{{ row.sector_name }}</div>
-                <div class="focus-card-meta">{{ row.sector_summary_reason || row.sector_comment || '暂无结论' }}</div>
+                <div class="focus-card-meta">{{ focusCardMeta(row) }}</div>
               </div>
               <el-tag size="small" :type="actionTagType(row.sector_action_hint)">{{ row.sector_action_hint || '-' }}</el-tag>
             </div>
@@ -229,12 +252,12 @@
                 </el-tag>
               </div>
 
-              <div v-if="leaderStocksBySector[row.sector_name]?.length" class="sector-leader-strip">
+              <div v-if="leaderStocksForSector(row).length" class="sector-leader-strip">
                 <span class="sector-copy-title">风向标个股</span>
                 <div class="sector-leader-list">
                   <button
-                    v-for="stock in leaderStocksBySector[row.sector_name]"
-                    :key="`${row.sector_name}-${stock.ts_code}`"
+                    v-for="stock in leaderStocksForSector(row)"
+                    :key="`${row.sector_name}-${row.sector_source_type}-${stock.ts_code}`"
                     class="sector-leader-chip"
                     type="button"
                     @click="openCheckup(stock)"
@@ -249,8 +272,8 @@
 
               <div class="sector-card-actions">
                 <el-button type="primary" link size="small" @click="openTopStocks(row)">查看板块 Top10</el-button>
-                <el-button type="primary" link size="small" @click="goToPage('/pools', row.sector_name)">去三池看这个方向</el-button>
-                <el-button type="primary" link size="small" @click="goToPage('/buy', row.sector_name)">去买点找执行位</el-button>
+                <el-button type="primary" link size="small" @click="goToPage('/pools', row)">去三池看这个方向</el-button>
+                <el-button type="primary" link size="small" @click="goToPage('/buy', row)">去买点找执行位</el-button>
               </div>
             </article>
           </div>
@@ -372,6 +395,8 @@ const createDefaultScanData = () => ({
   concept_data_status: '',
   concept_data_message: '',
   threshold_profile: '',
+  theme_leaders: [],
+  industry_leaders: [],
   mainline_sectors: [],
   sub_mainline_sectors: [],
   follow_sectors: [],
@@ -417,8 +442,8 @@ const allSectors = computed(() => {
 
 const focusRows = computed(() => (
   [
-    ...(scanData.value.mainline_sectors || []).slice(0, 2),
-    ...(scanData.value.sub_mainline_sectors || []).slice(0, 2),
+    ...(scanData.value.theme_leaders || []).slice(0, 2),
+    ...(scanData.value.industry_leaders || []).slice(0, 2),
   ].slice(0, 4)
 ))
 
@@ -462,14 +487,14 @@ const summaryCards = computed(() => ([
     copy: `主线 / 次主线 / 跟风，${thresholdTagLabel.value}`
   },
   {
-    label: '主线结论',
-    value: primaryLeaderSector.value?.sector_name || '暂无',
-    copy: primaryLeaderSector.value?.sector_summary_reason || primaryLeaderSector.value?.sector_comment || '今天没有特别清晰的主线'
+    label: '主线题材',
+    value: themeLeaderSector.value?.sector_name || '暂无',
+    copy: themeLeaderSector.value?.sector_summary_reason || themeLeaderSector.value?.sector_comment || '今天没有特别清晰的题材主线'
   },
   {
-    label: '风向标',
-    value: leaderData.value?.leader_stocks?.[0]?.stock_name || '暂无',
-    copy: leaderStockSummary.value
+    label: '承接行业',
+    value: industryLeaderSector.value?.sector_name || '暂无',
+    copy: industryLeaderSector.value?.sector_summary_reason || industryLeaderSector.value?.sector_comment || '行业扩散还不够明确'
   },
   {
     label: '执行提示',
@@ -484,18 +509,32 @@ const tierCounts = computed(() => ({
   C: allSectors.value.filter((row) => row.sector_tier === 'C').length,
 }))
 
-const primaryLeaderSector = computed(() => {
-  return leaderData.value?.sector || scanData.value.mainline_sectors?.[0] || scanData.value.sub_mainline_sectors?.[0] || null
-})
+const themeLeaderSector = computed(() => (
+  leaderData.value?.theme_sector || scanData.value.theme_leaders?.[0] || null
+))
+
+const industryLeaderSector = computed(() => (
+  leaderData.value?.industry_sector || scanData.value.industry_leaders?.[0] || null
+))
+
+const primaryLeaderSector = computed(() => (
+  themeLeaderSector.value
+  || industryLeaderSector.value
+  || leaderData.value?.sector
+  || scanData.value.mainline_sectors?.[0]
+  || scanData.value.sub_mainline_sectors?.[0]
+  || null
+))
 
 const modeTagLabel = computed(() => {
   const mode = scanData.value.sector_data_mode
-  if (mode === 'hybrid') return '题材+行业'
-  if (mode === 'limitup_industry_hybrid') return '涨停行业+行业'
-  if (mode === 'industry_only') return '行业口径'
+  if (mode === 'hybrid') return '题材主线+行业承接'
+  if (mode === 'limitup_industry_hybrid') return '涨停行业承接'
+  if (mode === 'industry_only') return '行业承接口径'
+  if (mode === 'realtime_hot_sector') return '盘中热度参考'
   if (mode === 'mock') return '模拟口径'
   if (mode === 'empty') return '空结果'
-  return '板块口径'
+  return '扫描口径'
 })
 
 const modeTagType = computed(() => {
@@ -523,37 +562,59 @@ const sectorGroupingSummary = computed(() => (
   `A类 ${tierCounts.value.A} 个，B类 ${tierCounts.value.B} 个，C类 ${tierCounts.value.C} 个`
 ))
 
-const leaderStockSummary = computed(() => {
-  const leaderStocks = leaderData.value?.leader_stocks || []
+const themeLeaderSummary = computed(() => {
+  const leaderStocks = leaderData.value?.theme_leader_stocks || []
   if (leaderLoading.value) return '风向标加载中'
-  if (!leaderLoaded.value && primaryLeaderSector.value) return '按需加载风向标个股'
-  if (!leaderStocks.length) return '暂无风向标'
+  if (!leaderLoaded.value && themeLeaderSector.value) return '按需加载题材风向标'
+  if (!themeLeaderSector.value) return '今日无明确题材主线'
+  if (!leaderStocks.length) return themeLeaderSector.value?.sector_summary_reason || '题材方向已识别，暂未补齐风向标'
+  return `风向标 ${leaderStocks.map((item) => item.stock_name).join(' / ')}`
+})
+
+const industryLeaderSummary = computed(() => {
+  const leaderStocks = leaderData.value?.industry_leader_stocks || []
+  if (leaderLoading.value) return '风向标加载中'
+  if (!leaderLoaded.value && industryLeaderSector.value) return '按需加载行业风向标'
+  if (!industryLeaderSector.value) return '今日无明确承接行业'
+  if (!leaderStocks.length) return industryLeaderSector.value?.sector_summary_reason || '行业方向已识别，暂未补齐风向标'
   return `风向标 ${leaderStocks.map((item) => item.stock_name).join(' / ')}`
 })
 
 const leaderFlowSummary = computed(() => {
+  if (themeLeaderSector.value && industryLeaderSector.value) {
+    return `先盯 ${themeLeaderSector.value.sector_name} 的情绪强度，再看 ${industryLeaderSector.value.sector_name} 是否继续承接扩散。`
+  }
   const sector = primaryLeaderSector.value
   if (!sector) return '暂无可执行主线'
   return sector.sector_summary_reason || sector.sector_comment || '暂无说明'
 })
 
 const leaderStocksBySector = computed(() => {
-  const sectorName = primaryLeaderSector.value?.sector_name
-  const stocks = leaderData.value?.leader_stocks || []
-  if (!sectorName || !stocks.length) return {}
-  return {
-    [sectorName]: stocks
+  const mapping = {}
+  if (themeLeaderSector.value && (leaderData.value?.theme_leader_stocks || []).length) {
+    mapping[sectorKey(themeLeaderSector.value)] = leaderData.value.theme_leader_stocks
   }
+  if (industryLeaderSector.value && (leaderData.value?.industry_leader_stocks || []).length) {
+    mapping[sectorKey(industryLeaderSector.value)] = leaderData.value.industry_leader_stocks
+  }
+  return mapping
 })
 
 const actionHeadline = computed(() => {
-  if (!primaryLeaderSector.value) return '今天没有明确主线，先看强度和承接'
-  return `${primaryLeaderSector.value.sector_name} 是当前最值得优先跟踪的方向`
+  if (themeLeaderSector.value && industryLeaderSector.value) {
+    return `${themeLeaderSector.value.sector_name} 是主线题材，${industryLeaderSector.value.sector_name} 负责承接扩散`
+  }
+  if (themeLeaderSector.value) return `${themeLeaderSector.value.sector_name} 是当前最值得优先跟踪的主线题材`
+  if (industryLeaderSector.value) return `${industryLeaderSector.value.sector_name} 是当前最清晰的承接行业`
+  return '今天没有明确双主线，先看强度和承接'
 })
 
 const actionCopy = computed(() => {
-  if (!primaryLeaderSector.value) {
+  if (!themeLeaderSector.value && !industryLeaderSector.value) {
     return `${sectorGroupingSummary.value}。当前更适合保留弹性，先看市场环境和龙头反馈，不要过早押单一方向。`
+  }
+  if (themeLeaderSector.value && industryLeaderSector.value) {
+    return `${themeLeaderSector.value.sector_summary_reason || themeLeaderSector.value.sector_comment || '题材方向更强'}。同时观察 ${industryLeaderSector.value.sector_name} 是否继续扩散，确认不是只有前排情绪在表演。`
   }
   return `${primaryLeaderSector.value.sector_summary_reason || primaryLeaderSector.value.sector_comment || '该方向当前更强'}。先盯龙头和中军是否继续联动，再决定是否从观察转执行。`
 })
@@ -569,31 +630,31 @@ const sectorModeAlertType = computed(() => (
 
 const sectorModeAlertTitle = computed(() => {
   if (scanData.value.sector_data_mode === 'limitup_industry_hybrid') {
-    return '涨停列表未提供 theme 字段，当前已改为按涨停行业聚合，并补充行业均值扫描结果。'
+    return '题材聚合缺失，当前以涨停行业和行业均值识别承接方向；题材主线会单独留空，不再混成统一主线。'
   }
   const status = scanData.value.concept_data_status
   if (status === 'missing_theme') {
-    return '涨停列表已返回当日数据，但未提供 theme 字段，当前已退回行业口径并自动放宽阈值。'
+    return '涨停列表已返回当日数据，但未提供 theme 字段，当前只保留行业承接视图，不再把行业直接解释成题材主线。'
   }
   if (status === 'empty') {
-    return '当日涨停列表为空，当前结果按行业均值扫描，并已自动切换到放宽阈值。'
+    return '当日涨停列表为空，当前结果按行业均值扫描，并已自动切换到行业承接口径。'
   }
   if (status === 'missing_pct_chg') {
-    return '涨停列表缺少涨跌幅字段，当前结果按行业均值扫描，并已自动切换到放宽阈值。'
+    return '涨停列表缺少涨跌幅字段，当前结果按行业均值扫描，并已自动切换到行业承接口径。'
   }
   if (status === 'no_token') {
-    return '未配置 Tushare Token，当前结果按行业均值扫描，并已自动切换到放宽阈值。'
+    return '未配置 Tushare Token，当前结果按行业均值扫描，并已自动切换到行业承接口径。'
   }
   if (status === 'error') {
-    return '题材聚合调用异常，当前结果按行业均值扫描，并已自动切换到放宽阈值。'
+    return '题材聚合调用异常，当前结果按行业均值扫描，并已自动切换到行业承接口径。'
   }
-  return '当天题材聚合未生成结果，当前结果按行业均值扫描，并已自动切换到放宽阈值。'
+  return '当天题材聚合未生成结果，当前结果按行业均值扫描，并已自动切换到行业承接口径。'
 })
 
 const sectorPanes = computed(() => ([
   {
     name: 'mainline',
-    label: '主线板块',
+    label: '主线候选',
     rows: scanData.value.mainline_sectors || [],
     count: scanData.value.mainline_sectors?.length || 0,
     empty: '今日无主线板块（市场偏弱）'
@@ -652,9 +713,25 @@ const formatHotBoardTime = (quoteTime) => {
   return text
 }
 
-const goToPage = (path, sectorName = '') => {
-  if (sectorName) {
-    router.push({ path, query: { focus_sector: sectorName } })
+const sectorKey = (sector) => `${sector?.sector_name || ''}::${sector?.sector_source_type || ''}`
+
+const leaderStocksForSector = (sector) => leaderStocksBySector.value[sectorKey(sector)] || []
+
+const focusCardMeta = (row) => `${sourceTagLabel(row.sector_source_type)} · ${row.sector_summary_reason || row.sector_comment || '暂无结论'}`
+
+const goToPage = (path, sector = null) => {
+  if (typeof sector === 'string' && sector) {
+    router.push({ path, query: { focus_sector: sector } })
+    return
+  }
+  if (sector?.sector_name) {
+    router.push({
+      path,
+      query: {
+        focus_sector: sector.sector_name,
+        focus_sector_source_type: sector.sector_source_type || '',
+      }
+    })
     return
   }
   router.push(path)
@@ -740,7 +817,7 @@ const loadSupportingData = async (tradeDate, version, options = {}) => {
 }
 
 const loadLeaderData = async (options = {}) => {
-  if (!primaryLeaderSector.value || leaderLoading.value) {
+  if ((!themeLeaderSector.value && !industryLeaderSector.value) || leaderLoading.value) {
     return
   }
   leaderLoading.value = true

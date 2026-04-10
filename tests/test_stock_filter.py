@@ -605,6 +605,41 @@ class TestStockFilter:
             for text in ["突破确认机会", "试错资格", "位置不完美"]
         )
 
+    def test_bucket_structure_bonus_prefers_strong_confirm_over_retrace_and_premove(self, service):
+        assert service._bucket_structure_bonus("强势确认", lane="execution") > service._bucket_structure_bonus("趋势回踩", lane="execution")
+        assert service._bucket_structure_bonus("趋势回踩", lane="execution") > service._bucket_structure_bonus("异动预备", lane="execution")
+
+    def test_review_bias_adjustment_marks_premove_downweight(self, service):
+        stock = StockOutput(
+            ts_code="000001.SZ",
+            stock_name="测试股",
+            sector_name="测试",
+            candidate_bucket_tag="异动预备",
+            change_pct=1.2,
+            stock_strength_tag=StockStrengthTag.MEDIUM,
+            stock_continuity_tag=StockContinuityTag.OBSERVABLE,
+            stock_tradeability_tag=StockTradeabilityTag.CAUTION,
+            stock_core_tag=StockCoreTag.FOLLOW,
+            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+        )
+        bias = service._resolve_review_bias(
+            stock,
+            StockPoolTag.MARKET_WATCH,
+            {
+                "exact": {},
+                "bucket": {
+                    "异动预备": {
+                        "score": 0.0,
+                        "label": "复盘中性",
+                        "reason": "样本一般。",
+                    }
+                },
+            },
+        )
+
+        assert bias["score"] < 0
+        assert "异动预备结构降权" in (bias["reason"] or "")
+
     def test_low_turnover_breakthrough_above_6_5pct_can_still_be_standard(self, service, mock_market_env_attack):
         """
         测试：非涨停、低换手、刚过确认位的突破票，不应被 6.5% 单阈值机械打成试错票
@@ -1654,6 +1689,78 @@ class TestStockFilter:
 
         assert [stock.ts_code for stock in pools.market_watch_pool] == ["002210.SZ"]
         assert len(pools.account_executable_pool) == 0
+
+    def test_new_pools_can_follow_industry_leader_when_theme_name_unmatched(self, service, mock_market_env_attack):
+        """
+        测试：题材主线名称未命中候选时，三池仍可跟随承接行业放行对应主线票。
+        """
+        stock = StockInput(
+            ts_code="002112.SZ",
+            stock_name="电力承接票",
+            sector_name="电力",
+            close=12.4,
+            change_pct=7.6,
+            turnover_rate=9.4,
+            amount=230000,
+            vol_ratio=2.2,
+            high=12.6,
+            low=11.5,
+            open=11.7,
+            pre_close=11.52,
+            stage_tag="修复",
+            candidate_source_tag="涨幅前列/量比异动",
+        )
+        theme_leader = SectorOutput(
+            sector_name="绿色电力",
+            sector_source_type="concept",
+            sector_change_pct=5.1,
+            sector_score=98.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+            sector_comment="题材主线",
+            sector_tier=SectorTierTag.A,
+        )
+        industry_leader = SectorOutput(
+            sector_name="电力",
+            sector_source_type="industry",
+            sector_change_pct=3.9,
+            sector_score=93.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+            sector_comment="行业承接",
+            sector_tier=SectorTierTag.A,
+        )
+
+        pools = service.classify_pools(
+            "2026-03-25",
+            [stock],
+            holdings=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=85000,
+                total_position_ratio=0.15,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=mock_market_env_attack,
+            sector_scan=MagicMock(
+                theme_leaders=[theme_leader],
+                industry_leaders=[industry_leader],
+                mainline_sectors=[],
+                sub_mainline_sectors=[],
+                follow_sectors=[],
+                trash_sectors=[],
+            ),
+        )
+
+        assert [candidate.ts_code for candidate in pools.market_watch_pool] == ["002112.SZ"]
+        assert pools.market_watch_pool[0].sector_name == "电力"
 
     def test_new_pools_exclude_star_and_bj_codes(self, service, mock_market_env_attack):
         """

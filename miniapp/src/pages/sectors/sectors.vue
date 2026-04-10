@@ -15,11 +15,11 @@
       </view>
 
       <view class="sector-list">
-        <!-- 主线板块 -->
-        <view v-if="activeTab === 'mainline'" v-for="item in data.mainline_sectors" :key="item.sector_name" class="sector-item" @click="showDetail(item)">
+        <!-- 主线题材 -->
+        <view v-if="activeTab === 'theme'" v-for="item in data.theme_leaders" :key="`${item.sector_name}-${item.sector_source_type}`" class="sector-item" @click="showDetail(item)">
           <view class="sector-info">
             <text class="sector-name">{{ item.sector_name }}</text>
-            <text class="sector-tag">{{ item.sector_mainline_tag }}</text>
+            <text class="sector-tag">{{ item.sector_source_type === 'concept' ? '题材主线' : item.sector_mainline_tag }}</text>
           </view>
           <view class="sector-right">
             <text :class="['sector-change', item.sector_change_pct > 0 ? 'text-red' : 'text-green']">
@@ -29,11 +29,11 @@
           </view>
         </view>
 
-        <!-- 次主线 -->
-        <view v-if="activeTab === 'sub'" v-for="item in data.sub_mainline_sectors" :key="item.sector_name" class="sector-item" @click="showDetail(item)">
+        <!-- 承接行业 -->
+        <view v-if="activeTab === 'industry'" v-for="item in data.industry_leaders" :key="`${item.sector_name}-${item.sector_source_type}`" class="sector-item" @click="showDetail(item)">
           <view class="sector-info">
             <text class="sector-name">{{ item.sector_name }}</text>
-            <text class="sector-tag">{{ item.sector_mainline_tag }}</text>
+            <text class="sector-tag">{{ item.sector_source_type === 'limitup_industry' ? '涨停行业' : '承接行业' }}</text>
           </view>
           <view class="sector-right">
             <text :class="['sector-change', item.sector_change_pct > 0 ? 'text-red' : 'text-green']">
@@ -43,11 +43,11 @@
           </view>
         </view>
 
-        <!-- 跟风 -->
-        <view v-if="activeTab === 'follow'" v-for="item in data.follow_sectors" :key="item.sector_name" class="sector-item" @click="showDetail(item)">
+        <!-- 主线候选 -->
+        <view v-if="activeTab === 'mainline'" v-for="item in data.mainline_sectors" :key="`${item.sector_name}-${item.sector_source_type}`" class="sector-item" @click="showDetail(item)">
           <view class="sector-info">
             <text class="sector-name">{{ item.sector_name }}</text>
-            <text class="sector-tag">{{ item.sector_tradeability_tag }}</text>
+            <text class="sector-tag">{{ item.sector_mainline_tag }}</text>
           </view>
           <view class="sector-right">
             <text :class="['sector-change', item.sector_change_pct > 0 ? 'text-red' : 'text-green']">
@@ -82,6 +82,10 @@
             <text class="detail-value">{{ currentItem.sector_mainline_tag }}</text>
           </view>
           <view class="detail-row">
+            <text class="detail-label">来源类型</text>
+            <text class="detail-value">{{ currentItem.sector_source_type }}</text>
+          </view>
+          <view class="detail-row">
             <text class="detail-label">连续性</text>
             <text class="detail-value">{{ currentItem.sector_continuity_tag }}</text>
           </view>
@@ -108,22 +112,22 @@ import { ref, onMounted } from 'vue'
 import { sectorApi, getToday } from '../../api'
 
 const today = ref(getToday())
-const activeTab = ref('mainline')
+const activeTab = ref('theme')
 const loading = ref(false)
-const data = ref({ mainline_sectors: [], sub_mainline_sectors: [], follow_sectors: [] })
+const data = ref({ theme_leaders: [], industry_leaders: [], mainline_sectors: [], sub_mainline_sectors: [], follow_sectors: [] })
 const showModal = ref(false)
 const currentItem = ref({})
 
 const tabs = [
-  { key: 'mainline', name: '主线' },
-  { key: 'sub', name: '次主线' },
-  { key: 'follow', name: '跟风' }
+  { key: 'theme', name: '题材主线' },
+  { key: 'industry', name: '承接行业' },
+  { key: 'mainline', name: '主线候选' }
 ]
 
 const getCount = (key) => {
-  if (key === 'mainline') return data.value.mainline_sectors?.length || 0
-  if (key === 'sub') return data.value.sub_mainline_sectors?.length || 0
-  return data.value.follow_sectors?.length || 0
+  if (key === 'theme') return data.value.theme_leaders?.length || 0
+  if (key === 'industry') return data.value.industry_leaders?.length || 0
+  return data.value.mainline_sectors?.length || 0
 }
 
 const showDetail = (item) => {

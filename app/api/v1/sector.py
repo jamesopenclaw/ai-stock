@@ -147,6 +147,8 @@ async def scan_sectors(
     板块扫描
 
     返回当日板块分类：
+    - theme_leaders: 主线题材（概念口径）
+    - industry_leaders: 承接行业（行业口径）
     - mainline_sectors: 主线板块（可交易）
     - sub_mainline_sectors: 次主线板块
     - follow_sectors: 跟风板块（谨慎）
@@ -169,6 +171,8 @@ async def scan_sectors(
             "concept_data_status": result.concept_data_status,
             "concept_data_message": result.concept_data_message,
             "threshold_profile": result.threshold_profile,
+            "theme_leaders": [s.model_dump() for s in result.theme_leaders],
+            "industry_leaders": [s.model_dump() for s in result.industry_leaders],
             "mainline_sectors": [s.model_dump() for s in result.mainline_sectors],
             "sub_mainline_sectors": [s.model_dump() for s in result.sub_mainline_sectors],
             "follow_sectors": [s.model_dump() for s in result.follow_sectors],
@@ -205,8 +209,13 @@ async def get_leader_sector(
                 "threshold_profile": result.threshold_profile,
                 "concept_data_status": result.concept_data_status,
                 "concept_data_message": result.concept_data_message,
+                "leader_source_type": result.leader_source_type,
                 "sector": result.sector.model_dump(),
+                "theme_sector": result.theme_sector.model_dump() if result.theme_sector else None,
+                "industry_sector": result.industry_sector.model_dump() if result.industry_sector else None,
                 "leader_stocks": [s.model_dump() for s in result.leader_stocks],
+                "theme_leader_stocks": [s.model_dump() for s in result.theme_leader_stocks],
+                "industry_leader_stocks": [s.model_dump() for s in result.industry_leader_stocks],
             }
         )
     except Exception as e:

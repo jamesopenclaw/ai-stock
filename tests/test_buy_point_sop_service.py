@@ -24,6 +24,10 @@ from app.models.schemas import (  # noqa: E402
     StockTradeabilityTag,
     StructureStateTag,
     StockPoolsOutput,
+    SectorOutput,
+    SectorMainlineTag,
+    SectorContinuityTag,
+    SectorTradeabilityTag,
 )
 from app.services.buy_point_sop import buy_point_sop_service  # noqa: E402
 
@@ -645,9 +649,81 @@ def test_buy_point_sop_account_context_warns_same_sector_exposure_for_new_positi
         SimpleNamespace(below_no_buy="17.80"),
     )
 
+    assert exposure.summary == "暂无明显同方向重复暴露。"
     assert "已有同板块持仓" in account_context.account_conclusion
     assert advice.suggestion == "轻仓试错"
     assert "已有同板块持仓" in advice.reason
+
+
+def test_buy_point_sop_direction_exposure_detects_same_theme():
+    exposure = buy_point_sop_service._build_direction_exposure(
+        "002463.SZ",
+        "元器件",
+        [{"ts_code": "300100.SZ", "sector_name": "软件服务", "concept_names": ["PCB"]}],
+        "2026-03-23",
+        target_direction_name="PCB",
+        target_direction_source_type="concept",
+        target_direction_role="theme",
+    )
+
+    assert exposure.same_theme_codes == ["300100.SZ"]
+    assert exposure.same_industry_codes == []
+    assert "主线题材 1 只" in exposure.summary
+
+
+def test_buy_point_sop_account_context_warns_same_theme_exposure_for_new_position():
+    account = SimpleNamespace(
+        total_asset=100000,
+        available_cash=80000,
+        total_position_ratio=0.2,
+        holding_count=1,
+        today_new_buy_count=0,
+    )
+    market_env = SimpleNamespace(market_env_tag=MarketEnvTag.ATTACK)
+    target_stock = _sample_scored_stock()
+    target_stock.concept_names = ["PCB"]
+    target_stock.next_tradeability_tag = NextTradeabilityTag.RETRACE_CONFIRM
+    exposure = buy_point_sop_service._build_direction_exposure(
+        "002463.SZ",
+        "元器件",
+        [{"ts_code": "300100.SZ", "sector_name": "软件服务", "concept_names": ["PCB"]}],
+        "2026-03-23",
+        target_direction_name="PCB",
+        target_direction_source_type="concept",
+        target_direction_role="theme",
+    )
+
+    account_context = buy_point_sop_service._build_account_context(
+        account,
+        market_env,
+        exposure,
+        target_stock,
+        "002463.SZ",
+        [
+            {
+                "ts_code": "300100.SZ",
+                "stock_name": "题材先手仓",
+                "sector_name": "软件服务",
+                "holding_market_value": 15000,
+                "pnl_pct": 2.3,
+                "can_sell_today": True,
+            }
+        ],
+    )
+    advice = buy_point_sop_service._build_position_advice(
+        account,
+        market_env,
+        SimpleNamespace(close=18.2),
+        account_context,
+        exposure,
+        SimpleNamespace(buy_point_level="A"),
+        SimpleNamespace(conclusion="买"),
+        SimpleNamespace(below_no_buy="17.80"),
+    )
+
+    assert "已有同题材持仓" in account_context.account_conclusion
+    assert advice.suggestion == "轻仓试错"
+    assert "已有同题材持仓" in advice.reason
 
 
 def test_buy_point_sop_market_profile_changes_entry_size_and_guidance():
@@ -906,6 +982,7 @@ async def test_buy_point_sop_prefers_realtime_single_stock_input_for_intraday(mo
         ),
     )
     scored_stock = _sample_scored_stock()
+    scored_stock.concept_names = ["PCB"]
     scored_stock.close = 6.95
     scored_stock.open = 6.88
     scored_stock.high = 7.02
@@ -913,6 +990,19 @@ async def test_buy_point_sop_prefers_realtime_single_stock_input_for_intraday(mo
     scored_stock.change_pct = 3.27
     pools = StockPoolsOutput(
         trade_date="2026-03-24",
+        theme_leaders=[
+            SectorOutput(
+                sector_name="PCB",
+                sector_source_type="concept",
+                sector_change_pct=5.8,
+                sector_score=98.0,
+                sector_strength_rank=1,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                sector_continuity_days=3,
+            )
+        ],
         account_executable_pool=[scored_stock],
         total_count=1,
     )
@@ -961,6 +1051,9 @@ async def test_buy_point_sop_prefers_realtime_single_stock_input_for_intraday(mo
 
     assert result.basic_info.quote_time == "2026-03-24 10:35:00"
     assert result.basic_info.data_source == "realtime_sina"
+    assert result.basic_info.direction_match_name == "PCB"
+    assert result.basic_info.direction_match_source_type == "concept"
+    assert result.basic_info.direction_match_role == "theme"
     assert "站均价线上" in result.intraday_judgement.price_vs_avg_line
     assert result.intraday_judgement.volume_quality == "实时放量跟随（相对放量 2.2）"
     assert "[需确认]" not in result.intraday_judgement.intraday_structure

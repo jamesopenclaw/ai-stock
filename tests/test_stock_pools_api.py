@@ -270,6 +270,8 @@ async def test_compute_radar_stock_pools_result_prefers_today_sources(monkeypatc
         (),
         {
             "resolved_trade_date": "2026-03-24",
+            "theme_leaders": [],
+            "industry_leaders": [],
             "mainline_sectors": [],
             "sub_mainline_sectors": [],
         },
@@ -356,6 +358,34 @@ async def test_get_stock_pools_returns_snapshot_market_env_and_mainline(monkeypa
             sentiment_score=63.3,
             overall_score=62.7,
         ),
+        theme_leaders=[
+            SectorOutput(
+                sector_name="草甘膦",
+                sector_source_type="concept",
+                sector_change_pct=6.02,
+                sector_score=100.0,
+                sector_strength_rank=1,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.CAUTION,
+                sector_rotation_tag="强化中",
+                sector_summary_reason="题材强度领先",
+            )
+        ],
+        industry_leaders=[
+            SectorOutput(
+                sector_name="农化制品",
+                sector_source_type="industry",
+                sector_change_pct=3.8,
+                sector_score=92.0,
+                sector_strength_rank=2,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.CAUTION,
+                sector_rotation_tag="稳定主线",
+                sector_summary_reason="行业承接较稳",
+            )
+        ],
         mainline_sectors=[
             SectorOutput(
                 sector_name="草甘膦",
@@ -397,6 +427,10 @@ async def test_get_stock_pools_returns_snapshot_market_env_and_mainline(monkeypa
     assert response.code == 200
     assert response.data["market_env"]["market_env_profile"] == "中性偏强"
     assert response.data["market_env"]["market_headline"] == "可以盯主线，但先等确认再上"
+    assert response.data["theme_leaders"][0]["sector_name"] == "草甘膦"
+    assert response.data["theme_leaders"][0]["sector_source_type"] == "concept"
+    assert response.data["industry_leaders"][0]["sector_name"] == "农化制品"
+    assert response.data["industry_leaders"][0]["sector_source_type"] == "industry"
     assert response.data["mainline_sectors"][0]["sector_name"] == "草甘膦"
     assert response.data["mainline_sectors"][0]["sector_rotation_tag"] == "强化中"
 

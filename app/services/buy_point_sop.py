@@ -51,6 +51,11 @@ class DailyLevelSnapshot:
 class DirectionExposureSnapshot:
     has_same_code: bool
     same_sector_codes: List[str]
+    same_theme_codes: List[str]
+    same_industry_codes: List[str]
+    direction_name: str
+    direction_source_type: str
+    direction_role: str
     summary: str
 
 
@@ -147,10 +152,19 @@ class BuyPointSopService:
                 if analysis_stock.stock_tradeability_tag != StockTradeabilityTag.NOT_RECOMMENDED
                 else StockPoolTag.MARKET_WATCH
             )
+        direction_context = buy_point_service._build_direction_context(
+            sector_scan=context.sector_scan,
+            stock_pools=stock_pools,
+        )
         buy_point = buy_point_service._analyze_stock_buy_point(
             analysis_stock,
             realtime_market_env,
             context.account,
+        )
+        buy_point = buy_point_service._attach_direction_match(
+            buy_point,
+            analysis_stock,
+            direction_context,
         )
         history_rows, resolved_trade_date = self._load_history_payload(
             normalized_code,
@@ -162,6 +176,9 @@ class BuyPointSopService:
             target_input.sector_name,
             context.holdings_list,
             trade_date,
+            target_direction_name=getattr(buy_point, "direction_match_name", "") or "",
+            target_direction_source_type=getattr(buy_point, "direction_match_source_type", "") or "",
+            target_direction_role=getattr(buy_point, "direction_match_role", "") or "",
         )
         same_code_holding = self._find_same_code_holding(normalized_code, context.holdings_list)
         account_context = self._build_account_context(
@@ -234,11 +251,17 @@ class BuyPointSopService:
                 ts_code=target_input.ts_code,
                 stock_name=target_input.stock_name,
                 sector_name=target_input.sector_name,
+                direction_match_name=getattr(buy_point, "direction_match_name", "") or "",
+                direction_match_source_type=getattr(buy_point, "direction_match_source_type", "") or "",
+                direction_match_role=getattr(buy_point, "direction_match_role", "") or "",
+                direction_match_note=getattr(buy_point, "direction_match_note", "") or "",
                 market_env_tag=realtime_market_env.market_env_tag.value,
                 stable_market_env_tag=stable_market_env.market_env_tag.value,
                 realtime_market_env_tag=realtime_market_env.market_env_tag.value,
                 buy_signal_tag=buy_point.buy_signal_tag.value,
                 buy_point_type=buy_point.buy_point_type.value,
+                buy_display_type=getattr(buy_point, "buy_display_type", None) or buy_point.buy_point_type.value,
+                buy_execution_context=getattr(buy_point, "buy_execution_context", None) or "",
                 candidate_bucket_tag=target_scored.candidate_bucket_tag or "",
                 quote_time=target_input.quote_time,
                 data_source=target_input.data_source,
@@ -365,10 +388,16 @@ class BuyPointSopService:
         target_sector: str,
         holdings_list: List[dict],
         trade_date: str,
+        target_direction_name: str = "",
+        target_direction_source_type: str = "",
+        target_direction_role: str = "",
     ) -> DirectionExposureSnapshot:
         same_code = False
         same_sector_codes: List[str] = []
+        same_theme_codes: List[str] = []
+        same_industry_codes: List[str] = []
         compact_trade_date = str(trade_date).replace("-", "")[:8]
+        normalized_direction_source = str(target_direction_source_type or "").strip()
 
         for holding in holdings_list:
             holding_code = normalize_ts_code(str(holding.get("ts_code") or ""))
@@ -378,25 +407,64 @@ class BuyPointSopService:
                 same_code = True
                 continue
             sector_name = str(holding.get("sector_name") or "")
+            concept_names = list(holding.get("concept_names") or [])
+            detail = {}
             if not sector_name:
                 try:
                     detail = tushare_client.get_stock_detail(holding_code, compact_trade_date)
                 except Exception:
                     detail = {}
                 sector_name = str(detail.get("sector_name") or "")
-            if sector_name and sector_name == target_sector:
+                concept_names = list(detail.get("concept_names") or concept_names)
+            elif normalized_direction_source == "concept" and not concept_names:
+                try:
+                    detail = tushare_client.get_stock_detail(holding_code, compact_trade_date)
+                except Exception:
+                    detail = {}
+                concept_names = list(detail.get("concept_names") or concept_names)
+                if not sector_name:
+                    sector_name = str(detail.get("sector_name") or "")
+
+            theme_matched = (
+                normalized_direction_source == "concept"
+                and target_direction_name
+                and any(str(name or "").strip() == target_direction_name for name in concept_names)
+            )
+            industry_matched = (
+                normalized_direction_source in {"industry", "limitup_industry"}
+                and target_direction_name
+                and sector_name
+                and sector_name == target_direction_name
+            )
+            if theme_matched:
+                same_theme_codes.append(holding_code)
+            if industry_matched:
+                same_industry_codes.append(holding_code)
+            if theme_matched or industry_matched:
                 same_sector_codes.append(holding_code)
 
         if same_code:
             summary = "已有同一只股票持仓，属于加仓语境。"
-        elif same_sector_codes:
-            summary = f"已有同方向暴露（同板块 {len(same_sector_codes)} 只），新仓必须更优。"
+        elif same_theme_codes and same_industry_codes:
+            summary = (
+                f"已有同方向暴露（主线题材 {len(same_theme_codes)} 只，承接行业 {len(same_industry_codes)} 只），"
+                "新仓必须更优。"
+            )
+        elif same_theme_codes:
+            summary = f"已有同方向暴露（主线题材 {len(same_theme_codes)} 只），新仓必须更优。"
+        elif same_industry_codes:
+            summary = f"已有同方向暴露（承接行业 {len(same_industry_codes)} 只），新仓必须更优。"
         else:
             summary = "暂无明显同方向重复暴露。"
 
         return DirectionExposureSnapshot(
             has_same_code=same_code,
             same_sector_codes=same_sector_codes,
+            same_theme_codes=same_theme_codes,
+            same_industry_codes=same_industry_codes,
+            direction_name=target_direction_name,
+            direction_source_type=normalized_direction_source,
+            direction_role=str(target_direction_role or ""),
             summary=summary,
         )
 
@@ -442,6 +510,12 @@ class BuyPointSopService:
             conclusion = "当前不适合承担 T+1 风险"
         elif direction_exposure.has_same_code:
             conclusion = "已有同一只股票持仓，只能按加仓语境处理"
+        elif direction_exposure.same_theme_codes and direction_exposure.same_industry_codes:
+            conclusion = "已有同题材/同行业持仓，新开仓必须更优。"
+        elif direction_exposure.same_theme_codes:
+            conclusion = "已有同题材持仓，新开仓必须更优。"
+        elif direction_exposure.same_industry_codes:
+            conclusion = "已有同行业持仓，新开仓必须更优。"
         elif not holding_ok and holding_reason:
             conclusion = holding_reason
         elif market_env.market_env_tag == MarketEnvTag.DEFENSE:
@@ -553,7 +627,7 @@ class BuyPointSopService:
 
         return BuyPointSopDailyJudgement(
             current_stage=stage,
-            buy_signal=f"{buy_point.buy_point_type.value}，{buy_point.buy_signal_tag.value}",
+            buy_signal=f"{(getattr(buy_point, 'buy_display_type', None) or buy_point.buy_point_type.value)}，{buy_point.buy_signal_tag.value}",
             buy_point_level=level,
             reason=reason,
             risk_items=risk_items,
@@ -847,6 +921,15 @@ class BuyPointSopService:
             decision="不加",
             reason="当前不满足加仓条件。",
         )
+        account_conclusion = str(account_context.account_conclusion or "")
+        has_same_direction_exposure = bool(
+            direction_exposure.same_theme_codes
+            or direction_exposure.same_industry_codes
+            or direction_exposure.same_sector_codes
+            or "同题材持仓" in account_conclusion
+            or "同行业持仓" in account_conclusion
+            or "同板块持仓" in account_conclusion
+        )
         if direction_exposure.has_same_code:
             return self._build_add_position_advice(
                 account,
@@ -872,8 +955,7 @@ class BuyPointSopService:
             and market_env.market_env_tag == MarketEnvTag.ATTACK
             and account.total_position_ratio < AccountAdapterService.POSITION_LOW
             and not direction_exposure.has_same_code
-            and not direction_exposure.same_sector_codes
-            and "同板块持仓" not in str(account_context.account_conclusion or "")
+            and not has_same_direction_exposure
         ):
             suggestion = "中仓参与"
             reason = "环境、结构、分时和账户都比较匹配，可以按计划仓位参与。"
@@ -881,8 +963,8 @@ class BuyPointSopService:
             suggestion = "轻仓试错"
             if direction_exposure.has_same_code:
                 reason = "当前是加仓语境，只能等更强确认后用试错仓处理。"
-            elif "同板块持仓" in str(account_context.account_conclusion or ""):
-                reason = account_context.account_conclusion
+            elif has_same_direction_exposure:
+                reason = account_conclusion
             else:
                 reason = "买点还需要盘中确认或账户已有约束，只适合试错仓位。"
 
@@ -1354,9 +1436,12 @@ class BuyPointSopService:
     ) -> str:
         price = float(target_input.close or 0)
         breakout_ref = self._select_breakout_ref(price, target_input, levels, "基础识别")
+        display_type = str(getattr(buy_point, "buy_display_type", "") or "")
 
         if daily_judgement.buy_point_level == "D":
             return "冲高过热"
+        if display_type == "突破后回踩":
+            return "突破后回踩"
         if buy_point.buy_point_type == BuyPointType.BREAKTHROUGH:
             return "突破前高"
         if buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT:
@@ -1392,8 +1477,10 @@ class BuyPointSopService:
             or position_status.startswith("重仓")
             or current_use == "加仓"
             or "同方向" in exposure
+            or "同题材" in exposure
             or "同一只股票持仓" in exposure
             or "同板块持仓" in conclusion
+            or "同题材持仓" in conclusion
             or "弱势/亏损持仓" in conclusion
         )
 

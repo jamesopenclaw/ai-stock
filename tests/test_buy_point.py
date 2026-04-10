@@ -31,6 +31,10 @@ from app.models.schemas import (
     MarketEnvTag,
     StockPoolsOutput,
     AccountInput,
+    SectorOutput,
+    SectorMainlineTag,
+    SectorContinuityTag,
+    SectorTradeabilityTag,
 )
 from app.services.buy_point import BuyPointService
 
@@ -235,6 +239,41 @@ class TestBuyPoint:
         assert "当日高点" in buy_point.buy_trigger_cond
         assert "%" not in buy_point.buy_trigger_cond
 
+    def test_breakthrough_context_downgraded_to_retrace_keeps_display_context(self, service):
+        """
+        测试：原始突破语境被降成回踩时，展示层应明确写成“突破后回踩”
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+            market_env_profile = "中性偏谨慎"
+            breakout_allowed = False
+            risk_level = RiskLevel.MEDIUM
+
+        stock = StockOutput(
+            ts_code="300781.SZ",
+            stock_name="因赛集团",
+            sector_name="快手概念",
+            change_pct=8.47,
+            close=37.15,
+            pre_close=34.25,
+            open=35.16,
+            high=37.29,
+            low=34.33,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.OBSERVABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            next_tradeability_tag=NextTradeabilityTag.BREAKTHROUGH,
+            stock_comment="已过确认位，当前位置不宜直接追高",
+        )
+
+        buy_point = service._analyze_stock_buy_point(stock, MockMarketEnv())
+
+        assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
+        assert buy_point.buy_display_type == "突破后回踩"
+        assert buy_point.buy_execution_context == "突破确认"
+
     def test_core_breakthrough_candidate_keeps_breakthrough_type_in_neutral(self, service):
         """
         测试：高质量突破候选在中性环境里，不应被一律压回回踩承接
@@ -333,6 +372,147 @@ class TestBuyPoint:
 
         assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
         assert buy_point.buy_signal_tag == BuySignalTag.CAN_BUY
+
+    def test_medium_breakthrough_candidate_keeps_breakthrough_type(self, service):
+        """
+        测试：中强度但已明确进入突破确认语境的票，不应再被一律压成回踩承接
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        stock = StockOutput(
+            ts_code="002371.SZ",
+            stock_name="北方华创",
+            sector_name="半导体设备",
+            change_pct=5.2,
+            close=88.2,
+            pre_close=83.84,
+            open=84.6,
+            high=88.5,
+            low=84.2,
+            stock_strength_tag=StockStrengthTag.MEDIUM,
+            stock_continuity_tag=StockContinuityTag.OBSERVABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.FOLLOW,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            next_tradeability_tag=NextTradeabilityTag.BREAKTHROUGH,
+            stock_falsification_cond="跌回启动平台",
+            stock_comment="突破确认中",
+        )
+
+        buy_point = service._analyze_stock_buy_point(stock, MockMarketEnv())
+
+        assert buy_point.buy_point_type == BuyPointType.BREAKTHROUGH
+
+    def test_attack_env_ranks_breakthrough_ahead_of_retrace(self, service):
+        """
+        测试：进攻环境下，排序应优先显示突破型，而不是默认回踩型排在最前
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        breakthrough = BuyPointOutput(
+            ts_code="000001.SZ",
+            stock_name="A",
+            sector_name="测试",
+            candidate_source_tag="",
+            candidate_bucket_tag="",
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE.value,
+            pool_entry_reason="",
+            account_entry_mode="",
+            hard_filter_failed_rules=[],
+            hard_filter_failed_count=0,
+            hard_filter_pass_count=0,
+            hard_filter_summary="",
+            buy_signal_tag=BuySignalTag.CAN_BUY,
+            buy_point_type=BuyPointType.BREAKTHROUGH,
+            buy_trigger_cond="",
+            buy_confirm_cond="",
+            buy_invalid_cond="",
+            buy_current_price=10.0,
+            buy_current_change_pct=5.0,
+            buy_quote_time=None,
+            buy_data_source=None,
+            buy_trigger_price=10.1,
+            buy_invalid_price=9.8,
+            buy_trigger_gap_pct=-0.8,
+            buy_invalid_gap_pct=-2.0,
+            buy_required_volume_ratio=1.2,
+            buy_requires_sector_resonance=True,
+            buy_risk_level=RiskLevel.MEDIUM,
+            buy_account_fit="适合",
+            buy_comment="",
+        )
+        retrace = breakthrough.model_copy(update={
+            "ts_code": "000002.SZ",
+            "stock_name": "B",
+            "buy_point_type": BuyPointType.RETRACE_SUPPORT,
+        })
+
+        ranked = sorted(
+            [retrace, breakthrough],
+            key=lambda point: service._buy_point_rank_key(point, MockMarketEnv()),
+            reverse=True,
+        )
+
+        assert ranked[0].buy_point_type == BuyPointType.BREAKTHROUGH
+
+    def test_bucket_priority_prefers_strong_confirm_over_retrace_and_premove(self, service):
+        breakthrough = BuyPointOutput(
+            ts_code="000001.SZ",
+            stock_name="A",
+            sector_name="测试",
+            candidate_source_tag="",
+            candidate_bucket_tag="强势确认",
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE.value,
+            pool_entry_reason="",
+            account_entry_mode="",
+            hard_filter_failed_rules=[],
+            hard_filter_failed_count=0,
+            hard_filter_pass_count=0,
+            hard_filter_summary="",
+            buy_signal_tag=BuySignalTag.OBSERVE,
+            buy_point_type=BuyPointType.BREAKTHROUGH,
+            buy_trigger_cond="",
+            buy_confirm_cond="",
+            buy_invalid_cond="",
+            buy_current_price=10.0,
+            buy_current_change_pct=4.0,
+            buy_quote_time=None,
+            buy_data_source=None,
+            buy_trigger_price=10.1,
+            buy_invalid_price=9.8,
+            buy_trigger_gap_pct=-0.8,
+            buy_invalid_gap_pct=-2.0,
+            buy_required_volume_ratio=1.2,
+            buy_requires_sector_resonance=True,
+            buy_risk_level=RiskLevel.MEDIUM,
+            buy_account_fit="适合",
+            buy_comment="",
+            review_bias_score=0.0,
+        )
+        retrace = breakthrough.model_copy(update={
+            "ts_code": "000002.SZ",
+            "candidate_bucket_tag": "趋势回踩",
+            "buy_point_type": BuyPointType.RETRACE_SUPPORT,
+        })
+        premove = breakthrough.model_copy(update={
+            "ts_code": "000003.SZ",
+            "candidate_bucket_tag": "异动预备",
+            "buy_point_type": BuyPointType.LOW_SUCK,
+        })
+
+        ranked = sorted(
+            [retrace, premove, breakthrough],
+            key=lambda point: service._buy_point_rank_key(point, None),
+            reverse=True,
+        )
+
+        assert [item.candidate_bucket_tag for item in ranked] == ["强势确认", "趋势回踩", "异动预备"]
 
     def test_account_executable_buy_point_includes_recommended_order_sizing(self, service, strong_stock):
         """
@@ -704,6 +884,92 @@ class TestBuyPoint:
         assert buy_point.buy_trigger_gap_pct is not None
         assert buy_point.buy_invalid_gap_pct is not None
         assert buy_point.buy_signal_tag == BuySignalTag.OBSERVE
+
+    def test_analyze_attaches_dual_mainline_direction_context(self, service):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        theme_stock = StockOutput(
+            ts_code="002031.SZ",
+            stock_name="巨轮智能",
+            sector_name="通用设备",
+            concept_names=["机器人"],
+            change_pct=7.2,
+            close=10.2,
+            open=9.7,
+            high=10.4,
+            low=9.6,
+            pre_close=9.51,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+        )
+        industry_stock = StockOutput(
+            ts_code="001896.SZ",
+            stock_name="豫能控股",
+            sector_name="电力",
+            change_pct=7.2,
+            close=7.5,
+            open=7.1,
+            high=7.6,
+            low=7.0,
+            pre_close=6.99,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+        )
+        theme_leader = SectorOutput(
+            sector_name="机器人",
+            sector_source_type="concept",
+            sector_change_pct=6.4,
+            sector_score=99.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+        )
+        industry_leader = SectorOutput(
+            sector_name="电力",
+            sector_source_type="industry",
+            sector_change_pct=4.1,
+            sector_score=93.0,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=4,
+        )
+
+        response = service.analyze(
+            "2026-04-09",
+            stocks=[],
+            market_env=MockMarketEnv(),
+            scored_stocks=[industry_stock, theme_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-04-09",
+                theme_leaders=[theme_leader],
+                industry_leaders=[industry_leader],
+                market_watch_pool=[],
+                account_executable_pool=[industry_stock, theme_stock],
+                holding_process_pool=[],
+                total_count=2,
+            ),
+        )
+
+        assert response.theme_leaders[0].sector_name == "机器人"
+        assert response.industry_leaders[0].sector_name == "电力"
+        assert response.available_buy_points[0].direction_match_role == "theme"
+        assert response.available_buy_points[0].direction_match_name == "机器人"
+        assert response.available_buy_points[0].direction_match_source_type == "concept"
+        assert response.available_buy_points[1].direction_match_role == "industry"
+        assert response.available_buy_points[1].direction_match_name == "电力"
 
 
 class TestBuyPointPRDRequirements:

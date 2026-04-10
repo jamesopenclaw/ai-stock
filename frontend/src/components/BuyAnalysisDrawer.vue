@@ -17,6 +17,7 @@
               实际行情日 {{ data.resolved_trade_date }}
             </span>
           </div>
+          <div v-if="dateContextNotice" class="drawer-date-notice">{{ dateContextNotice }}</div>
         </div>
         <div class="header-actions">
           <el-button @click="loadData" :loading="loading">刷新</el-button>
@@ -80,7 +81,9 @@
 
           <div class="quote-strip">
             <span>{{ basic?.sector_name || '-' }}</span>
+            <span v-if="directionMatchLabel">{{ directionMatchLabel }}</span>
             <span>{{ basic?.candidate_bucket_tag || '未分层' }}</span>
+            <span v-if="basic?.buy_execution_context">原始语境 {{ basic.buy_execution_context }}</span>
             <span>{{ quoteMeta }}</span>
           </div>
         </div>
@@ -91,6 +94,7 @@
             <div class="data-list">
               <div class="data-item"><span>当前仓位</span><strong>{{ accountContext?.position_status || '-' }}</strong></div>
               <div class="data-item"><span>当前用途</span><strong>{{ accountContext?.current_use || '-' }}</strong></div>
+              <div class="data-item"><span>方向锚点</span><strong>{{ directionMatchLabel || '未命中主线方向' }}</strong></div>
               <div class="data-item"><span>同方向暴露</span><strong>{{ accountContext?.same_direction_exposure || '-' }}</strong></div>
               <div class="data-item"><span>市场适配度</span><strong>{{ accountContext?.market_suitability || '-' }}</strong></div>
             </div>
@@ -204,17 +208,19 @@
               </article>
             </div>
             <div v-if="backupOrderPlanCards.length" class="order-plan-backup">
-              <div class="order-flow-title">备用买入方案</div>
-              <div class="backup-card-list">
-                <article
-                  v-for="card in backupOrderPlanCards"
-                  :key="`backup-${card.key}`"
-                  class="backup-card"
-                >
-                  <strong>{{ card.label }}：{{ card.value }}</strong>
-                  <span>{{ card.note }}</span>
-                </article>
-              </div>
+              <details class="order-plan-details">
+                <summary>备用买入方案（{{ backupOrderPlanCards.length }} 条，非当前主路径）</summary>
+                <div class="backup-card-list">
+                  <article
+                    v-for="card in backupOrderPlanCards"
+                    :key="`backup-${card.key}`"
+                    class="backup-card"
+                  >
+                    <strong>{{ card.label }}：{{ card.value }}</strong>
+                    <span>{{ card.note }}</span>
+                  </article>
+                </div>
+              </details>
             </div>
             <div class="order-plan-flow">
               <div class="order-flow-title">执行顺序</div>
@@ -232,10 +238,13 @@
                 </div>
               </div>
             </div>
-            <div class="section-note">触发条件：{{ orderPlan?.trigger_condition || '-' }}</div>
-            <div class="section-note">失效条件：{{ orderPlan?.invalid_condition || '-' }}</div>
-            <div class="section-note">高于哪里不追：{{ orderPlan?.above_no_chase || '-' }}</div>
-            <div class="section-note">跌破哪里不买：{{ orderPlan?.below_no_buy || '-' }}</div>
+            <details class="order-plan-details order-plan-raw">
+              <summary>展开原始规则文本</summary>
+              <div class="section-note">触发条件：{{ orderPlan?.trigger_condition || '-' }}</div>
+              <div class="section-note">失效条件：{{ orderPlan?.invalid_condition || '-' }}</div>
+              <div class="section-note">高于哪里不追：{{ orderPlan?.above_no_chase || '-' }}</div>
+              <div class="section-note">跌破哪里不买：{{ orderPlan?.below_no_buy || '-' }}</div>
+            </details>
           </section>
 
           <section class="analysis-section section-position">
@@ -290,6 +299,11 @@ const addDecision = computed(() => data.value?.add_position_decision || null)
 const positionAdvice = computed(() => data.value?.position_advice || null)
 const execution = computed(() => data.value?.execution || null)
 const displayTradeDate = computed(() => props.tradeDate || getLocalDate())
+const todayDate = computed(() => getLocalDate())
+const dateContextNotice = computed(() => {
+  if (!displayTradeDate.value || displayTradeDate.value === todayDate.value) return ''
+  return `当前是 ${displayTradeDate.value} 的历史/稳定快照口径；今日买点页会按 ${todayDate.value} 重新判断，结论可能不同。`
+})
 const headerTitle = computed(() => `${props.stockName || '个股'}买点 SOP`)
 const displayCurrentPrice = computed(() => {
   if (props.currentPrice === null || props.currentPrice === undefined) return '-'
@@ -319,6 +333,14 @@ const quoteMeta = computed(() => {
   if (quoteTime) return `${sourceLabel} ${formatLocalDateTime(quoteTime)}`
   return `${sourceLabel} ${displayTradeDate.value}`
 })
+const directionMatchLabel = computed(() => {
+  const name = String(basic.value?.direction_match_name || '').trim()
+  const sourceType = String(basic.value?.direction_match_source_type || '').trim()
+  if (!name) return ''
+  if (sourceType === 'concept') return `主线题材 ${name}`
+  if (sourceType === 'industry' || sourceType === 'limitup_industry') return `承接行业 ${name}`
+  return name
+})
 const actionBadgeClass = computed(() => {
   if (execution.value?.action === '买' || execution.value?.action === '加') return 'badge-buy'
   if (execution.value?.action === '放弃') return 'badge-pass'
@@ -326,11 +348,11 @@ const actionBadgeClass = computed(() => {
 })
 const overviewTitle = computed(() => {
   const signal = basic.value?.buy_signal_tag || '-'
-  const type = basic.value?.buy_point_type || '-'
+  const type = basic.value?.buy_display_type || basic.value?.buy_point_type || '-'
   return `${signal} / ${type}形态`
 })
 const overviewDesc = computed(() => {
-  const structure = intraday.value?.intraday_structure || basic.value?.buy_point_type || ''
+  const structure = intraday.value?.intraday_structure || basic.value?.buy_display_type || basic.value?.buy_point_type || ''
   if (execution.value?.action === '放弃' && daily.value?.buy_point_level === 'D' && structure) {
     return `分时形态偏${structure}，但日线级别未通过，今天不给下单资格。`
   }
@@ -700,8 +722,15 @@ const primaryOrderPlanCards = computed(() => {
   if (currentAction.value === '放弃') {
     return orderPlanCards.value.filter((card) => ['give_up', 'invalid'].includes(card.key))
   }
-  const keepKeys = new Set([primaryOrderCardKey.value, 'invalid', 'give_up'])
-  return orderPlanCards.value.filter((card) => keepKeys.has(card.key))
+  const keepKeys = new Set([primaryOrderCardKey.value, 'give_up', 'invalid'])
+  const priority = {
+    [primaryOrderCardKey.value]: 0,
+    give_up: 1,
+    invalid: 2,
+  }
+  return orderPlanCards.value
+    .filter((card) => keepKeys.has(card.key))
+    .sort((left, right) => (priority[left.key] ?? 3) - (priority[right.key] ?? 3))
 })
 const backupOrderPlanCards = computed(() => {
   if (currentAction.value === '放弃') return []
@@ -724,7 +753,9 @@ const orderExecutionSteps = computed(() => (
     })
     .map((card) => ({
       key: card.key,
-      title: `${card.label}：${card.value}`,
+      title: card.key === primaryOrderCardKey.value
+        ? `先看主买入位：${card.value}`
+        : `${card.label}：${card.value}`,
       note: card.note,
     }))
 ))
@@ -820,6 +851,18 @@ const loadData = async () => {
   gap: 10px;
   color: var(--color-text-sec);
   font-size: 13px;
+}
+
+.drawer-date-notice {
+  width: fit-content;
+  max-width: 760px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  color: #ffd06a;
+  background: rgba(243, 194, 77, 0.1);
+  border: 1px solid rgba(243, 194, 77, 0.18);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .drawer-body {
@@ -1301,6 +1344,34 @@ const loadData = async () => {
 .order-plan-flow {
   display: grid;
   gap: 10px;
+}
+
+.order-plan-details {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.order-plan-details summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  color: var(--color-text-sec);
+  font-size: 13px;
+  user-select: none;
+}
+
+.order-plan-details[open] summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.order-plan-details .backup-card-list,
+.order-plan-details .section-note {
+  margin: 12px 14px;
+}
+
+.order-plan-raw {
+  margin-top: 2px;
 }
 
 .order-flow-title {

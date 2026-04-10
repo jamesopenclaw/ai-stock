@@ -242,6 +242,25 @@ class TestSectorScan:
         assert "连续性待确认" in sector.sector_reason_tags
         assert "需确认" in sector.sector_reason_tags
 
+    def test_concept_mainline_requires_breadth(self, service):
+        """
+        测试：题材概念即使涨幅高，若广度不足也不应直接进入主线。
+        """
+        sectors = [
+            {
+                "sector_name": "一日游题材",
+                "sector_change_pct": 4.6,
+                "sector_source_type": "concept",
+                "stock_count": 2,
+                "sector_turnover": 45,
+            },
+        ]
+
+        scored = service._score_sectors(sectors)
+
+        assert scored[0].sector_mainline_tag == SectorMainlineTag.FOLLOW
+        assert "题材广度待确认" in scored[0].sector_reason_tags
+
     def test_sector_outputs_rotation_state(self, service):
         sectors = [
             {
@@ -737,6 +756,15 @@ class TestSectorScan:
         """
         测试：主线接口应返回风向标个股。
         """
+        theme_leader = SectorOutput(
+            sector_name="算力",
+            sector_change_pct=4.2,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_source_type="concept",
+        )
         monkeypatch.setattr(
             service,
             "scan",
@@ -750,16 +778,9 @@ class TestSectorScan:
                     "threshold_profile": "attack",
                     "concept_data_status": "ok",
                     "concept_data_message": "题材聚合成功",
-                    "mainline_sectors": [
-                        SectorOutput(
-                            sector_name="算力",
-                            sector_change_pct=4.2,
-                            sector_strength_rank=1,
-                            sector_mainline_tag=SectorMainlineTag.MAINLINE,
-                            sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
-                            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
-                        )
-                    ],
+                    "theme_leaders": [theme_leader],
+                    "industry_leaders": [],
+                    "mainline_sectors": [theme_leader],
                     "sub_mainline_sectors": [],
                     "follow_sectors": [],
                     "trash_sectors": [],
@@ -782,7 +803,46 @@ class TestSectorScan:
         result = service.get_leader("2026-03-23")
 
         assert result.sector.sector_name == "算力"
+        assert result.leader_source_type == "theme"
+        assert result.theme_sector.sector_name == "算力"
         assert result.leader_stocks[0].stock_name == "中际旭创"
+
+    def test_scan_outputs_theme_and_industry_leaders(self, service, monkeypatch):
+        monkeypatch.setattr(service, "_build_dynamic_sector_metrics", lambda _trade_date: {})
+        monkeypatch.setattr(service, "_build_continuity_days_map", lambda _trade_date, _sectors: {})
+        monkeypatch.setattr(
+            service,
+            "_get_sector_data",
+            lambda *_args, **_kwargs: {
+                "rows": [
+                    {
+                        "sector_name": "机器人",
+                        "sector_change_pct": 4.1,
+                        "sector_source_type": "concept",
+                        "stock_count": 7,
+                        "sector_turnover": 120,
+                    },
+                    {
+                        "sector_name": "通用设备",
+                        "sector_change_pct": 3.0,
+                        "sector_source_type": "industry",
+                        "stock_count": 18,
+                        "sector_turnover": 280,
+                    },
+                ],
+                "sector_data_mode": "hybrid",
+                "concept_data_status": "ok",
+                "concept_data_message": "题材聚合成功",
+                "data_trade_date": "20260323",
+            },
+        )
+
+        result = service.scan("2026-03-23", limit_output=False)
+
+        assert result.theme_leaders[0].sector_name == "机器人"
+        assert result.theme_leaders[0].sector_source_type == "concept"
+        assert result.industry_leaders[0].sector_name == "通用设备"
+        assert result.industry_leaders[0].sector_source_type == "industry"
 
     def test_build_sector_top_stocks_from_scan(self, service, monkeypatch):
         scan_result = SectorScanResponse(
@@ -961,6 +1021,8 @@ class TestSectorScanAPI:
             resolved_trade_date="2026-03-19",
             sector_data_mode="hybrid",
             threshold_profile="strict",
+            theme_leaders=[mainline[0]],
+            industry_leaders=[mainline[1]],
             mainline_sectors=mainline[:5],
             sub_mainline_sectors=sub_mainline[:5],
             follow_sectors=follow[:10],
@@ -972,6 +1034,8 @@ class TestSectorScanAPI:
         assert response.trade_date == "2026-03-19"
         assert response.resolved_trade_date == "2026-03-19"
         assert response.sector_data_mode == "hybrid"
+        assert isinstance(response.theme_leaders, list)
+        assert isinstance(response.industry_leaders, list)
         assert isinstance(response.mainline_sectors, list)
         assert isinstance(response.sub_mainline_sectors, list)
         assert isinstance(response.follow_sectors, list)
@@ -1012,12 +1076,14 @@ class TestSectorScanAPI:
             trade_date="2026-03-19",
             resolved_trade_date="2026-03-19",
             sector_data_mode="hybrid",
+            leader_source_type="theme",
             sector=leader
         )
 
         # 验证响应结构
         assert response.trade_date == "2026-03-19"
         assert response.resolved_trade_date == "2026-03-19"
+        assert response.leader_source_type == "theme"
         assert response.sector is not None
         assert response.sector.sector_mainline_tag == SectorMainlineTag.MAINLINE
 
@@ -1133,6 +1199,8 @@ async def test_sector_scan_api_prefers_saved_snapshot(monkeypatch):
 
     assert response.code == 200
     assert response.data["trade_date"] == "2026-03-24"
+    assert "theme_leaders" in response.data
+    assert "industry_leaders" in response.data
     assert len(response.data["mainline_sectors"]) == 5
     assert response.data["total_sectors"] == 7
 
@@ -1176,6 +1244,8 @@ async def test_sector_scan_api_today_snapshot_only_queries_once(monkeypatch):
     response = await sector_api.scan_sectors(trade_date="2026-03-25", refresh=False)
 
     assert response.code == 200
+    assert "theme_leaders" in response.data
+    assert "industry_leaders" in response.data
     assert response.data["trade_date"] == "2026-03-25"
     assert get_calls == ["2026-03-25"]
 
@@ -1240,6 +1310,8 @@ async def test_sector_scan_api_recomputes_and_saves_snapshot_when_missing(monkey
 
     assert response.code == 200
     assert response.data["trade_date"] == "2026-03-24"
+    assert "theme_leaders" in response.data
+    assert "industry_leaders" in response.data
     assert response.data["mainline_sectors"][0]["sector_name"] == "机器人"
     assert len(save_calls) == 1
     assert save_calls[0][0] == "2026-03-24"
@@ -1282,6 +1354,9 @@ async def test_leader_sector_api_uses_saved_snapshot(monkeypatch):
     response = await sector_api.get_leader_sector(trade_date="2026-03-24", refresh=False)
 
     assert response.code == 200
+    assert response.data["leader_source_type"] == "fallback"
+    assert "theme_sector" in response.data
+    assert "industry_sector" in response.data
     assert response.data["sector"]["sector_name"] == "算力"
 
 
@@ -1398,6 +1473,8 @@ async def test_sector_scan_api_before_close_uses_previous_trade_day_snapshot(mon
 
     assert response.code == 200
     assert response.data["trade_date"] == "2026-03-24"
+    assert "theme_leaders" in response.data
+    assert "industry_leaders" in response.data
     assert response.data["mainline_sectors"][0]["sector_name"] == "机器人"
     assert get_calls == ["2026-03-25", "2026-03-24"]
 
@@ -1458,6 +1535,8 @@ async def test_sector_scan_api_after_close_without_refresh_stays_on_previous_sna
 
     assert response.code == 200
     assert response.data["trade_date"] == "2026-03-24"
+    assert "theme_leaders" in response.data
+    assert "industry_leaders" in response.data
     assert response.data["mainline_sectors"][0]["sector_name"] == "光通信"
     assert get_calls == ["2026-03-25", "2026-03-24"]
 
@@ -1514,6 +1593,8 @@ async def test_sector_scan_api_after_close_refresh_switches_to_today(monkeypatch
 
     assert response.code == 200
     assert response.data["trade_date"] == "2026-03-25"
+    assert "theme_leaders" in response.data
+    assert "industry_leaders" in response.data
     assert response.data["mainline_sectors"][0]["sector_name"] == "算力"
     assert len(save_calls) == 1
     assert save_calls[0][0] == "2026-03-25"

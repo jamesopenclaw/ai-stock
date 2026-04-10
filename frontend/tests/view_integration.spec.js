@@ -589,6 +589,10 @@ describe('关键页面联调', () => {
             recommended_shares: 900,
             recommended_lots: 9,
             sizing_reference_price: 21.35,
+            execution_reference_price: 21.1,
+            execution_reference_gap_pct: -0.6,
+            execution_proximity_tag: '接近执行位',
+            execution_proximity_note: '已靠近计划执行位，优先看回踩确认后执行。',
           },
           {
             ts_code: '688001.SH',
@@ -617,6 +621,10 @@ describe('关键页面联调', () => {
             recommended_shares: 300,
             recommended_lots: 3,
             sizing_reference_price: 33.2,
+            execution_reference_price: 33.5,
+            execution_reference_gap_pct: 0.9,
+            execution_proximity_tag: '待突破',
+            execution_proximity_note: '还没到突破确认位，先等放量站稳。',
           },
         ],
         observe_buy_points: [],
@@ -645,6 +653,8 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('主执行名单')
     expect(wrapper.text()).toContain('突破确认')
     expect(wrapper.text()).toContain('回踩承接')
+    expect(wrapper.text()).toContain('账户可参与池 · 接近执行位')
+    expect(wrapper.text()).toContain('账户可参与池 · 待突破')
     expect(wrapper.text()).toContain('标准')
     expect(wrapper.text()).toContain('标准执行 / 先手仓约 20%')
     expect(wrapper.text()).toContain('进攻试错 / 先手仓约 15%')
@@ -835,6 +845,7 @@ describe('关键页面联调', () => {
         tsCode: '002025.SZ',
         stockName: '航天电器',
         tradeDate: '2026-03-30',
+        sourcePoolTag: '账户可参与池',
       },
     })
     await wrapper.setProps({ modelValue: true })
@@ -844,7 +855,7 @@ describe('关键页面联调', () => {
     expect(stockApi.buyAnalysis).toHaveBeenCalledWith(
       '002025.SZ',
       '2026-03-30',
-      expect.objectContaining({ timeout: 90000 }),
+      expect.objectContaining({ timeout: 90000, sourcePoolTag: '账户可参与池' }),
     )
     expect(wrapper.text()).toContain('获取买点分析失败: 目标股票不存在于候选上下文')
     expect(wrapper.text()).toContain('买点 SOP 加载失败')

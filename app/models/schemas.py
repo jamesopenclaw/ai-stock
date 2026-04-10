@@ -218,6 +218,8 @@ class SectorScanResponse(BaseModel):
     concept_data_status: Optional[str] = Field(None, description="题材聚合状态")
     concept_data_message: Optional[str] = Field(None, description="题材聚合说明")
     threshold_profile: Optional[str] = Field(None, description="阈值档位")
+    theme_leaders: List[SectorOutput] = Field(default_factory=list, description="主线题材")
+    industry_leaders: List[SectorOutput] = Field(default_factory=list, description="承接行业")
     mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="主线板块")
     sub_mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="次主线板块")
     follow_sectors: List[SectorOutput] = Field(default_factory=list, description="跟风板块")
@@ -233,10 +235,21 @@ class LeaderSectorResponse(BaseModel):
     threshold_profile: Optional[str] = Field(None, description="阈值档位")
     concept_data_status: Optional[str] = Field(None, description="题材聚合状态")
     concept_data_message: Optional[str] = Field(None, description="题材聚合说明")
+    leader_source_type: str = Field("theme", description="当前主线语义类型：theme / industry / fallback")
     sector: SectorOutput
+    theme_sector: Optional[SectorOutput] = Field(None, description="主线题材")
+    industry_sector: Optional[SectorOutput] = Field(None, description="承接行业")
     leader_stocks: List[SectorLeaderStock] = Field(
         default_factory=list,
         description="板块风向标",
+    )
+    theme_leader_stocks: List[SectorLeaderStock] = Field(
+        default_factory=list,
+        description="主线题材风向标",
+    )
+    industry_leader_stocks: List[SectorLeaderStock] = Field(
+        default_factory=list,
+        description="承接行业风向标",
     )
 
 
@@ -530,6 +543,8 @@ class StockPoolsOutput(BaseModel):
     snapshot_status_message: Optional[str] = Field(None, description="快照状态说明")
     snapshot_version: Optional[int] = Field(None, description="三池规则快照版本")
     market_env: Optional[MarketEnvOutput] = Field(None, description="三池实际使用的市场环境")
+    theme_leaders: List[SectorOutput] = Field(default_factory=list, description="三池实际使用的主线题材摘要")
+    industry_leaders: List[SectorOutput] = Field(default_factory=list, description="三池实际使用的承接行业摘要")
     mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="三池实际使用的主线板块摘要")
     sub_mainline_sectors: List[SectorOutput] = Field(default_factory=list, description="三池实际使用的次主线板块摘要")
     global_trade_gate: GlobalTradeGateOutput = Field(default_factory=lambda: GlobalTradeGateOutput(
@@ -568,11 +583,19 @@ class BuyPointOutput(BaseModel):
     ts_code: str
     stock_name: str
     sector_name: str = Field(default="", description="所属板块/行业")
+    direction_match_name: Optional[str] = Field(None, description="命中的主线方向名称")
+    direction_match_source_type: Optional[str] = Field(None, description="命中的方向来源类型")
+    direction_match_role: Optional[str] = Field(None, description="命中的方向角色")
+    direction_match_note: Optional[str] = Field(None, description="方向匹配说明")
     candidate_source_tag: str = Field(default="", description="候选来源标签")
     candidate_bucket_tag: str = Field(default="", description="候选分层标签")
     stock_pool_tag: str = Field(default="", description="来源池标签")
     pool_entry_reason: str = Field(default="", description="入池原因")
     account_entry_mode: str = Field(default="", description="账户执行模式")
+    execution_reference_price: Optional[float] = Field(None, description="执行参考价")
+    execution_reference_gap_pct: Optional[float] = Field(None, description="距执行参考价百分比")
+    execution_proximity_tag: Optional[str] = Field(None, description="执行接近度标签")
+    execution_proximity_note: Optional[str] = Field(None, description="执行接近度说明")
     hard_filter_failed_rules: List[str] = Field(default_factory=list, description="硬过滤未通过项")
     hard_filter_failed_count: int = Field(default=0, description="硬过滤失败条数")
     hard_filter_pass_count: int = Field(default=0, description="硬过滤通过条数")
@@ -580,6 +603,8 @@ class BuyPointOutput(BaseModel):
     # 买点信号
     buy_signal_tag: BuySignalTag
     buy_point_type: BuyPointType
+    buy_display_type: Optional[str] = Field(None, description="展示用买点类型")
+    buy_execution_context: Optional[str] = Field(None, description="原始执行语境")
     # 条件
     buy_trigger_cond: str = Field(..., description="触发条件")
     buy_confirm_cond: str = Field(..., description="确认条件")
@@ -621,6 +646,8 @@ class BuyPointResponse(BaseModel):
     """买点分析响应"""
     trade_date: str
     market_env_tag: MarketEnvTag
+    theme_leaders: List[SectorOutput] = Field(default_factory=list, description="主线题材")
+    industry_leaders: List[SectorOutput] = Field(default_factory=list, description="承接行业")
     available_buy_points: List[BuyPointOutput] = Field(default_factory=list, description="可买候选")
     observe_buy_points: List[BuyPointOutput] = Field(default_factory=list, description="观察候选")
     not_buy_points: List[BuyPointOutput] = Field(default_factory=list, description="不建议买")
@@ -632,11 +659,17 @@ class BuyPointSopBasicInfo(BaseModel):
     ts_code: str
     stock_name: str
     sector_name: str
+    direction_match_name: str = ""
+    direction_match_source_type: str = ""
+    direction_match_role: str = ""
+    direction_match_note: str = ""
     market_env_tag: str = ""
     stable_market_env_tag: str = ""
     realtime_market_env_tag: str = ""
     buy_signal_tag: str = ""
     buy_point_type: str = ""
+    buy_display_type: str = ""
+    buy_execution_context: str = ""
     candidate_bucket_tag: str = ""
     quote_time: Optional[str] = None
     data_source: Optional[str] = None

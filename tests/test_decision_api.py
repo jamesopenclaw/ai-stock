@@ -33,7 +33,53 @@ from app.models.schemas import (  # noqa: E402
     StockPoolsOutput,
     StockStrengthTag,
     StockTradeabilityTag,
+    SectorOutput,
+    SectorMainlineTag,
+    SectorContinuityTag,
+    SectorTradeabilityTag,
 )
+
+
+def test_rewrite_hold_trigger_for_current_price_when_already_above_level():
+    point = SellPointOutput(
+        ts_code="301123.SZ",
+        stock_name="奕东电子",
+        market_price=66.67,
+        cost_price=52.47,
+        pnl_pct=27.06,
+        holding_qty=100,
+        holding_days=2,
+        can_sell_today=True,
+        sell_signal_tag=SellSignalTag.HOLD,
+        sell_point_type=SellPointType.INVALID_EXIT,
+        sell_trigger_cond="原始条件",
+        sell_reason="继续观察",
+        sell_priority=SellPriority.LOW,
+        sell_comment="",
+    )
+
+    text = decision._rewrite_hold_trigger_for_current_price(
+        point,
+        "只有重新站回 59.90 上方并稳住，才值得继续看。",
+    )
+
+    assert text == "当前已经站在 59.90 上方，接下来重点看能否继续稳在 59.90 上方。"
+
+
+def test_resolve_sell_trigger_for_display_prefers_priority_exit():
+    order_plan = type(
+        "OrderPlan",
+        (),
+        {
+            "priority_exit_condition": "能直接在 65.10-65.40 一带处理，就优先直接退出；不要把最后失效线当成第一卖点。",
+            "rebound_condition": "弱反抽到 64.80-65.00 一带但站不稳，优先借反抽退出。",
+            "stop_condition": "跌破 59.42 且 3-5 分钟无法收回，就按结构失效处理。",
+        },
+    )()
+
+    text = decision._resolve_sell_trigger_for_display(order_plan, "原始条件")
+
+    assert text == "能直接在 65.10-65.40 一带处理，就优先直接退出；不要把最后失效线当成第一卖点。"
 
 
 @pytest.mark.asyncio
@@ -104,10 +150,39 @@ async def test_buy_point_page_saves_review_snapshot(monkeypatch):
     buy_result = BuyPointResponse(
         trade_date="2026-03-24",
         market_env_tag=MarketEnvTag.NEUTRAL,
+        theme_leaders=[
+            SectorOutput(
+                sector_name="草甘膦",
+                sector_source_type="concept",
+                sector_change_pct=6.0,
+                sector_score=98.0,
+                sector_strength_rank=1,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                sector_continuity_days=3,
+            )
+        ],
+        industry_leaders=[
+            SectorOutput(
+                sector_name="农化制品",
+                sector_source_type="industry",
+                sector_change_pct=3.8,
+                sector_score=92.0,
+                sector_strength_rank=2,
+                sector_mainline_tag=SectorMainlineTag.MAINLINE,
+                sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+                sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+                sector_continuity_days=4,
+            )
+        ],
         available_buy_points=[
             BuyPointOutput(
                 ts_code="000001.SZ",
                 stock_name="平安银行",
+                direction_match_name="草甘膦",
+                direction_match_source_type="concept",
+                direction_match_role="theme",
                 buy_signal_tag=BuySignalTag.CAN_BUY,
                 buy_point_type=BuyPointType.RETRACE_SUPPORT,
                 buy_trigger_cond="回踩确认",
@@ -188,6 +263,9 @@ async def test_buy_point_page_saves_review_snapshot(monkeypatch):
 
     assert response.code == 200
     assert response.data["total_count"] == 1
+    assert response.data["theme_leaders"][0]["sector_name"] == "草甘膦"
+    assert response.data["industry_leaders"][0]["sector_name"] == "农化制品"
+    assert response.data["available_buy_points"][0]["direction_match_role"] == "theme"
     assert len(snapshot_calls) == 1
     assert snapshot_calls[0]["trade_date"] == "2026-03-24"
     assert snapshot_calls[0]["stock_pools"] is pools
@@ -282,7 +360,11 @@ async def test_buy_point_prefers_cached_stock_pools_snapshot(monkeypatch):
     monkeypatch.setattr(decision.review_snapshot_service, "get_review_bias_profile_safe", fake_get_review_bias_profile)
     monkeypatch.setattr(decision.review_snapshot_service, "save_analysis_snapshot_safe", fake_save_snapshot)
     monkeypatch.setattr(decision.buy_point_service, "analyze", fake_analyze)
-    monkeypatch.setattr(decision.market_env_service, "get_current_env", lambda trade_date: object())
+    monkeypatch.setattr(
+        decision.market_env_service,
+        "get_current_env",
+        lambda trade_date: type("Env", (), {"market_env_tag": MarketEnvTag.NEUTRAL})(),
+    )
     async def fake_resolve_snapshot_lookup_trade_date(trade_date):
         return trade_date
 
@@ -505,7 +587,11 @@ async def test_sell_point_marks_add_signal_from_buy_sop(monkeypatch):
         return len(add_position_analysis or [])
 
     monkeypatch.setattr(decision.decision_context_service, "get_holdings_from_db", fake_get_holdings_from_db)
-    monkeypatch.setattr(decision.market_env_service, "get_current_env", lambda trade_date: object())
+    monkeypatch.setattr(
+        decision.market_env_service,
+        "get_current_env",
+        lambda trade_date: type("Env", (), {"market_env_tag": MarketEnvTag.NEUTRAL})(),
+    )
     monkeypatch.setattr(decision.sector_scan_snapshot_service, "get_snapshot", fake_get_snapshot)
     monkeypatch.setattr(decision.sell_point_service, "analyze", lambda *args, **kwargs: sell_result)
     monkeypatch.setattr(decision.buy_point_sop_service, "analyze", fake_buy_sop_analyze)

@@ -32,7 +32,7 @@ from app.core.security import AuthenticatedAccount, get_current_account
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-STOCK_POOLS_SNAPSHOT_VERSION = 6
+STOCK_POOLS_SNAPSHOT_VERSION = 7
 _stock_pools_refresh_tasks: dict[str, asyncio.Task] = {}
 RADAR_POOLS_CACHE_TTL_SECONDS = 20
 _radar_stock_pools_cache: dict[str, dict] = {}
@@ -84,6 +84,8 @@ def _summarize_sector_list(sectors, limit: int = 5):
 
 def _attach_stock_pools_context_snapshot(result, *, market_env=None, sector_scan=None):
     result.market_env = market_env
+    result.theme_leaders = _summarize_sector_list(getattr(sector_scan, "theme_leaders", []), 3)
+    result.industry_leaders = _summarize_sector_list(getattr(sector_scan, "industry_leaders", []), 3)
     result.mainline_sectors = _summarize_sector_list(getattr(sector_scan, "mainline_sectors", []), 5)
     result.sub_mainline_sectors = _summarize_sector_list(getattr(sector_scan, "sub_mainline_sectors", []), 3)
     return result
@@ -116,6 +118,8 @@ def _serialize_stock_pools_result(
         "candidate_data_message": getattr(result, "candidate_data_message", None),
         "snapshot_status_message": getattr(result, "snapshot_status_message", None),
         "market_env": result.market_env.model_dump() if getattr(result, "market_env", None) else None,
+        "theme_leaders": [sector.model_dump() for sector in getattr(result, "theme_leaders", [])],
+        "industry_leaders": [sector.model_dump() for sector in getattr(result, "industry_leaders", [])],
         "mainline_sectors": [sector.model_dump() for sector in getattr(result, "mainline_sectors", [])],
         "sub_mainline_sectors": [sector.model_dump() for sector in getattr(result, "sub_mainline_sectors", [])],
         "global_trade_gate": result.global_trade_gate.model_dump(),
@@ -460,6 +464,8 @@ async def get_stock_pools(
                     "sector_scan_trade_date": expected_sector_scan_trade_date,
                     "sector_scan_resolved_trade_date": "",
                     "market_env": None,
+                    "theme_leaders": [],
+                    "industry_leaders": [],
                     "mainline_sectors": [],
                     "sub_mainline_sectors": [],
                     "global_trade_gate": {

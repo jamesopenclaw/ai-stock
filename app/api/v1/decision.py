@@ -4,6 +4,7 @@
 import asyncio
 import copy
 import time
+import re
 from fastapi import APIRouter, Query, Body, Depends
 from typing import Optional
 from datetime import datetime
@@ -40,7 +41,7 @@ from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-STOCK_POOLS_SNAPSHOT_VERSION = 3
+STOCK_POOLS_SNAPSHOT_VERSION = 7
 SELL_POINT_CACHE_TTL_SECONDS = 20
 _sell_point_page_cache: dict[str, dict] = {}
 
@@ -122,6 +123,45 @@ def _resolve_add_signal_from_buy_sop(point: SellPointOutput, buy_sop_result) -> 
     return None, None
 
 
+def _rewrite_hold_trigger_for_current_price(point: SellPointOutput, hold_condition: str) -> str:
+    """卖点页持有观察卡片按当前价翻译观察条件，避免“已经站上方却还写重新站回”."""
+    text = str(hold_condition or "").strip()
+    if not text:
+        return text
+
+    market_price = getattr(point, "market_price", None)
+    if market_price is None:
+        return text
+
+    match = re.search(r"重新站回\s*(\d+(?:\.\d+)?)\s*上方", text)
+    if not match:
+        return text
+
+    observe_level = float(match.group(1))
+    if float(market_price) < observe_level:
+        return text
+
+    return re.sub(
+        r"只有重新站回\s*(\d+(?:\.\d+)?)\s*上方并稳住，才值得继续看。",
+        rf"当前已经站在 \1 上方，接下来重点看能否继续稳在 \1 上方。",
+        text,
+    )
+
+
+def _resolve_sell_trigger_for_display(order_plan, fallback: str) -> str:
+    """卖点页对清仓票优先展示先处理区，最后失效线只做兜底。"""
+    for field in ("priority_exit_condition", "rebound_condition", "stop_condition"):
+        text = str(getattr(order_plan, field, "") or "").strip()
+        if not text:
+            continue
+        if field == "priority_exit_condition" and "不是优先现价退出阶段" in text:
+            continue
+        if field == "rebound_condition" and "当前不以弱反抽退出为主" in text:
+            continue
+        return text
+    return fallback
+
+
 async def _align_sell_point_display_with_sop(
     trade_date: str,
     account_id: Optional[str],
@@ -154,7 +194,7 @@ async def _align_sell_point_display_with_sop(
         if action == "清":
             point.sell_signal_tag = SellSignalTag.SELL
             point.sell_reason = getattr(execution, "reason", "") or point.sell_reason
-            point.sell_trigger_cond = getattr(order_plan, "stop_condition", "") or point.sell_trigger_cond
+            point.sell_trigger_cond = _resolve_sell_trigger_for_display(order_plan, point.sell_trigger_cond)
             point.sell_comment = getattr(intraday, "note", "") or point.sell_comment
         elif action == "减":
             point.sell_signal_tag = SellSignalTag.REDUCE
@@ -168,7 +208,10 @@ async def _align_sell_point_display_with_sop(
         elif action == "拿":
             point.sell_signal_tag = SellSignalTag.HOLD
             point.sell_reason = getattr(execution, "reason", "") or point.sell_reason
-            point.sell_trigger_cond = getattr(order_plan, "hold_condition", "") or point.sell_trigger_cond
+            point.sell_trigger_cond = _rewrite_hold_trigger_for_current_price(
+                point,
+                getattr(order_plan, "hold_condition", "") or point.sell_trigger_cond,
+            )
             point.sell_comment = getattr(intraday, "note", "") or point.sell_comment
         return point
 
@@ -574,6 +617,8 @@ async def analyze_buy_point(
                 "market_headline": getattr(bundle_context_market_env, "market_headline", "") or "",
                 "market_subheadline": getattr(bundle_context_market_env, "market_subheadline", "") or "",
                 "trading_tempo_label": getattr(bundle_context_market_env, "trading_tempo_label", "") or "",
+                "theme_leaders": [sector.model_dump() for sector in getattr(result, "theme_leaders", [])],
+                "industry_leaders": [sector.model_dump() for sector in getattr(result, "industry_leaders", [])],
                 "available_buy_points": [bp.model_dump() for bp in result.available_buy_points],
                 "observe_buy_points": [bp.model_dump() for bp in result.observe_buy_points],
                 "not_buy_points": [bp.model_dump() for bp in result.not_buy_points],

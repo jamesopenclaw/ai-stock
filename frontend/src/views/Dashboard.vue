@@ -106,14 +106,15 @@
       <el-card class="fill-card sector-card dashboard-panel">
         <template #header>
           <div class="section-header-copy">
-            <span>主线板块</span>
-            <span class="section-caption">今天最值得跟踪的方向，只保留一个焦点。</span>
+            <span>主线方向</span>
+            <span class="section-caption">首页只保留一个焦点，但会明确它是题材主线还是承接行业。</span>
           </div>
         </template>
         <div v-if="leaderSector" class="leader-sector">
           <div class="leader-sector-hero">
             <div class="leader-sector-name">{{ leaderSector.sector.sector_name }}</div>
             <div class="leader-sector-change">{{ formatSignedPct(leaderSector.sector.sector_change_pct) }}</div>
+            <el-tag size="small" effect="plain">{{ leaderSourceLabel }}</el-tag>
             <el-tag size="small" effect="plain">{{ leaderSector.sector.sector_mainline_tag }}</el-tag>
           </div>
           <div class="leader-sector-copy">{{ sectorNarrative }}</div>
@@ -367,6 +368,15 @@ const holdingActions = computed(() => {
 const buyCandidates = computed(() => (buyPoints.value?.available_buy_points || []).slice(0, 5))
 const holdingPreview = computed(() => holdingActions.value.slice(0, 5))
 const marketEnvProfile = computed(() => marketEnv.value?.market_env_profile || marketEnv.value?.market_env_tag || '-')
+const leaderSourceLabel = computed(() => {
+  const source = leaderSector.value?.leader_source_type
+  if (source === 'theme') return '主线题材'
+  if (source === 'industry') return '承接行业'
+  const sectorSource = leaderSector.value?.sector?.sector_source_type
+  if (sectorSource === 'concept') return '题材焦点'
+  if (sectorSource === 'limitup_industry') return '涨停行业'
+  return '主线候选'
+})
 const dashboardMarketHeadline = computed(() => {
   if (!marketEnv.value) return ''
   if (marketEnv.value.market_headline) return marketEnv.value.market_headline
@@ -378,9 +388,10 @@ const sectorNarrative = computed(() => {
   const sector = leaderSector.value?.sector
   if (!sector) return ''
   const change = Number(sector.sector_change_pct || 0)
-  if (change >= 4) return `这是今天最强的方向之一，适合先从 ${sector.sector_name} 里找核心而不是乱撒网。`
-  if (change >= 1) return `${sector.sector_name} 仍有相对强度，但更适合做核心确认，不适合后排乱追。`
-  return `${sector.sector_name} 还在前排视野里，但强度一般，先看是否继续强化。`
+  const headline = `${leaderSourceLabel.value}：${sector.sector_name}`
+  if (change >= 4) return `${headline} 是今天最强的方向之一，适合先从核心辨识度票入手，而不是乱撒网。`
+  if (change >= 1) return `${headline} 仍有相对强度，但更适合做核心确认，不适合后排乱追。`
+  return `${headline} 还在前排视野里，但强度一般，先看是否继续强化。`
 })
 const accountNarrative = computed(() => {
   const ratio = Number(accountProfile.value?.total_position_ratio || 0)

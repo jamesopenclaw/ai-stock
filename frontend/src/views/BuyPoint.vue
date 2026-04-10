@@ -31,7 +31,7 @@
           </div>
           <div v-if="focusSector" class="focus-context">
             <div class="focus-context-copy">
-              当前按 <strong>{{ focusSector }}</strong> 方向查看买点，相关机会会优先排到前面。
+              当前按 <strong>{{ focusSectorLabel }}</strong><strong>{{ focusSector }}</strong> 方向查看买点，相关机会会优先排到前面。
             </div>
             <div class="focus-context-actions">
               <el-switch v-model="focusOnly" size="small" inline-prompt active-text="只看当前方向" inactive-text="全部" />
@@ -45,6 +45,11 @@
             <div class="overview-copy">
               <div class="overview-title">{{ envHeadline(displayEnvProfile) }}</div>
               <div class="overview-desc">{{ envGuidance(displayEnvProfile) }}</div>
+            </div>
+          </div>
+          <div v-if="buyDirectionItems.length" class="overview-rules overview-rules-direction">
+            <div v-for="item in buyDirectionItems" :key="`${item.label}-${item.name}`" class="rule-chip">
+              {{ item.label }} {{ item.name }}
             </div>
           </div>
 
@@ -110,7 +115,7 @@
               <div class="no-trade-copy">{{ buyFreshnessNote }}</div>
               <div class="no-trade-actions">
                 <el-button type="primary" plain @click="router.push('/sell')">先看卖点分析</el-button>
-                <el-button plain @click="router.push('/pools')">回三池分类</el-button>
+                <el-button plain @click="goToPoolsPage()">回三池分类</el-button>
                 <el-button plain @click="router.push('/review')">看复盘证据</el-button>
               </div>
             </section>
@@ -144,15 +149,16 @@
 		                :class="['signal-card', 'signal-card-buy', entryModeCardClass(point), { 'signal-card-focused': matchesFocusSector(point) }]"
 	              >
                 <div class="signal-card-header">
-                  <div>
+                  <div class="signal-title-wrap">
                     <div class="signal-stock">{{ point.stock_name }}</div>
                     <div class="signal-code">{{ point.ts_code }}</div>
                   </div>
-	                  <div class="signal-badges">
-	                    <el-tag size="small" type="primary">{{ point.buy_point_type }}</el-tag>
-	                    <el-tag v-if="entryModeBadgeLabel(point)" size="small" :type="entryModeBadgeType(point)">{{ entryModeBadgeLabel(point) }}</el-tag>
-	                    <el-tag size="small" :type="riskTagType(point.buy_risk_level)">{{ point.buy_risk_level }}风险</el-tag>
-	                    <el-tag size="small" :type="accountFitType(point.buy_account_fit)">{{ point.buy_account_fit }}</el-tag>
+                  <div class="signal-badges">
+                    <el-tag size="small" type="primary">{{ point.buy_display_type || point.buy_point_type }}</el-tag>
+                    <el-tag v-if="point.buy_execution_context" size="small" type="info">{{ point.buy_execution_context }}</el-tag>
+                    <el-tag v-if="entryModeBadgeLabel(point)" size="small" :type="entryModeBadgeType(point)">{{ entryModeBadgeLabel(point) }}</el-tag>
+                    <el-tag size="small" :type="riskTagType(point.buy_risk_level)">{{ point.buy_risk_level }}风险</el-tag>
+                    <el-tag size="small" :type="accountFitType(point.buy_account_fit)">{{ point.buy_account_fit }}</el-tag>
 	                    <el-tooltip v-if="point.review_bias_label" :content="point.review_bias_reason || point.review_bias_label" placement="top">
                       <el-tag size="small" :type="reviewBiasTagType(point.review_bias_label)">
                         {{ point.review_bias_label }}
@@ -162,7 +168,11 @@
                 </div>
 
 	                <div class="signal-meta">
-	                  <span>{{ poolTagLabel(point.stock_pool_tag) }}</span>
+	                  <span v-if="directionMatchLabel(point)">{{ directionMatchLabel(point) }}</span>
+	                  <span>{{ poolContextLabel(point) }}</span>
+	                  <span v-if="point.execution_proximity_tag" :class="['signal-meta-chip', executionProximityMetaClass(point)]">
+	                    {{ point.execution_proximity_tag }}
+	                  </span>
 	                  <span>{{ point.candidate_bucket_tag || '未分层' }}</span>
 	                  <span>{{ point.candidate_source_tag || '无来源标记' }}</span>
 	                </div>
@@ -320,7 +330,7 @@
                 <div class="signal-footer">
                   <span>{{ point.buy_comment || '-' }}</span>
                   <div class="footer-actions">
-                    <span v-if="point.buy_requires_sector_resonance" class="footer-flag">需要板块共振</span>
+                    <span v-if="point.buy_requires_sector_resonance" class="footer-flag">{{ resonanceLabel(point) }}</span>
                     <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
                   </div>
@@ -356,19 +366,24 @@
 	                  :class="['signal-card', 'signal-card-watch', entryModeCardClass(point)]"
 	                >
                   <div class="signal-card-header">
-                    <div>
+                    <div class="signal-title-wrap">
                       <div class="signal-stock">{{ point.stock_name }}</div>
                       <div class="signal-code">{{ point.ts_code }}</div>
                     </div>
-	                    <div class="signal-badges">
-	                      <el-tag size="small" type="warning">备选</el-tag>
-	                      <el-tag size="small" type="primary">{{ point.buy_point_type }}</el-tag>
-	                      <el-tag v-if="entryModeBadgeLabel(point)" size="small" :type="entryModeBadgeType(point)">{{ entryModeBadgeLabel(point) }}</el-tag>
-	                    </div>
+                    <div class="signal-badges">
+                      <el-tag size="small" type="warning">备选</el-tag>
+                      <el-tag size="small" type="primary">{{ point.buy_display_type || point.buy_point_type }}</el-tag>
+                      <el-tag v-if="point.buy_execution_context" size="small" type="info">{{ point.buy_execution_context }}</el-tag>
+                      <el-tag v-if="entryModeBadgeLabel(point)" size="small" :type="entryModeBadgeType(point)">{{ entryModeBadgeLabel(point) }}</el-tag>
+                    </div>
 	                  </div>
 
                   <div class="signal-meta">
-                    <span>{{ poolTagLabel(point.stock_pool_tag) }}</span>
+                    <span v-if="directionMatchLabel(point)">{{ directionMatchLabel(point) }}</span>
+                    <span>{{ poolContextLabel(point) }}</span>
+                    <span v-if="point.execution_proximity_tag" :class="['signal-meta-chip', executionProximityMetaClass(point)]">
+                      {{ point.execution_proximity_tag }}
+                    </span>
                     <span>{{ point.candidate_bucket_tag || '未分层' }}</span>
                     <span>{{ point.candidate_source_tag || '无来源标记' }}</span>
                   </div>
@@ -434,12 +449,13 @@
                     :class="['signal-card', 'signal-card-watch', { 'signal-card-focused': matchesFocusSector(point) }]"
                   >
                 <div class="signal-card-header">
-                  <div>
+                  <div class="signal-title-wrap">
                     <div class="signal-stock">{{ point.stock_name }}</div>
                     <div class="signal-code">{{ point.ts_code }}</div>
                   </div>
                   <div class="signal-badges">
-                    <el-tag size="small" type="warning">{{ point.buy_point_type }}</el-tag>
+                    <el-tag size="small" type="warning">{{ point.buy_display_type || point.buy_point_type }}</el-tag>
+                    <el-tag v-if="point.buy_execution_context" size="small" type="info">{{ point.buy_execution_context }}</el-tag>
                     <el-tag size="small" :type="riskTagType(point.buy_risk_level)">{{ point.buy_risk_level }}风险</el-tag>
                     <el-tooltip v-if="point.review_bias_label" :content="point.review_bias_reason || point.review_bias_label" placement="top">
                       <el-tag size="small" :type="reviewBiasTagType(point.review_bias_label)">
@@ -450,7 +466,11 @@
                 </div>
 
 	                <div class="signal-meta">
-	                  <span>{{ poolTagLabel(point.stock_pool_tag) }}</span>
+	                  <span v-if="directionMatchLabel(point)">{{ directionMatchLabel(point) }}</span>
+	                  <span>{{ poolContextLabel(point) }}</span>
+	                  <span v-if="point.execution_proximity_tag" :class="['signal-meta-chip', executionProximityMetaClass(point)]">
+	                    {{ point.execution_proximity_tag }}
+	                  </span>
 	                  <span>{{ point.candidate_bucket_tag || '未分层' }}</span>
 	                  <span>{{ point.candidate_source_tag || '无来源标记' }}</span>
 	                </div>
@@ -559,6 +579,7 @@
                 <div class="signal-footer">
                   <span>{{ point.buy_comment || '-' }}</span>
                   <div class="footer-actions">
+                    <span v-if="point.direction_match_note" class="footer-flag">{{ point.direction_match_note }}</span>
                     <span class="footer-flag">{{ observeFooterFlag(point) }}</span>
                     <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
@@ -580,9 +601,11 @@
                 <div class="skip-main">
 	                  <strong>{{ point.stock_name }}</strong>
 	                  <span class="signal-code">{{ point.ts_code }}</span>
+	                  <span v-if="directionMatchLabel(point)" class="skip-meta">{{ directionMatchLabel(point) }}</span>
 	                  <span class="skip-meta">{{ poolTagLabel(point.stock_pool_tag) }}</span>
 	                  <span class="skip-meta">{{ point.candidate_bucket_tag || '未分层' }}</span>
-	                  <span class="skip-meta">{{ point.buy_point_type }}</span>
+	                  <span class="skip-meta">{{ point.buy_display_type || point.buy_point_type }}</span>
+	                  <span v-if="point.buy_execution_context" class="skip-meta">{{ point.buy_execution_context }}</span>
 	                </div>
                 <div class="skip-quote">
                   <strong>{{ formatPrice(point.buy_current_price) }}</strong>
@@ -604,6 +627,7 @@
       :ts-code="buyAnalysisStock.tsCode"
       :stock-name="buyAnalysisStock.stockName"
       :trade-date="displayDate"
+      :source-pool-tag="buyAnalysisStock.sourcePoolTag"
       :current-price="buyAnalysisStock.currentPrice"
       :current-change-pct="buyAnalysisStock.currentChangePct"
     />
@@ -633,12 +657,14 @@ const activeTab = ref('available')
 const displayDate = ref('')
 const buyData = ref({
   market_env_tag: '',
+  theme_leaders: [],
+  industry_leaders: [],
   available_buy_points: [],
   observe_buy_points: [],
   not_buy_points: [],
 })
 const buyAnalysisVisible = ref(false)
-const buyAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentChangePct: null })
+const buyAnalysisStock = ref({ tsCode: '', stockName: '', sourcePoolTag: '', currentPrice: null, currentChangePct: null })
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '交易型' })
 const expandedCards = ref({})
@@ -648,19 +674,41 @@ const BUY_POINT_TIMEOUT = 90000
 const loadError = ref('')
 const route = useRoute()
 const router = useRouter()
-const BUY_POINT_CACHE_PREFIX = 'ai_stock_buy_point'
+const BUY_POINT_CACHE_PREFIX = 'ai_stock_buy_point_v3'
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
+const focusSectorSourceType = computed(() => String(route.query.focus_sector_source_type || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
 const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
 const notificationAction = computed(() => String(route.query.notification_action || '').trim())
 const notificationTsCode = computed(() => String(route.query.ts_code || '').trim())
 const notificationStockName = computed(() => String(route.query.stock_name || '').trim())
 const focusOnly = ref(false)
-const BUY_POINT_GROUP_ORDER = ['突破', '回踩承接', '低吸', '修复转强']
+const normalizeSourceType = (value) => {
+  const source = String(value || '').trim()
+  if (source === 'limitup_industry') return 'industry'
+  return source
+}
+
+const directionSourceLabel = (sourceType) => {
+  const normalized = normalizeSourceType(sourceType)
+  if (normalized === 'concept') return '主线题材'
+  if (normalized === 'industry') return '承接行业'
+  return '主线候选'
+}
+
+const focusSectorLabel = computed(() => (
+  focusSectorSourceType.value ? `${directionSourceLabel(focusSectorSourceType.value)} ` : ''
+))
+
+const BUY_POINT_GROUP_ORDER = ['突破', '突破后回踩', '回踩承接', '低吸', '修复转强']
 const BUY_POINT_GROUP_META = {
   突破: {
     title: '突破确认',
     desc: '这组更看放量站稳和分时确认，不做提前抢跑。',
+  },
+  突破后回踩: {
+    title: '突破后回踩',
+    desc: '原始结构是突破确认，但当前位置更适合等回踩承接，不直接追高。',
   },
   回踩承接: {
     title: '回踩承接',
@@ -678,7 +726,14 @@ const BUY_POINT_GROUP_META = {
 
 const matchesFocusSector = (point) => {
   if (!focusSector.value) return false
-  return String(point.sector_name || '').includes(focusSector.value)
+  const candidates = [
+    String(point.direction_match_name || '').trim(),
+    String(point.sector_name || '').trim(),
+  ].filter(Boolean)
+  const nameMatched = candidates.some((name) => name.includes(focusSector.value))
+  if (!nameMatched) return false
+  if (!focusSectorSourceType.value) return true
+  return normalizeSourceType(point.direction_match_source_type) === normalizeSourceType(focusSectorSourceType.value)
 }
 
 const sortByFocusSector = (points = []) => {
@@ -700,6 +755,7 @@ const availablePoints = computed(() => applyPageFilters(buyData.value.available_
 const observePoints = computed(() => applyPageFilters(buyData.value.observe_buy_points || []))
 const notBuyPoints = computed(() => applyPageFilters(buyData.value.not_buy_points || []))
 
+const displayBuyPointType = (point) => String(point?.buy_display_type || point?.buy_point_type || '').trim()
 const normalizeBuyPointType = (value) => String(value || '').trim() || '其他'
 
 const buyPointTypeRank = (value) => {
@@ -716,7 +772,7 @@ const buyPointGroupMeta = (value) => BUY_POINT_GROUP_META[normalizeBuyPointType(
 const groupBuyPoints = (points = []) => {
   const grouped = new Map()
   for (const point of points) {
-    const key = normalizeBuyPointType(point?.buy_point_type)
+    const key = normalizeBuyPointType(displayBuyPointType(point))
     if (!grouped.has(key)) grouped.set(key, [])
     grouped.get(key).push(point)
   }
@@ -752,9 +808,10 @@ const primaryAvailablePoints = computed(() => {
   const skipped = []
 
   for (const point of points) {
-    const sector = point.candidate_source_tag || point.stock_name || point.ts_code
+    const sector = point.direction_match_name || point.sector_name || point.candidate_source_tag || point.stock_name || point.ts_code
     const currentSectorCount = sectorCount.get(sector) || 0
-    const isBreakthrough = point.buy_point_type === '突破'
+    const type = displayBuyPointType(point)
+    const isBreakthrough = ['突破', '突破后回踩'].includes(type)
     if (currentSectorCount >= maxSector || (isBreakthrough && breakthroughCount >= maxBreakthrough)) {
       skipped.push(point)
       continue
@@ -928,6 +985,8 @@ const resolveCacheKey = (tradeDate) => {
 const applyBuyData = (payload) => {
   buyData.value = payload || {
     market_env_tag: '',
+    theme_leaders: [],
+    industry_leaders: [],
     available_buy_points: [],
     observe_buy_points: [],
     not_buy_points: [],
@@ -973,6 +1032,10 @@ const scheduleReviewInsightLoad = () => {
 }
 
 const displayEnvProfile = computed(() => buyData.value.market_env_profile || buyData.value.market_env_tag || '')
+const buyDirectionItems = computed(() => [
+  ...(buyData.value.theme_leaders || []).slice(0, 1).map((sector) => ({ label: '主线题材', name: sector.sector_name })),
+  ...(buyData.value.industry_leaders || []).slice(0, 1).map((sector) => ({ label: '承接行业', name: sector.sector_name })),
+])
 
 const envChipClass = (tag) => {
   if (['强进攻', '进攻', '中性偏强', '情绪修复'].includes(tag)) return 'chip-attack'
@@ -1156,6 +1219,33 @@ const poolTagLabel = (tag) => {
   return tag || '未入池'
 }
 
+const poolContextLabel = (point) => {
+  const base = poolTagLabel(point?.stock_pool_tag)
+  const proximity = String(point?.execution_proximity_tag || '').trim()
+  if (!proximity || base !== '账户可参与池') return base
+  return `${base} · ${proximity}`
+}
+
+const directionMatchLabel = (point) => {
+  const name = String(point?.direction_match_name || '').trim()
+  if (!name) return ''
+  return `${directionSourceLabel(point?.direction_match_source_type)} ${name}`
+}
+
+const resonanceLabel = (point) => {
+  const matchLabel = directionMatchLabel(point)
+  if (matchLabel) return `需要${matchLabel}共振`
+  return '需要板块共振'
+}
+
+const executionProximityMetaClass = (point) => {
+  const tag = String(point?.execution_proximity_tag || '').trim()
+  if (tag === '接近执行位') return 'signal-meta-chip-ready'
+  if (tag === '已过确认位' || tag === '待突破') return 'signal-meta-chip-breakthrough'
+  if (tag === '待深回踩') return 'signal-meta-chip-deep'
+  return 'signal-meta-chip-wait'
+}
+
 const splitCond = (text) => {
   if (!text) return ['-']
   return String(text)
@@ -1209,7 +1299,7 @@ const primaryActionLine = (point, envTag) => {
   return `${prefix}：到 ${trigger} 附近再看，跌回 ${invalid} 下方就放弃。`
 }
 
-const observeTypeLabel = (point) => String(point?.buy_point_type || '').trim()
+const observeTypeLabel = (point) => displayBuyPointType(point)
 
 const resolveRetraceFloorRatio = (tsCode) => {
   const code = String(tsCode || '').toUpperCase()
@@ -1360,6 +1450,7 @@ const openBuyAnalysis = (point) => {
   buyAnalysisStock.value = {
     tsCode: point.ts_code,
     stockName: point.stock_name || point.ts_code,
+    sourcePoolTag: String(point.stock_pool_tag || ''),
     currentPrice: point.buy_current_price,
     currentChangePct: point.buy_current_change_pct
   }
@@ -1387,6 +1478,7 @@ const handleNotificationQuery = () => {
     openBuyAnalysis(point || {
       ts_code: notificationTsCode.value,
       stock_name: notificationStockName.value || notificationTsCode.value,
+      stock_pool_tag: '',
       buy_current_price: null,
       buy_current_change_pct: null,
     })
@@ -1405,7 +1497,19 @@ const handleNotificationQuery = () => {
 const clearFocusSector = () => {
   const query = { ...route.query }
   delete query.focus_sector
+  delete query.focus_sector_source_type
   router.replace({ query })
+}
+
+const goToPoolsPage = () => {
+  const query = {}
+  if (focusSector.value) query.focus_sector = focusSector.value
+  if (focusSectorSourceType.value) query.focus_sector_source_type = focusSectorSourceType.value
+  if (Object.keys(query).length) {
+    router.push({ path: '/pools', query })
+    return
+  }
+  router.push('/pools')
 }
 
 const clearReviewFilter = () => {
@@ -1876,6 +1980,38 @@ watch(
   gap: 16px;
 }
 
+.signal-meta-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.signal-meta-chip-ready {
+  color: #7ee2b8;
+  background: rgba(54, 196, 131, 0.12);
+  border: 1px solid rgba(54, 196, 131, 0.18);
+}
+
+.signal-meta-chip-breakthrough {
+  color: #ffd06a;
+  background: rgba(243, 194, 77, 0.12);
+  border: 1px solid rgba(243, 194, 77, 0.18);
+}
+
+.signal-meta-chip-deep {
+  color: #ff9a9f;
+  background: rgba(255, 120, 120, 0.12);
+  border: 1px solid rgba(255, 120, 120, 0.18);
+}
+
+.signal-meta-chip-wait {
+  color: #9ec2ff;
+  background: rgba(92, 122, 255, 0.12);
+  border: 1px solid rgba(92, 122, 255, 0.18);
+}
+
 .signal-grid-secondary {
   margin-top: 0;
 }
@@ -1933,10 +2069,18 @@ watch(
   align-items: flex-start;
 }
 
+.signal-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
 .signal-stock {
   font-size: 1.05rem;
   font-weight: 700;
   line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .signal-code {
@@ -1949,6 +2093,8 @@ watch(
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+  flex: 0 0 auto;
+  max-width: 52%;
 }
 
 .signal-meta {

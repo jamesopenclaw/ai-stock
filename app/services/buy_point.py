@@ -14,6 +14,7 @@ from app.models.schemas import (
     MarketEnvTag,
     RiskLevel,
     StockStrengthTag,
+    StockContinuityTag,
     StockCoreTag,
     StockTradeabilityTag,
     NextTradeabilityTag,
@@ -39,6 +40,108 @@ class BuyPointService:
         self.sector_scan_service = sector_scan_service
         self.stock_filter_service = stock_filter_service
         self.strategy = strategy or DEFAULT_BUY_POINT_STRATEGY
+
+    def _bucket_structure_bonus(self, bucket_tag: Optional[str]) -> float:
+        bucket = str(bucket_tag or "").strip()
+        if bucket == "强势确认":
+            return 2.0
+        if bucket == "趋势回踩":
+            return 0.5
+        if bucket == "异动预备":
+            return -3.0
+        return 0.0
+
+    def _summarize_sector_list(self, sectors, limit: int = 3):
+        if not sectors:
+            return []
+        return list(sectors[:limit])
+
+    def _stock_direction_candidates(self, stock) -> List[str]:
+        names: List[str] = []
+        for name in getattr(stock, "concept_names", []) or []:
+            name_s = str(name or "").strip()
+            if name_s and name_s not in names:
+                names.append(name_s)
+        sector_name = str(getattr(stock, "sector_name", "") or "").strip()
+        if sector_name and sector_name not in names:
+            names.append(sector_name)
+        return names
+
+    def _build_direction_context(self, sector_scan=None, stock_pools: Optional[StockPoolsOutput] = None) -> Dict[str, List[object]]:
+        context_source = stock_pools or sector_scan
+        return {
+            "theme_leaders": list(getattr(context_source, "theme_leaders", []) or []),
+            "industry_leaders": list(getattr(context_source, "industry_leaders", []) or []),
+            "mainline_sectors": list(getattr(context_source, "mainline_sectors", []) or []),
+            "sub_mainline_sectors": list(getattr(context_source, "sub_mainline_sectors", []) or []),
+        }
+
+    def _resolve_direction_match(self, stock: StockOutput, direction_context: Dict[str, List[object]]) -> Dict[str, Optional[str]]:
+        candidates = self._stock_direction_candidates(stock)
+        if not candidates:
+            return {
+                "direction_match_name": None,
+                "direction_match_source_type": None,
+                "direction_match_role": None,
+                "direction_match_note": None,
+            }
+
+        ordered_groups = [
+            ("theme", direction_context.get("theme_leaders", []), "命中主线题材"),
+            ("industry", direction_context.get("industry_leaders", []), "命中承接行业"),
+            ("mainline", direction_context.get("mainline_sectors", []), "命中主线候选"),
+            ("sub_mainline", direction_context.get("sub_mainline_sectors", []), "命中次主线候选"),
+        ]
+        for role, rows, note_prefix in ordered_groups:
+            sector_map = {
+                str(getattr(row, "sector_name", "") or "").strip(): row
+                for row in rows or []
+                if str(getattr(row, "sector_name", "") or "").strip()
+            }
+            for candidate in candidates:
+                sector = sector_map.get(candidate)
+                if not sector:
+                    continue
+                sector_name = str(getattr(sector, "sector_name", "") or "").strip() or candidate
+                source_type = str(getattr(sector, "sector_source_type", "") or "").strip() or None
+                return {
+                    "direction_match_name": sector_name,
+                    "direction_match_source_type": source_type,
+                    "direction_match_role": role,
+                    "direction_match_note": f"{note_prefix} {sector_name}",
+                }
+
+        return {
+            "direction_match_name": None,
+            "direction_match_source_type": None,
+            "direction_match_role": None,
+            "direction_match_note": None,
+        }
+
+    def _attach_direction_match(
+        self,
+        buy_point: BuyPointOutput,
+        stock: StockOutput,
+        direction_context: Dict[str, List[object]],
+    ) -> BuyPointOutput:
+        match_info = self._resolve_direction_match(stock, direction_context)
+        buy_point.direction_match_name = match_info["direction_match_name"]
+        buy_point.direction_match_source_type = match_info["direction_match_source_type"]
+        buy_point.direction_match_role = match_info["direction_match_role"]
+        buy_point.direction_match_note = match_info["direction_match_note"]
+        return buy_point
+
+    def _direction_match_rank_bonus(self, point: BuyPointOutput) -> float:
+        role = str(point.direction_match_role or "").strip()
+        if role == "theme":
+            return 3.0
+        if role == "industry":
+            return 2.0
+        if role == "mainline":
+            return 1.0
+        if role == "sub_mainline":
+            return 0.5
+        return 0.0
 
     def analyze(
         self,
@@ -88,6 +191,7 @@ class BuyPointService:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.ACCOUNT_EXECUTABLE
         for stock in stock_pools.holding_process_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.HOLDING_PROCESS
+        direction_context = self._build_direction_context(sector_scan=sector_scan, stock_pools=stock_pools)
 
         # 分析每个股票的买点
         available = []   # 可买
@@ -102,6 +206,7 @@ class BuyPointService:
                 continue
 
             buy_point = self._analyze_stock_buy_point(stock, market_env, account, review_bias_profile)
+            buy_point = self._attach_direction_match(buy_point, stock, direction_context)
             buy_point = self._apply_display_quote(buy_point, stock, display_quote_map)
             buy_point = self._downgrade_far_from_trigger_available(buy_point, stock)
             buy_point = self._apply_recommended_order_sizing(buy_point, stock, market_env, account)
@@ -123,13 +228,15 @@ class BuyPointService:
             else:
                 not_buy.append(buy_point)
 
-        available.sort(key=self._buy_point_rank_key, reverse=True)
-        observe.sort(key=self._buy_point_rank_key, reverse=True)
-        not_buy.sort(key=self._buy_point_rank_key, reverse=True)
+        available.sort(key=lambda point: self._buy_point_rank_key(point, market_env), reverse=True)
+        observe.sort(key=lambda point: self._buy_point_rank_key(point, market_env), reverse=True)
+        not_buy.sort(key=lambda point: self._buy_point_rank_key(point, market_env), reverse=True)
 
         return BuyPointResponse(
             trade_date=trade_date,
             market_env_tag=market_env.market_env_tag,
+            theme_leaders=self._summarize_sector_list(direction_context.get("theme_leaders", []), 3),
+            industry_leaders=self._summarize_sector_list(direction_context.get("industry_leaders", []), 3),
             available_buy_points=available[:self.strategy.max_available],
             observe_buy_points=observe[:self.strategy.max_observe],
             not_buy_points=not_buy[:self.strategy.max_not_buy],
@@ -330,6 +437,8 @@ class BuyPointService:
         current_change_pct = self._current_change_pct(stock)
         trigger_gap_pct = self._price_gap_pct(current_price, trigger_price)
         invalid_gap_pct = self._price_gap_pct(current_price, invalid_price)
+        display_type = self._resolve_display_buy_point_type(stock, buy_type)
+        execution_context = self._resolve_execution_context(stock)
         required_volume_ratio = self._required_volume_ratio(buy_type)
         requires_sector_resonance = self._requires_sector_resonance(buy_type)
 
@@ -352,12 +461,18 @@ class BuyPointService:
             stock_pool_tag=stock.stock_pool_tag.value if stock.stock_pool_tag else "",
             pool_entry_reason=stock.pool_entry_reason or "",
             account_entry_mode=stock.account_entry_mode or "",
+            execution_reference_price=stock.execution_reference_price,
+            execution_reference_gap_pct=stock.execution_reference_gap_pct,
+            execution_proximity_tag=stock.execution_proximity_tag,
+            execution_proximity_note=stock.execution_proximity_note,
             hard_filter_failed_rules=list(stock.hard_filter_failed_rules or []),
             hard_filter_failed_count=int(stock.hard_filter_failed_count or 0),
             hard_filter_pass_count=int(stock.hard_filter_pass_count or 0),
             hard_filter_summary=stock.hard_filter_summary or "",
             buy_signal_tag=signal_tag,
             buy_point_type=buy_type,
+            buy_display_type=display_type,
+            buy_execution_context=execution_context,
             buy_trigger_cond=trigger_cond,
             buy_confirm_cond=confirm_cond,
             buy_invalid_cond=invalid_cond,
@@ -385,6 +500,39 @@ class BuyPointService:
             review_bias_reason=review_bias["reason"],
         )
 
+    def _resolve_display_buy_point_type(self, stock: StockOutput, buy_type: BuyPointType) -> str:
+        tradeability_tag = self._normalize_next_tradeability_tag(stock.next_tradeability_tag)
+        if (
+            tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
+            and buy_type == BuyPointType.RETRACE_SUPPORT
+        ):
+            return "突破后回踩"
+        return buy_type.value
+
+    def _resolve_execution_context(self, stock: StockOutput) -> str:
+        tradeability_tag = self._normalize_next_tradeability_tag(stock.next_tradeability_tag)
+        if tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            return "突破确认"
+        if tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
+            return "回踩确认"
+        if tradeability_tag == NextTradeabilityTag.LOW_SUCK:
+            return "低吸预备"
+        return tradeability_tag.value if tradeability_tag else ""
+
+    def _normalize_next_tradeability_tag(
+        self,
+        value: Optional[NextTradeabilityTag | str],
+    ) -> Optional[NextTradeabilityTag]:
+        if isinstance(value, NextTradeabilityTag):
+            return value
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        for item in NextTradeabilityTag:
+            if raw in {item.name, item.value}:
+                return item
+        return None
+
     def _resolve_review_bias(
         self,
         stock: StockOutput,
@@ -402,20 +550,41 @@ class BuyPointService:
         if not entry:
             return {"score": 0.0, "label": None, "reason": None}
         return {
-            "score": float(entry.get("score") or 0.0),
+            "score": round(float(entry.get("score") or 0.0) + self._bucket_structure_bonus(bucket), 2),
             "label": entry.get("label"),
-            "reason": entry.get("reason"),
+            "reason": (
+                f"{entry.get('reason') or ''}"
+                f"{' 结构修正：强势确认优先。' if bucket == '强势确认' else ''}"
+                f"{' 结构修正：趋势回踩保留。' if bucket == '趋势回踩' else ''}"
+                f"{' 结构修正：异动预备降权。' if bucket == '异动预备' else ''}"
+            ).strip(),
         }
 
-    def _buy_point_rank_key(self, point: BuyPointOutput):
+    def _buy_point_rank_key(self, point: BuyPointOutput, market_env=None):
         return (
             float(point.review_bias_score or 0),
+            self._direction_match_rank_bonus(point),
+            self._bucket_structure_bonus(point.candidate_bucket_tag),
             1 if point.stock_pool_tag == StockPoolTag.ACCOUNT_EXECUTABLE.value else 0,
-            self._buy_point_type_priority(point.buy_point_type),
+            self._buy_point_type_priority(point.buy_point_type, market_env),
             float(point.buy_current_change_pct or 0),
         )
 
-    def _buy_point_type_priority(self, buy_point_type: BuyPointType) -> int:
+    def _buy_point_type_priority(self, buy_point_type: BuyPointType, market_env=None) -> int:
+        market_tag = getattr(market_env, "market_env_tag", None)
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
+        prefer_breakthrough = (
+            market_tag == MarketEnvTag.ATTACK
+            or market_profile in {"中性偏强", "中性偏进攻"}
+        )
+        if prefer_breakthrough:
+            if buy_point_type == BuyPointType.BREAKTHROUGH:
+                return 3
+            if buy_point_type == BuyPointType.RETRACE_SUPPORT:
+                return 2
+            if buy_point_type == BuyPointType.LOW_SUCK:
+                return 1
+            return 0
         if buy_point_type == BuyPointType.RETRACE_SUPPORT:
             return 3
         if buy_point_type == BuyPointType.BREAKTHROUGH:
@@ -424,37 +593,56 @@ class BuyPointService:
             return 1
         return 0
 
+    def _is_breakthrough_candidate(self, stock: StockOutput, market_env) -> bool:
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
+        if market_profile in {"中性偏谨慎", "弱中性"}:
+            return False
+        if not getattr(market_env, "breakout_allowed", False):
+            return False
+        if stock.stock_tradeability_tag != StockTradeabilityTag.TRADABLE:
+            return False
+        if self._has_upper_shadow_risk(stock):
+            return False
+
+        change_pct = float(stock.change_pct or 0)
+        breakout_type_ceiling = self._breakthrough_type_ceiling_pct(stock.ts_code)
+        if not (3.0 <= change_pct <= breakout_type_ceiling):
+            return False
+
+        if stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH:
+            return True
+
+        return (
+            stock.stock_strength_tag == StockStrengthTag.STRONG
+            and stock.stock_core_tag == StockCoreTag.CORE
+            and stock.stock_continuity_tag != StockContinuityTag.CAUTION
+            and getattr(market_env, "market_env_tag", None) in {MarketEnvTag.ATTACK, MarketEnvTag.NEUTRAL}
+        )
+
     def _determine_buy_type(self, stock: StockOutput, market_env) -> BuyPointType:
         """确定买点类型"""
         market_profile = str(getattr(market_env, "market_env_profile", "") or "")
-        change_pct = float(stock.change_pct or 0)
-        breakout_type_ceiling = self._breakthrough_type_ceiling_pct(stock.ts_code)
-        breakout_quality_ok = (
-            market_env.breakout_allowed
-            and stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE
-            and stock.stock_core_tag == StockCoreTag.CORE
-            and 4.0 <= change_pct <= breakout_type_ceiling
-            and not self._has_upper_shadow_risk(stock)
-        )
+        breakout_quality_ok = self._is_breakthrough_candidate(stock, market_env)
         # 强势股 -> 突破
         if stock.stock_strength_tag == StockStrengthTag.STRONG:
-            if (
-                stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
-                and breakout_quality_ok
-                and market_env.market_env_tag in {MarketEnvTag.ATTACK, MarketEnvTag.NEUTRAL}
-            ):
+            if breakout_quality_ok:
                 return BuyPointType.BREAKTHROUGH
-            if (
-                market_env.market_env_tag == MarketEnvTag.ATTACK
-                and breakout_quality_ok
-            ):
-                return BuyPointType.BREAKTHROUGH
+            if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK:
+                return BuyPointType.LOW_SUCK
             if market_profile in {"中性偏谨慎", "弱中性"}:
                 return BuyPointType.RETRACE_SUPPORT
             return BuyPointType.RETRACE_SUPPORT
 
-        # 中等强度 -> 回踩承接
+        # 中等强度 -> 不再默认一刀切回踩
         if stock.stock_strength_tag == StockStrengthTag.MEDIUM:
+            if (
+                breakout_quality_ok
+                and stock.next_tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
+                and stock.stock_core_tag in {StockCoreTag.CORE, StockCoreTag.FOLLOW}
+            ):
+                return BuyPointType.BREAKTHROUGH
+            if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK:
+                return BuyPointType.LOW_SUCK
             return BuyPointType.RETRACE_SUPPORT
 
         # 弱势 -> 修复转强（需要更多条件）
