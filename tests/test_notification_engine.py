@@ -201,6 +201,59 @@ async def test_refresh_account_events_only_emits_on_transition(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_realtime_cache_source_counts_as_degraded(monkeypatch):
+    engine = NotificationEngine()
+    emitted = []
+    active_keys = set()
+
+    buy_analysis = SimpleNamespace(
+        available_buy_points=[
+            SimpleNamespace(buy_data_source="realtime_cache"),
+        ],
+    )
+    sell_analysis = SimpleNamespace(
+        sell_positions=[],
+        reduce_positions=[],
+    )
+
+    async def fake_sync_states(account_id, *, state_type, trade_date, states):
+        assert account_id == "acct-001"
+        assert state_type == engine.STATE_TYPE_REALTIME
+        assert trade_date == "2026-04-04"
+        assert states[0].payload == {"sources": ["realtime_cache"]}
+        return {
+            engine.REALTIME_STATE_KEY: SimpleNamespace(
+                previous_rank=0,
+                current_rank=1,
+                current_value="degraded",
+            ),
+        }
+
+    async def fake_upsert_event(account_id, **kwargs):
+        emitted.append({"account_id": account_id, **kwargs})
+        return None
+
+    monkeypatch.setattr("app.services.notification_engine.market_data_gateway.should_use_realtime_quote", lambda trade_date: True)
+    monkeypatch.setattr("app.services.notification_engine.notification_state_service.sync_states", fake_sync_states)
+    monkeypatch.setattr("app.services.notification_engine.notification_service.upsert_event", fake_upsert_event)
+
+    await engine._sync_realtime_source_event(
+        "acct-001",
+        user_id="user-001",
+        trade_date="2026-04-04",
+        buy_analysis=buy_analysis,
+        sell_analysis=sell_analysis,
+        active_keys=active_keys,
+    )
+
+    assert emitted[0]["event_type"] == "realtime_source_degraded"
+    assert emitted[0]["trigger_value"] == {"sources": ["realtime_cache"]}
+    assert active_keys == {
+        "acct-001:realtime_source_degraded:system:2026-04-04",
+    }
+
+
+@pytest.mark.asyncio
 async def test_refresh_account_events_does_not_reemit_stable_state(monkeypatch):
     engine = NotificationEngine()
     emitted = []

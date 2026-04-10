@@ -45,6 +45,7 @@ class NotificationEngine:
 
     MARKET_STATE_KEY = "market"
     REALTIME_STATE_KEY = "realtime-source"
+    NON_LIVE_REALTIME_SOURCES = {"realtime_cache"}
 
     def __init__(self):
         self._refresh_cache: dict[str, float] = {}
@@ -404,7 +405,7 @@ class NotificationEngine:
                 *(point.data_source for point in (sell_analysis.reduce_positions or [])[:2]),
             ]
 
-        degraded = bool(active_sources) and not any(str(source or "").startswith("realtime_") for source in active_sources)
+        degraded = bool(active_sources) and not any(self._is_live_realtime_source(source) for source in active_sources)
         changes = await notification_state_service.sync_states(
             account_id,
             state_type=self.STATE_TYPE_REALTIME,
@@ -462,6 +463,10 @@ class NotificationEngine:
         if value == SellSignalTag.REDUCE.value:
             return 1
         return 0
+
+    def _is_live_realtime_source(self, source: object) -> bool:
+        value = str(source or "").strip()
+        return value.startswith("realtime_") and value not in self.NON_LIVE_REALTIME_SOURCES
 
     def _dedupe_key(self, account_id: str, event_type: str, entity_code: str, trade_date: str) -> str:
         return f"{account_id}:{event_type}:{entity_code}:{trade_date}"

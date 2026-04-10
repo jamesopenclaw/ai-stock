@@ -144,6 +144,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { useNotificationStore } from '../stores/notificationStore'
 import { formatLocalTime } from '../utils/datetime'
+import { dataSourceLabel } from '../utils/dataSource'
 
 const props = defineProps({
   modelValue: {
@@ -326,10 +327,7 @@ const categoryLabel = (value) => {
 }
 
 const sourceLabel = (value) => {
-  if (!value) return '规则结果'
-  if (String(value).startsWith('realtime_')) return '盘中实时'
-  if (value === 'mock') return '模拟数据'
-  return '日线回退'
+  return dataSourceLabel(value, { emptyLabel: '规则结果' })
 }
 
 watch(

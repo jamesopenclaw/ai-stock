@@ -186,6 +186,7 @@ import { computed, ref, onMounted } from 'vue'
 import { marketApi } from '../api'
 import { ElMessage } from 'element-plus'
 import { formatLocalTime } from '../utils/datetime'
+import { isLiveRealtimeSource } from '../utils/dataSource'
 import DataFreshnessBar from '../components/DataFreshnessBar.vue'
 
 const loading = ref(false)
@@ -232,7 +233,7 @@ const brokenBoardClass = (r) => {
   return 'text-red'
 }
 
-const isRealtimeSource = (source) => String(source || '').startsWith('realtime_')
+const isRealtimeSource = (source) => isLiveRealtimeSource(source)
 const normalizeTradeDate = (value) => {
   const raw = String(value || '').trim()
   if (!raw) return ''
@@ -242,9 +243,9 @@ const normalizeTradeDate = (value) => {
 
 const quoteSourceLabel = (source, sourceTradeDate, requestedTradeDate) => {
   if (!source) return '日线数据'
-  if (String(source).startsWith('realtime_')) return '盘中实时'
   if (source === 'realtime_cache') return '实时缓存'
   if (source === 'unavailable') return '实时不可用'
+  if (isRealtimeSource(source)) return '盘中实时'
   if (source === 'mock') return '模拟数据'
   const normalizedSourceDate = normalizeTradeDate(sourceTradeDate)
   const normalizedRequestedDate = normalizeTradeDate(requestedTradeDate)
