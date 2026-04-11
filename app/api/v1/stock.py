@@ -22,8 +22,10 @@ from app.services.sell_point import sell_point_service
 from app.services.stock_checkup import stock_checkup_service
 from app.services.buy_point_sop import buy_point_sop_service
 from app.services.sell_point_sop import sell_point_sop_service
+from app.services.llm_explainer import llm_explainer_service
 from app.services.review_snapshot import review_snapshot_service
 from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date
+from app.services.notification_engine import notification_engine
 from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
 from app.data.tushare_client import tushare_client
@@ -74,6 +76,31 @@ def _cache_radar_result(trade_date: str, candidate_limit: int, result, account_i
         "fetched_at": time.monotonic(),
         "result": result,
     }
+
+
+async def _sync_radar_stock_pools_notifications(
+    result,
+    *,
+    account_id: Optional[str],
+    user_id: Optional[str],
+    trade_date: str,
+) -> None:
+    if not account_id:
+        return
+    try:
+        await notification_engine.sync_radar_execution_proximity_events(
+            account_id,
+            user_id=user_id,
+            trade_date=trade_date,
+            stock_pools=result,
+        )
+    except Exception as exc:
+        logger.warning(
+            "radar stock-pools notification sync failed account_id=%s trade_date=%s error=%s",
+            account_id,
+            trade_date,
+            exc,
+        )
 
 
 def _summarize_sector_list(sectors, limit: int = 5):
@@ -228,6 +255,11 @@ async def _compute_radar_stock_pools_result(
         sector_scan=sector_scan,
         scored_stocks=scored_stocks,
         review_bias_profile=review_bias_profile,
+    )
+    await buy_point_sop_service.enrich_execution_proximity(
+        result.account_executable_pool,
+        trade_date,
+        account_id=account_id,
     )
     result.resolved_trade_date = resolved_stock_trade_date or trade_date
     result.candidate_data_status = candidate_data_status
@@ -399,12 +431,19 @@ async def get_stock_pools(
                         refresh_requested=False,
                         stale_snapshot=False,
                         mode="radar",
+                        include_watch_candidates=include_watch_candidates,
                     )
                 )
             result = await _compute_radar_stock_pools_result(
                 trade_date,
                 candidate_limit,
                 account_id=account_id,
+            )
+            await _sync_radar_stock_pools_notifications(
+                result,
+                account_id=account_id,
+                user_id=getattr(current_account, "owner_user_id", None),
+                trade_date=trade_date,
             )
             _cache_radar_result(trade_date, candidate_limit, result, account_id)
             return ApiResponse(
@@ -599,6 +638,8 @@ async def get_stock_buy_analysis(
     ts_code: str,
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
     source_pool_tag: Optional[str] = Query(None, description="来源池标签，来自三池页时用于保持解释语境一致"),
+    force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 缓存"),
+    include_llm: bool = Query(True, description="是否包含 LLM 买点解读"),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """获取单只股票的详细买点 SOP 分析。"""
@@ -613,6 +654,12 @@ async def get_stock_buy_analysis(
             account_id=account_id,
             preferred_pool_tag=source_pool_tag,
         )
+        if include_llm:
+            await llm_explainer_service.rewrite_buy_sop_with_status(
+                result,
+                account_id=account_id,
+                force_refresh=force_llm_refresh,
+            )
         return ApiResponse(data=result.model_dump(mode="json"))
     except Exception as e:
         return ApiResponse(code=500, message=f"获取买点分析失败: {str(e)}")

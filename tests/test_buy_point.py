@@ -328,9 +328,45 @@ class TestBuyPoint:
         buy_point = service._analyze_stock_buy_point(medium_stock, MockMarketEnv())
 
         assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
-        assert "开盘价 1550.00" in buy_point.buy_trigger_cond
-        assert "开盘价 1550.00" in buy_point.buy_confirm_cond
+        assert "日内均价 1551.60" in buy_point.buy_trigger_cond
+        assert "日内均价 1551.60" in buy_point.buy_confirm_cond
         assert "失效价" in buy_point.buy_confirm_cond
+
+    def test_breakthrough_context_retrace_uses_execution_reference_in_conditions(self, service):
+        """
+        测试：原始突破语境被降成回踩时，触发/确认文案应优先围绕执行位，而不是统一回踩开盘价
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.NEUTRAL
+            breakout_allowed = False
+            risk_level = RiskLevel.MEDIUM
+
+        stock = StockOutput(
+            ts_code="600166.SH",
+            stock_name="福田汽车",
+            sector_name="汽车",
+            change_pct=7.74,
+            close=3.34,
+            pre_close=3.10,
+            open=3.12,
+            high=3.39,
+            low=3.06,
+            avg_price=3.21,
+            execution_reference_price=3.40,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.OBSERVABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+            next_tradeability_tag=NextTradeabilityTag.BREAKTHROUGH,
+        )
+
+        buy_point = service._analyze_stock_buy_point(stock, MockMarketEnv())
+
+        assert buy_point.buy_point_type == BuyPointType.RETRACE_SUPPORT
+        assert buy_point.buy_trigger_price == 3.40
+        assert "执行位 3.40" in buy_point.buy_trigger_cond
+        assert "执行位 3.40" in buy_point.buy_confirm_cond
 
     def test_extended_strong_stock_prefers_retrace_support(self, service, strong_stock):
         """
@@ -623,7 +659,7 @@ class TestBuyPoint:
         assert response.available_buy_points == []
         assert len(response.observe_buy_points) == 1
         assert response.observe_buy_points[0].buy_signal_tag == BuySignalTag.OBSERVE
-        assert "现价离触发位仍偏远" in response.observe_buy_points[0].buy_comment
+        assert "现价离执行位仍偏远" in response.observe_buy_points[0].buy_comment
 
     def test_near_trigger_available_point_stays_in_available(self, service, medium_stock):
         """
@@ -884,6 +920,62 @@ class TestBuyPoint:
         assert buy_point.buy_trigger_gap_pct is not None
         assert buy_point.buy_invalid_gap_pct is not None
         assert buy_point.buy_signal_tag == BuySignalTag.OBSERVE
+
+    def test_analyze_syncs_execution_reference_from_account_pool(self, service, strong_stock, monkeypatch):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.close = 12.5
+        strong_stock.pre_close = 11.5
+        strong_stock.open = 11.6
+        strong_stock.high = 12.8
+        strong_stock.low = 11.5
+        strong_stock.execution_reference_price = None
+        strong_stock.execution_reference_gap_pct = None
+        strong_stock.execution_proximity_tag = None
+
+        pool_stock = strong_stock.model_copy(deep=True)
+        pool_stock.execution_reference_price = 12.10
+        pool_stock.execution_reference_gap_pct = -3.2
+        pool_stock.execution_proximity_tag = "待回踩"
+        pool_stock.execution_proximity_note = "当前价距离确认区仍远。"
+
+        monkeypatch.setattr(
+            "app.services.buy_point.tushare_client._should_use_realtime_quote",
+            lambda trade_date: True,
+        )
+        monkeypatch.setattr(
+            "app.services.buy_point.tushare_client._fetch_realtime_stock_quote_map",
+            lambda ts_codes: {
+                "000001.SZ": {
+                    "close": 12.88,
+                    "change_pct": 11.13,
+                    "quote_time": "2026-03-24 10:31:00",
+                    "data_source": "realtime_dc",
+                }
+            },
+        )
+
+        response = service.analyze(
+            "2026-03-24",
+            stocks=[],
+            market_env=MockMarketEnv(),
+            scored_stocks=[strong_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-03-24",
+                market_watch_pool=[],
+                account_executable_pool=[pool_stock],
+                holding_process_pool=[],
+                total_count=1,
+            ),
+        )
+
+        buy_point = response.observe_buy_points[0]
+        assert buy_point.execution_reference_price == 12.10
+        assert buy_point.execution_proximity_tag == "待回踩"
+        assert buy_point.execution_reference_gap_pct == -6.06
 
     def test_analyze_attaches_dual_mainline_direction_context(self, service):
         class MockMarketEnv:

@@ -32,6 +32,7 @@ class NotificationEngine:
         "holding_to_reduce",
         "candidate_to_executable",
         "candidate_near_trigger",
+        "radar_candidate_near_execution",
         "market_env_downgraded",
         "realtime_source_degraded",
     }
@@ -41,6 +42,7 @@ class NotificationEngine:
     STATE_TYPE_MARKET = "market_env"
     STATE_TYPE_HOLDING = "holding_signal"
     STATE_TYPE_CANDIDATE = "candidate_signal"
+    STATE_TYPE_RADAR_EXECUTION = "radar_execution_signal"
     STATE_TYPE_REALTIME = "realtime_source"
 
     MARKET_STATE_KEY = "market"
@@ -303,7 +305,12 @@ class NotificationEngine:
             state_key = f"candidate:{code}"
             rank = 1
             state_value = "executable"
-            if point.buy_trigger_gap_pct is not None and abs(float(point.buy_trigger_gap_pct)) <= 1.0:
+            execution_tag = str(getattr(point, "execution_proximity_tag", "") or "")
+            execution_gap_pct = getattr(point, "execution_reference_gap_pct", None)
+            if execution_tag == "接近执行位":
+                rank = 2
+                state_value = "near_execution"
+            elif point.buy_trigger_gap_pct is not None and abs(float(point.buy_trigger_gap_pct)) <= 1.0:
                 rank = 2
                 state_value = "near_trigger"
             point_by_key[state_key] = point
@@ -316,6 +323,8 @@ class NotificationEngine:
                     entity_code=code,
                     payload={
                         "buy_signal_tag": getattr(point.buy_signal_tag, "value", None),
+                        "execution_proximity_tag": execution_tag or None,
+                        "execution_reference_gap_pct": execution_gap_pct,
                         "buy_trigger_gap_pct": point.buy_trigger_gap_pct,
                     },
                 )
@@ -341,14 +350,26 @@ class NotificationEngine:
                 active_keys.add(dedupe_key)
                 if change.previous_rank >= 2:
                     continue
+                execution_tag = str(getattr(point, "execution_proximity_tag", "") or "")
+                execution_gap_pct = getattr(point, "execution_reference_gap_pct", None)
+                gap_pct = execution_gap_pct if execution_gap_pct is not None else point.buy_trigger_gap_pct
+                gap_text = f"{float(gap_pct):+.2f}%" if gap_pct is not None else "接近"
+                message = getattr(point, "execution_proximity_note", None)
+                title = f"{point.stock_name}接近主买位"
+                if not message:
+                    if execution_tag == "接近执行位":
+                        message = f"距离主买位 {gap_text}，先看确认条件和量能，不要抢动作。"
+                    else:
+                        message = f"距离触发位 {gap_text}，先看确认条件和量能，不要抢动作。"
+                        title = f"{point.stock_name}接近触发位"
                 await notification_service.upsert_event(
                     account_id,
                     user_id=user_id,
                     event_type="candidate_near_trigger",
                     category="candidate",
                     priority=NotificationPriority.MEDIUM.value,
-                    title=f"{point.stock_name}接近触发位",
-                    message=f"距离触发位 {point.buy_trigger_gap_pct:+.2f}%，先看确认条件和量能，不要抢动作。",
+                    title=title,
+                    message=message,
                     action_label="看买点详解",
                     action_target_type="buy_analysis",
                     action_target_payload=self._stock_action_payload("/buy", "buy_analysis", point.ts_code, point.stock_name),
@@ -447,6 +468,105 @@ class NotificationEngine:
             dedupe_key=dedupe_key,
             trigger_value={"sources": active_sources[:5]},
         )
+
+    async def sync_radar_execution_proximity_events(
+        self,
+        account_id: str,
+        *,
+        user_id: Optional[str],
+        trade_date: str,
+        stock_pools,
+    ) -> int:
+        """实时雷达：股票新进入账户池“接近执行位”时写入站内消息。"""
+        if not account_id or not stock_pools:
+            return 0
+
+        point_by_key = {}
+        state_inputs: list[NotificationStateInput] = []
+        for stock in getattr(stock_pools, "account_executable_pool", []) or []:
+            code = normalize_ts_code(getattr(stock, "ts_code", "") or "")
+            if not code:
+                continue
+            proximity_tag = str(getattr(stock, "execution_proximity_tag", "") or "")
+            is_near_execution = proximity_tag == "接近执行位"
+            state_key = f"radar-execution:{code}"
+            state_value = "near_execution" if is_near_execution else "account_candidate"
+            rank = 2 if is_near_execution else 1
+            point_by_key[state_key] = stock
+            state_inputs.append(
+                NotificationStateInput(
+                    state_key=state_key,
+                    current_value=state_value,
+                    current_rank=rank,
+                    entity_type="stock",
+                    entity_code=code,
+                    payload={
+                        "stock_name": getattr(stock, "stock_name", ""),
+                        "execution_proximity_tag": proximity_tag,
+                        "execution_proximity_note": getattr(stock, "execution_proximity_note", None),
+                        "execution_reference_gap_pct": getattr(stock, "execution_reference_gap_pct", None),
+                        "next_tradeability_tag": getattr(getattr(stock, "next_tradeability_tag", None), "value", getattr(stock, "next_tradeability_tag", None)),
+                    },
+                )
+            )
+
+        changes = await notification_state_service.sync_states(
+            account_id,
+            state_type=self.STATE_TYPE_RADAR_EXECUTION,
+            trade_date=trade_date,
+            states=state_inputs,
+        )
+
+        active_keys: set[str] = set()
+        emitted_count = 0
+        for state_key, change in changes.items():
+            if change.current_rank < 2:
+                continue
+            stock = point_by_key.get(state_key)
+            if stock is None:
+                continue
+
+            code = normalize_ts_code(getattr(stock, "ts_code", "") or "")
+            dedupe_key = self._dedupe_key(account_id, "radar_candidate_near_execution", code, trade_date)
+            active_keys.add(dedupe_key)
+            if change.previous_rank >= 2:
+                continue
+
+            gap_pct = getattr(stock, "execution_reference_gap_pct", None)
+            gap_text = f"{float(gap_pct):+.2f}%" if gap_pct is not None else "接近"
+            note = getattr(stock, "execution_proximity_note", None) or "已进入雷达账户池的接近执行位，先看量能和确认条件。"
+            item = await notification_service.upsert_event(
+                account_id,
+                user_id=user_id,
+                event_type="radar_candidate_near_execution",
+                category="candidate",
+                priority=NotificationPriority.MEDIUM.value,
+                title=f"{getattr(stock, 'stock_name', code)}接近执行位",
+                message=f"{note} 当前距执行参考约 {gap_text}，不要脱离买点详解直接下单。",
+                action_label="看买点详解",
+                action_target_type="buy_analysis",
+                action_target_payload=self._stock_action_payload(
+                    "/buy",
+                    "buy_analysis",
+                    getattr(stock, "ts_code", code),
+                    getattr(stock, "stock_name", ""),
+                ),
+                entity_type="stock",
+                entity_code=code,
+                trade_date=trade_date,
+                data_source=getattr(stock, "data_source", None),
+                dedupe_key=dedupe_key,
+                trigger_value=dict(change.payload or {}),
+            )
+            if item is not None:
+                emitted_count += 1
+
+        await notification_service.resolve_inactive_events(
+            account_id,
+            active_dedupe_keys=active_keys,
+            event_types={"radar_candidate_near_execution"},
+        )
+        return emitted_count
 
     def _market_rank(self, market_env_tag) -> int:
         value = getattr(market_env_tag, "value", market_env_tag)

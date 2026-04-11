@@ -862,6 +862,200 @@ describe('关键页面联调', () => {
     expect(messageError).toHaveBeenCalledWith('获取买点分析失败: 目标股票不存在于候选上下文')
   })
 
+  it('BuyAnalysisDrawer 会展示 LLM 解读，并支持单独刷新解读', async () => {
+    stockApi.buyAnalysis
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          data: {
+            trade_date: '2026-04-11',
+            resolved_trade_date: '2026-04-11',
+            stock_found_in_candidates: true,
+            basic_info: {
+              ts_code: '600166.SH',
+              stock_name: '福田汽车',
+              sector_name: '汽车整车',
+              market_env_tag: '进攻',
+              stable_market_env_tag: '进攻',
+              realtime_market_env_tag: '进攻',
+              buy_signal_tag: '可买',
+              buy_point_type: '回踩承接',
+              buy_display_type: '突破后回踩',
+              candidate_bucket_tag: '强势确认',
+              quote_time: '2026-04-11 10:35:00',
+              data_source: 'realtime_sina',
+            },
+            account_context: {
+              position_status: '中仓（仓位 21%）',
+              same_direction_exposure: '暂无明显同方向重复暴露。',
+              current_use: '新开仓',
+              market_suitability: '市场允许主动试错，但仍要先等分时确认。',
+              account_conclusion: '轻仓新开仓，可试错',
+            },
+            daily_judgement: {
+              current_stage: '加速',
+              buy_signal: '突破后回踩，可买',
+              buy_point_level: 'B',
+              reason: '日线能看，但不够舒服',
+              risk_items: [],
+              reference_levels: [],
+            },
+            intraday_judgement: {
+              price_vs_avg_line: '站均价线上',
+              intraday_structure: '分时结构[需确认]',
+              volume_quality: '实时温和放量（相对放量 1.5）',
+              key_level_status: '仍在支撑位 3.06 上方。',
+              conclusion: '等确认',
+              note: '先看执行位附近能否稳住。',
+            },
+            order_plan: {
+              low_absorb_price: '3.12-3.18',
+              breakout_price: '3.40-3.44',
+              retrace_confirm_price: '3.35-3.40',
+              invalid_price: '3.06',
+              above_no_chase: '3.44',
+              below_no_buy: '3.06',
+              trigger_condition: '先到执行位 3.40 附近再开始盯盘',
+              invalid_condition: '跌回 3.06 下方不再继续看。',
+            },
+            position_advice: {
+              suggestion: '轻仓试错',
+              reason: '买点还需要盘中确认或账户已有约束，只适合试错仓位。',
+            },
+            execution: {
+              action: '等',
+              reason: '日线可以继续看，但分时确认还没到位，先按计划等触发。',
+            },
+            llm_summary: {
+              plain_note: '这只票是突破后回踩语境，不是现价直接追；现在更像等执行位附近重新确认承接。',
+              execution_hint: '先盯执行位 3.40 一带能否靠近并稳住，再看量能有没有跟上。',
+              risk_hint: '进攻环境不代表直接追高，可买也不等于当前价立刻下单。',
+            },
+            llm_status: {
+              enabled: true,
+              success: true,
+              status: 'cached',
+              message: 'LLM 解读已命中缓存',
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          code: 200,
+          data: {
+            trade_date: '2026-04-11',
+            resolved_trade_date: '2026-04-11',
+            stock_found_in_candidates: true,
+            basic_info: {
+              ts_code: '600166.SH',
+              stock_name: '福田汽车',
+              sector_name: '汽车整车',
+              market_env_tag: '进攻',
+              stable_market_env_tag: '进攻',
+              realtime_market_env_tag: '进攻',
+              buy_signal_tag: '可买',
+              buy_point_type: '回踩承接',
+              buy_display_type: '突破后回踩',
+              candidate_bucket_tag: '强势确认',
+              quote_time: '2026-04-11 10:35:00',
+              data_source: 'realtime_sina',
+            },
+            account_context: {
+              position_status: '中仓（仓位 21%）',
+              same_direction_exposure: '暂无明显同方向重复暴露。',
+              current_use: '新开仓',
+              market_suitability: '市场允许主动试错，但仍要先等分时确认。',
+              account_conclusion: '轻仓新开仓，可试错',
+            },
+            daily_judgement: {
+              current_stage: '加速',
+              buy_signal: '突破后回踩，可买',
+              buy_point_level: 'B',
+              reason: '日线能看，但不够舒服',
+              risk_items: [],
+              reference_levels: [],
+            },
+            intraday_judgement: {
+              price_vs_avg_line: '站均价线上',
+              intraday_structure: '分时结构[需确认]',
+              volume_quality: '实时温和放量（相对放量 1.5）',
+              key_level_status: '仍在支撑位 3.06 上方。',
+              conclusion: '等确认',
+              note: '先看执行位附近能否稳住。',
+            },
+            order_plan: {
+              low_absorb_price: '3.12-3.18',
+              breakout_price: '3.40-3.44',
+              retrace_confirm_price: '3.35-3.40',
+              invalid_price: '3.06',
+              above_no_chase: '3.44',
+              below_no_buy: '3.06',
+              trigger_condition: '先到执行位 3.40 附近再开始盯盘',
+              invalid_condition: '跌回 3.06 下方不再继续看。',
+            },
+            position_advice: {
+              suggestion: '轻仓试错',
+              reason: '买点还需要盘中确认或账户已有约束，只适合试错仓位。',
+            },
+            execution: {
+              action: '等',
+              reason: '日线可以继续看，但分时确认还没到位，先按计划等触发。',
+            },
+            llm_summary: {
+              plain_note: '刷新后的解读会继续围绕规则结果，但把当前最该盯的变化说得更直白。',
+              execution_hint: '现在先盯执行位附近别冲过又回落。',
+              risk_hint: '别把等待触发误读成可以直接追价。',
+            },
+            llm_status: {
+              enabled: true,
+              success: true,
+              status: 'success',
+              message: 'LLM 解释增强已生效',
+            },
+          },
+        },
+      })
+
+    const { default: BuyAnalysisDrawer } = await import('../src/components/BuyAnalysisDrawer.vue')
+    const wrapper = mount(BuyAnalysisDrawer, {
+      props: {
+        modelValue: false,
+        tsCode: '600166.SH',
+        stockName: '福田汽车',
+        tradeDate: '2026-04-11',
+        sourcePoolTag: '账户可参与池',
+      },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+    await flushPromises()
+
+    expect(stockApi.buyAnalysis).toHaveBeenCalledWith(
+      '600166.SH',
+      '2026-04-11',
+      expect.objectContaining({ timeout: 90000, sourcePoolTag: '账户可参与池', includeLlm: true }),
+    )
+    expect(wrapper.text()).toContain('LLM 解读')
+    expect(wrapper.text()).toContain('这只票是突破后回踩语境')
+    expect(wrapper.text()).toContain('当前最该盯')
+    expect(wrapper.text()).toContain('最容易误读')
+    expect(wrapper.text()).toContain('LLM 解读已命中缓存')
+
+    const refreshLlmButton = wrapper.findAll('button').find((node) => node.text().includes('刷新解读'))
+    await refreshLlmButton.trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    expect(stockApi.buyAnalysis).toHaveBeenLastCalledWith(
+      '600166.SH',
+      '2026-04-11',
+      expect.objectContaining({ forceLlmRefresh: true, includeLlm: true }),
+    )
+    expect(wrapper.text()).toContain('刷新后的解读会继续围绕规则结果')
+    expect(wrapper.text()).toContain('LLM 解释增强已生效')
+  })
+
   it('SellAnalysisDrawer 会在加载失败时显示真实错误，不再只显示空态', async () => {
     stockApi.sellAnalysis.mockResolvedValue({
       data: {

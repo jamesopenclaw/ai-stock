@@ -21,6 +21,7 @@
         </div>
         <div class="header-actions">
           <el-button @click="loadData" :loading="loading">刷新</el-button>
+          <el-button @click="refreshLlm" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
         </div>
       </div>
     </template>
@@ -87,6 +88,25 @@
             <span>{{ quoteMeta }}</span>
           </div>
         </div>
+
+        <section v-if="llmPanelVisible" class="analysis-section analysis-section-full llm-section">
+          <div class="section-header-row">
+            <div class="section-header">LLM 解读</div>
+            <div v-if="llmStatusVisible" class="decision-summary" :class="llmStatusClass">{{ llmStatusText }}</div>
+          </div>
+          <div v-if="llmSummary?.plain_note" class="llm-note-main">{{ llmSummary.plain_note }}</div>
+          <div class="llm-note-grid">
+            <article v-if="llmSummary?.execution_hint" class="llm-note-card">
+              <span>当前最该盯</span>
+              <strong>{{ llmSummary.execution_hint }}</strong>
+            </article>
+            <article v-if="llmSummary?.risk_hint" class="llm-note-card">
+              <span>最容易误读</span>
+              <strong>{{ llmSummary.risk_hint }}</strong>
+            </article>
+          </div>
+          <div class="section-note">仅作规则结果的人话解释，不改动买点级别、挂单价和仓位建议。</div>
+        </section>
 
         <div class="section-grid">
           <section class="analysis-section section-account">
@@ -287,6 +307,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 
 const loading = ref(false)
+const llmRefreshing = ref(false)
 const data = ref(null)
 const loadError = ref('')
 
@@ -298,6 +319,8 @@ const orderPlan = computed(() => data.value?.order_plan || null)
 const addDecision = computed(() => data.value?.add_position_decision || null)
 const positionAdvice = computed(() => data.value?.position_advice || null)
 const execution = computed(() => data.value?.execution || null)
+const llmSummary = computed(() => data.value?.llm_summary || null)
+const llmStatus = computed(() => data.value?.llm_status || null)
 const displayTradeDate = computed(() => props.tradeDate || getLocalDate())
 const todayDate = computed(() => getLocalDate())
 const dateContextNotice = computed(() => {
@@ -333,6 +356,19 @@ const quoteMeta = computed(() => {
   if (quoteTime) return `${sourceLabel} ${formatLocalDateTime(quoteTime)}`
   return `${sourceLabel} ${displayTradeDate.value}`
 })
+const llmStatusVisible = computed(() => Boolean(llmStatus.value?.message))
+const llmStatusText = computed(() => {
+  if (!llmStatus.value?.message) return ''
+  return llmStatus.value.message
+})
+const llmStatusClass = computed(() => {
+  if (llmStatus.value?.success) return 'text-brand'
+  if (llmStatus.value?.enabled) return 'text-warning'
+  return 'text-neutral'
+})
+const llmPanelVisible = computed(() => (
+  Boolean(llmSummary.value?.plain_note || llmSummary.value?.execution_hint || llmSummary.value?.risk_hint || llmStatusVisible.value)
+))
 const directionMatchLabel = computed(() => {
   const name = String(basic.value?.direction_match_name || '').trim()
   const sourceType = String(basic.value?.direction_match_source_type || '').trim()
@@ -798,14 +834,21 @@ const getLocalDate = () => {
   return `${y}-${m}-${d}`
 }
 
-const loadData = async () => {
+const loadData = async (options = {}) => {
   if (!props.tsCode) return
-  loading.value = true
+  const refreshLlmOnly = Boolean(options.forceLlmRefresh)
+  if (refreshLlmOnly) {
+    llmRefreshing.value = true
+  } else {
+    loading.value = true
+  }
   loadError.value = ''
   try {
     const res = await stockApi.buyAnalysis(props.tsCode, displayTradeDate.value, {
       timeout: 90000,
-      sourcePoolTag: props.sourcePoolTag
+      sourcePoolTag: props.sourcePoolTag,
+      forceLlmRefresh: refreshLlmOnly,
+      includeLlm: true,
     })
     const payload = res.data || {}
     const responseCode = payload.code ?? 200
@@ -822,7 +865,12 @@ const loadData = async () => {
     ElMessage.error(message)
   } finally {
     loading.value = false
+    llmRefreshing.value = false
   }
+}
+
+const refreshLlm = async () => {
+  await loadData({ forceLlmRefresh: true })
 }
 </script>
 
@@ -878,6 +926,44 @@ const loadData = async () => {
   border: 1px solid rgba(255, 120, 120, 0.16);
   color: var(--color-text-main);
   font-size: 13px;
+}
+
+.llm-section {
+  gap: 14px;
+}
+
+.llm-note-main {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(83, 166, 255, 0.16);
+  background: rgba(83, 166, 255, 0.08);
+  color: var(--color-text-main);
+  line-height: 1.75;
+}
+
+.llm-note-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.llm-note-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.llm-note-card span {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.llm-note-card strong {
+  color: var(--color-text-main);
+  line-height: 1.65;
 }
 
 .overview-card {

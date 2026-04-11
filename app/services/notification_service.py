@@ -32,6 +32,7 @@ DEFAULT_NOTIFICATION_RULES = {
     "holding_to_reduce": "high",
     "candidate_to_executable": "medium",
     "candidate_near_trigger": "medium",
+    "radar_candidate_near_execution": "medium",
     "market_env_downgraded": "high",
     "realtime_source_degraded": "info",
 }

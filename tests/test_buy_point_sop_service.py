@@ -90,6 +90,34 @@ def _zone_high(zone: str) -> float:
     return float(zone.split("-")[1])
 
 
+def _build_sop_summary(
+    *,
+    buy_point_type="趋势回踩",
+    intraday_structure="回踩承接",
+    trigger_condition="回踩 14.91-15.04 一带企稳再看",
+    action="等",
+    low_absorb_price="14.02",
+    breakout_price="15.34",
+    retrace_confirm_price="14.91-15.04",
+    give_up_price="15.88",
+    below_no_buy="13.74",
+):
+    return SimpleNamespace(
+        basic_info=SimpleNamespace(buy_point_type=buy_point_type),
+        intraday_judgement=SimpleNamespace(intraday_structure=intraday_structure),
+        order_plan=SimpleNamespace(
+            low_absorb_price=low_absorb_price,
+            breakout_price=breakout_price,
+            retrace_confirm_price=retrace_confirm_price,
+            give_up_price=give_up_price,
+            above_no_chase=give_up_price,
+            below_no_buy=below_no_buy,
+            trigger_condition=trigger_condition,
+        ),
+        execution=SimpleNamespace(action=action),
+    )
+
+
 @pytest.mark.asyncio
 async def test_buy_point_sop_service_returns_structured_buy_plan(monkeypatch):
     market_env = MarketEnvOutput(
@@ -204,6 +232,43 @@ async def test_buy_point_sop_service_returns_structured_buy_plan(monkeypatch):
     assert result.position_advice.recommended_lots == 10
     assert result.position_advice.recommended_order_amount == 28100.0
     assert result.execution.action == "买"
+
+
+def test_build_primary_execution_plan_summary_prefers_retrace_zone():
+    summary = buy_point_sop_service.build_primary_execution_plan_summary(
+        _build_sop_summary(),
+        ts_code="600884.SH",
+        current_price=15.29,
+    )
+
+    assert summary is not None
+    assert summary.key == "retrace"
+    assert summary.label == "确认区"
+    assert summary.value == "14.91-15.04"
+    assert summary.proximity_tag == "待回踩"
+    assert "14.91-15.04" in (summary.proximity_note or "")
+
+
+def test_build_primary_execution_plan_summary_marks_breakout_as_confirmed():
+    summary = buy_point_sop_service.build_primary_execution_plan_summary(
+        _build_sop_summary(
+            buy_point_type="突破确认",
+            intraday_structure="突破后站稳",
+            trigger_condition="放量过 15.34 并站稳再考虑",
+            action="买",
+            low_absorb_price="15.02",
+            breakout_price="15.34",
+            retrace_confirm_price="15.05-15.12",
+        ),
+        ts_code="300781.SZ",
+        current_price=15.66,
+    )
+
+    assert summary is not None
+    assert summary.key == "breakout"
+    assert summary.label == "突破区"
+    assert summary.value == "15.34"
+    assert summary.proximity_tag == "已过确认位"
 
 
 @pytest.mark.asyncio

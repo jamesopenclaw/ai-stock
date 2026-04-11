@@ -11,7 +11,9 @@ from loguru import logger
 
 from app.core.config import settings
 from app.models.schemas import (
+    BuyPointSopResponse,
     LlmCallStatus,
+    LlmBuySopSummary,
     LlmPoolsSummary,
     LlmSellSummary,
     LlmStockCheckupReport,
@@ -27,6 +29,21 @@ from app.services.llm_cache_service import llm_cache_service
 
 class LlmExplainerService:
     """面向页面的人话解释增强。"""
+
+    CHECKUP_PROMPT_VERSION = "stock_checkup_v2"
+    CHECKUP_SECTIONS = (
+        ("basic_info", "1）基本信息"),
+        ("market_context", "2）市场环境"),
+        ("direction_position", "3）方向地位"),
+        ("daily_structure", "4）日线结构"),
+        ("intraday_strength", "5）短线强度"),
+        ("fund_quality", "6）资金质量"),
+        ("peer_comparison", "7）同类对比"),
+        ("valuation_profile", "8）估值与属性"),
+        ("key_levels", "9）关键位"),
+        ("strategy", "10）策略结论"),
+        ("final_conclusion", "11）一句话结论"),
+    )
 
     POOLS_SYSTEM_PROMPT = """
 你是短线交易系统的解释助手。你的职责只有一件事：把已经给定的规则结果翻译成清晰的人话。
@@ -71,6 +88,19 @@ page_summary, action_summary, notes
 ts_code, plain_note, action_sentence, trigger_sentence, risk_sentence
 """.strip()
 
+    BUY_SOP_SYSTEM_PROMPT = """
+你是短线交易系统的买点 SOP 解释助手。你的职责是把已经给定的买点 SOP 规则结果翻译成简短、直接、可执行的人话说明。
+
+严格遵守：
+1. 不能新增价格、仓位、板块、胜率、趋势判断或交易结论。
+2. 不能修改原有的可买/观察/不买、日线级别、分时结论、挂单价、仓位建议，只能解释为什么会这样。
+3. plain_note 必须回答：这只票现在该怎么读。要显式吸收至少 2 个输入里的具体事实，不能只复读标题。
+4. execution_hint 必须回答：当前最该盯什么变化。优先结合主路径、分时结论、挂单计划，不要泛泛而谈。
+5. risk_hint 必须回答：这页最容易误解的点或最大的执行风险，优先指出“可买不等于现价可买”“进攻环境不代表直接追”“日线能看不等于分时已确认”这类误区，但只能基于输入事实选择。
+6. 文案要短、直接、像交易员给盘中提示，不要写成长文，不要分点，不要模板腔。
+7. 输出必须是 JSON 对象，字段只允许：plain_note, execution_hint, risk_hint
+""".strip()
+
     STOCK_CHECKUP_SYSTEM_PROMPT = """
 你是 A 股短线交易系统里的个股全面体检助手。你的任务是基于已经给定的规则事实，输出一份结构化体检报告。
 
@@ -81,9 +111,24 @@ ts_code, plain_note, action_sentence, trigger_sentence, risk_sentence
 overall_summary, llm_report_sections, key_risks, one_line_conclusion
 4. llm_report_sections 必须是数组，每项字段只允许：
 key, title, content
-5. content 要短、直接、可执行，避免空话和套话。
-6. 对含有“[需确认]”的信息，要明确保守表达，不要脑补。
-7. 最终一句话结论要像交易员复盘语气，清楚表达“能不能看、能不能做、错了怎么看”。
+5. llm_report_sections 必须完整返回以下 11 个章节，key 和 title 必须逐项匹配且按此顺序排列：
+basic_info / 1）基本信息
+market_context / 2）市场环境
+direction_position / 3）方向地位
+daily_structure / 4）日线结构
+intraday_strength / 5）短线强度
+fund_quality / 6）资金质量
+peer_comparison / 7）同类对比
+valuation_profile / 8）估值与属性
+key_levels / 9）关键位
+strategy / 10）策略结论
+final_conclusion / 11）一句话结论
+6. 每个 content 都必须是“解读”，不是摘抄字段。不要把规则快照里的标题、结论或原句换个顺序重复一遍。
+7. 每个 content 必须回答该章节的交易含义：为什么重要、接下来盯什么变化、如果看错该怎么收缩。三者至少覆盖其中两项。
+8. 每个 content 必须吸收至少 2 个该股票的具体事实；如果该章节事实不足，也不能只写“该项需确认”，要说明“缺什么事实 + 因此怎么保守处理”。
+9. 对含有“[需确认]”的信息，要明确保守表达，不要脑补；但要把“需确认”翻译成操作影响，例如降低确定性、等盘中确认、不要追价。
+10. content 要短、直接、可执行，像交易员写复盘提示，避免空话、套话和章节字段复读。
+11. 最终一句话结论要清楚表达“能不能看、能不能做、错了怎么看”。
 """.strip()
 
     async def is_enabled(self) -> bool:
@@ -620,6 +665,7 @@ key, title, content
         mode: str = "full",
     ) -> Dict:
         payload = {
+            "prompt_version": self.CHECKUP_PROMPT_VERSION,
             "trade_date": trade_date,
             "checkup_target": checkup_target.value,
             "rule_snapshot": rule_snapshot.model_dump(mode="json"),
@@ -699,6 +745,7 @@ key, title, content
                 },
             }
             return {
+                "prompt_version": self.CHECKUP_PROMPT_VERSION,
                 "trade_date": trade_date,
                 "checkup_target": checkup_target.value,
                 "rule_snapshot": compact_snapshot,
@@ -749,11 +796,63 @@ key, title, content
             },
         }
         return {
+            "prompt_version": self.CHECKUP_PROMPT_VERSION,
             "trade_date": trade_date,
             "checkup_target": checkup_target.value,
             "rule_snapshot": ultra_snapshot,
             "payload_mode": "ultra_compact_retry",
         }
+
+    def _validate_stock_checkup_report(self, data: Dict) -> LlmStockCheckupReport:
+        report = LlmStockCheckupReport.model_validate(data)
+        title_by_key = dict(self.CHECKUP_SECTIONS)
+        sections_by_key = {}
+
+        for section in report.llm_report_sections:
+            key = str(section.key or "").strip()
+            content = str(section.content or "").strip()
+            if key not in title_by_key:
+                continue
+            if key not in sections_by_key or (
+                not str(sections_by_key[key].content or "").strip()
+                and content
+            ):
+                sections_by_key[key] = section.model_copy(
+                    update={
+                        "key": key,
+                        "title": title_by_key[key],
+                        "content": content,
+                    }
+                )
+
+        missing = [
+            title
+            for key, title in self.CHECKUP_SECTIONS
+            if key not in sections_by_key
+            or self._is_invalid_checkup_section_content(sections_by_key[key].content)
+        ]
+        if missing:
+            raise ValueError(f"LLM 个股体检缺少章节：{'、'.join(missing)}")
+
+        return report.model_copy(
+            update={
+                "overall_summary": str(report.overall_summary or "").strip(),
+                "llm_report_sections": [
+                    sections_by_key[key] for key, _ in self.CHECKUP_SECTIONS
+                ],
+                "key_risks": [
+                    str(risk).strip()
+                    for risk in report.key_risks
+                    if str(risk or "").strip()
+                ],
+                "one_line_conclusion": str(report.one_line_conclusion or "").strip(),
+            }
+        )
+
+    def _is_invalid_checkup_section_content(self, content: str) -> bool:
+        stripped = str(content or "").strip()
+        normalized = stripped.strip("。.!！?？ ")
+        return normalized in {"", "-", "需确认", "该项需确认"}
 
     async def explain_stock_checkup_with_status(
         self,
@@ -807,7 +906,7 @@ key, title, content
             )
             if cached:
                 try:
-                    report = LlmStockCheckupReport.model_validate(cached)
+                    report = self._validate_stock_checkup_report(cached)
                     return report, LlmCallStatus(
                         enabled=True,
                         success=True,
@@ -863,7 +962,7 @@ key, title, content
             return None, status
 
         try:
-            report = LlmStockCheckupReport.model_validate(data)
+            report = self._validate_stock_checkup_report(data)
             await llm_cache_service.upsert_cache(
                 scene="stock_checkup",
                 cache_key=cache_key,
@@ -905,6 +1004,110 @@ key, title, content
                 point.llm_trigger_sentence = note.trigger_sentence or None
                 point.llm_risk_sentence = note.risk_sentence or None
         return sell_points
+
+    async def rewrite_buy_sop_with_status(
+        self,
+        buy_sop: BuyPointSopResponse,
+        *,
+        account_id: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> tuple[Optional[LlmBuySopSummary], LlmCallStatus]:
+        runtime = await llm_client.get_runtime_config()
+        if not (
+            runtime.get("enabled")
+            and str(runtime.get("api_key") or "").strip()
+            and str(runtime.get("model") or "").strip()
+            and str(runtime.get("base_url") or "").strip()
+        ):
+            return None, LlmCallStatus(
+                enabled=False,
+                success=False,
+                status="disabled",
+                message="LLM 未启用或配置不完整",
+            )
+
+        payload = {
+            "prompt_version": "buy_sop_v1",
+            "trade_date": buy_sop.trade_date,
+            "resolved_trade_date": buy_sop.resolved_trade_date,
+            "stock_found_in_candidates": buy_sop.stock_found_in_candidates,
+            "basic_info": buy_sop.basic_info.model_dump(mode="json"),
+            "account_context": buy_sop.account_context.model_dump(mode="json"),
+            "daily_judgement": buy_sop.daily_judgement.model_dump(mode="json"),
+            "intraday_judgement": buy_sop.intraday_judgement.model_dump(mode="json"),
+            "order_plan": buy_sop.order_plan.model_dump(mode="json"),
+            "position_advice": buy_sop.position_advice.model_dump(mode="json"),
+            "execution": buy_sop.execution.model_dump(mode="json"),
+        }
+        if buy_sop.add_position_decision:
+            payload["add_position_decision"] = buy_sop.add_position_decision.model_dump(mode="json")
+
+        cache_key = self._cache_key(
+            scene="buy_point_sop",
+            account_id=str(account_id or ""),
+            trade_date=buy_sop.trade_date,
+            provider=str(runtime.get("provider") or ""),
+            model=str(runtime.get("model") or ""),
+            payload=payload,
+        )
+
+        if not force_refresh:
+            cache_kwargs = {"account_id": account_id} if account_id else {}
+            cached = await llm_cache_service.get_cache(
+                cache_key=cache_key,
+                **cache_kwargs,
+            )
+            if cached:
+                try:
+                    summary = LlmBuySopSummary.model_validate(cached)
+                    buy_sop.llm_summary = summary
+                    buy_sop.llm_status = LlmCallStatus(
+                        enabled=True,
+                        success=True,
+                        status="cached",
+                        message="LLM 解读已命中缓存",
+                    )
+                    return summary, buy_sop.llm_status
+                except Exception as exc:
+                    logger.warning(f"LLM 买点 SOP 缓存校验失败: {exc}")
+
+        llm_kwargs = {"account_id": account_id} if account_id else {}
+        data, status = await llm_client.chat_json_with_status(
+            self.BUY_SOP_SYSTEM_PROMPT,
+            payload,
+            scene="buy_point_sop",
+            trade_date=buy_sop.trade_date,
+            **llm_kwargs,
+        )
+        if not data:
+            buy_sop.llm_status = status
+            return None, status
+
+        try:
+            summary = LlmBuySopSummary.model_validate(data)
+            buy_sop.llm_summary = summary
+            buy_sop.llm_status = status
+            await llm_cache_service.upsert_cache(
+                scene="buy_point_sop",
+                cache_key=cache_key,
+                trade_date=buy_sop.trade_date,
+                provider=str(runtime.get("provider") or ""),
+                model=str(runtime.get("model") or ""),
+                payload=payload,
+                response=summary.model_dump(),
+                **llm_kwargs,
+            )
+            return summary, status
+        except Exception as exc:
+            logger.warning(f"LLM 买点 SOP 校验失败: {exc}")
+            failed_status = LlmCallStatus(
+                enabled=True,
+                success=False,
+                status="validation_error",
+                message=f"LLM 买点 SOP 校验失败：{exc}",
+            )
+            buy_sop.llm_status = failed_status
+            return None, failed_status
 
 
 llm_explainer_service = LlmExplainerService()

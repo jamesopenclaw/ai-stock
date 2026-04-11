@@ -55,6 +55,15 @@
           :closable="false"
           class="page-alert"
         />
+        <el-alert
+          v-if="candidateFreshnessAlert"
+          :title="candidateFreshnessAlert.title"
+          :description="candidateFreshnessAlert.description"
+          :type="candidateFreshnessAlert.type"
+          show-icon
+          :closable="false"
+          class="page-alert candidate-freshness-alert"
+        />
         <DataFreshnessBar
           :items="poolsFreshnessItems"
           :note="poolsFreshnessNote"
@@ -92,6 +101,14 @@
             </button>
             <el-button text type="primary" @click="goToBuyPage(focusSector, focusSectorSourceType)">
               去买点分析
+            </el-button>
+            <el-button
+              v-if="marketWatchCandidateCount"
+              text
+              type="warning"
+              @click="candidateDiagnosticsVisible = true"
+            >
+              候选诊断 {{ marketWatchCandidateCount }} 只
             </el-button>
             <el-button text @click="goToSectors(focusSector, focusSectorSourceType)">
               看板块扫描
@@ -210,36 +227,36 @@
           <article class="summary-card summary-card-account">
             <div class="summary-kicker">账户执行概览</div>
               <div class="overview-mini-stats overview-mini-stats-compact">
-                <div class="overview-mini-stat overview-mini-stat-account">
+                <button type="button" class="overview-mini-stat overview-mini-stat-account" @click="jumpFromAccountOverview('standard_ready')">
                   <span class="overview-mini-label">接近执行位</span>
                   <strong class="overview-mini-value">{{ readyStandardExecutionPool.length }}</strong>
                   <span class="overview-mini-tip">优先看这里</span>
-                </div>
-                <div class="overview-mini-stat overview-mini-stat-market">
+                </button>
+                <button type="button" class="overview-mini-stat overview-mini-stat-market" @click="jumpFromAccountOverview('standard_waiting')">
                   <span class="overview-mini-label">待触发</span>
                   <strong class="overview-mini-value">{{ waitingStandardExecutionPool.length }}</strong>
                   <span class="overview-mini-tip">跟计划不急追</span>
-                </div>
-                <div class="overview-mini-stat overview-mini-stat-defense">
+                </button>
+                <button type="button" class="overview-mini-stat overview-mini-stat-defense" @click="jumpFromAccountOverview('aggressive_trial')">
                   <span class="overview-mini-label">进攻试错</span>
                   <strong class="overview-mini-value">{{ aggressiveTrialPool.length }}</strong>
                   <span class="overview-mini-tip">仅小仓试错</span>
-                </div>
-                <div class="overview-mini-stat overview-mini-stat-trend">
+                </button>
+                <button type="button" class="overview-mini-stat overview-mini-stat-trend" @click="jumpFromAccountOverview('defense_trial')">
                   <span class="overview-mini-label">防守试错</span>
                   <strong class="overview-mini-value">{{ defenseTrialPool.length }}</strong>
                   <span class="overview-mini-tip">防守日极少数</span>
-                </div>
-                <div class="overview-mini-stat overview-mini-stat-holding">
+                </button>
+                <button type="button" class="overview-mini-stat overview-mini-stat-holding" @click="activateTab('market', { scroll: true })">
                 <span class="overview-mini-label">观察票</span>
                 <strong class="overview-mini-value">{{ marketCount }}</strong>
                 <span class="overview-mini-tip">先盯不先做</span>
-              </div>
-              <div class="overview-mini-stat overview-mini-stat-holding">
+              </button>
+              <button type="button" class="overview-mini-stat overview-mini-stat-holding" @click="activateTab('holding', { scroll: true })">
                 <span class="overview-mini-label">持仓处理</span>
                 <strong class="overview-mini-value">{{ holdingCount }}</strong>
                 <span class="overview-mini-tip">旧仓优先</span>
-              </div>
+              </button>
             </div>
           </article>
         </section>
@@ -300,6 +317,9 @@
                       <div class="top-focus-actions">
                         <el-button size="small" @click="openFocusAnalysis(item)">
                           {{ item.poolKey === 'holding' ? '卖点详解' : '买点详解' }}
+                        </el-button>
+                        <el-button text size="small" @click="openCheckup(item.stock, focusItemCheckupTarget(item))">
+                          全面体检
                         </el-button>
                         <el-button text size="small" @click="activateTab(focusItemTab(item), { scroll: true })">
                           定位到{{ focusItemPoolLabel(item) }}
@@ -408,6 +428,7 @@
                   <div class="action-risk">{{ executionRiskLine(stock) }}</div>
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
                   </div>
                 </article>
               </section>
@@ -455,6 +476,7 @@
                   <div class="action-risk">{{ executionRiskLine(stock) }}</div>
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
                   </div>
                 </article>
               </section>
@@ -496,6 +518,7 @@
                   <div class="action-risk">{{ trialRiskLine(stock) }}</div>
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
                   </div>
                 </article>
               </section>
@@ -537,6 +560,7 @@
                   <div class="action-risk">{{ trialRiskLine(stock) }}</div>
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
                   </div>
                 </article>
               </section>
@@ -592,16 +616,17 @@
                     <em>{{ watchKeyLine(stock) }}</em>
                     <div class="stock-inline-actions">
                       <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                      <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
                     </div>
                   </div>
                 </div>
               </section>
             </div>
-            <div v-if="showRadarWatchExpansion" class="watch-candidate-panel">
+            <div v-if="showWatchCandidateDiagnostics" class="watch-candidate-panel">
               <div class="watch-candidate-head">
                 <div>
                   <div class="watch-candidate-title">候选补充</div>
-                  <div class="watch-candidate-desc">这些票还在观察候选全集里，适合扩展盯盘范围，但不替代前排代表票。</div>
+                  <div class="watch-candidate-desc">这些票还在观察候选全集里，适合扩展盯盘范围；点“候选诊断”可以看暂未排前或未进账户池的具体原因。</div>
                 </div>
                 <el-button text type="primary" @click="watchCandidatesExpanded = !watchCandidatesExpanded">
                   {{ watchCandidatesExpanded ? '收起候选' : `展开候选（还有 ${marketRadarExtraCandidates.length} 只）` }}
@@ -620,6 +645,7 @@
                   <div class="watch-candidate-card-copy">{{ watchKeyLine(stock) }}</div>
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                    <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
                   </div>
                 </article>
               </div>
@@ -793,7 +819,7 @@
                 </div>
               </article>
             </div>
-            <section v-if="showRadarWatchExpansion" class="watch-candidate-detail-panel">
+            <section v-if="showWatchCandidateDiagnostics" class="watch-candidate-detail-panel">
               <div class="watch-candidate-head">
                 <div>
                   <div class="watch-candidate-title">观察候选展开区</div>
@@ -802,6 +828,15 @@
                 <div class="watch-candidate-summary">
                   候选全集 {{ marketWatchCandidateCount }} 只 / 当前可见代表票 {{ marketPool.length }} 只
                 </div>
+              </div>
+              <div v-if="candidateDiagnosticStats.length" class="candidate-diagnostic-strip">
+                <span
+                  v-for="stat in candidateDiagnosticStats"
+                  :key="stat.label"
+                  class="candidate-diagnostic-chip"
+                >
+                  <strong>{{ stat.value }}</strong>{{ stat.label }}
+                </span>
               </div>
               <div class="signal-grid signal-grid-candidate">
                 <article
@@ -845,6 +880,7 @@
                     <span>先扩展盯盘，不直接上升为前排代表票。</span>
                     <div class="footer-actions">
                       <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                      <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
                     </div>
                   </div>
                 </article>
@@ -865,8 +901,79 @@
               v-if="!accountCount"
               :description="emptyPoolText('account')"
             />
-            <div v-else class="account-group-stack">
-              <section v-for="group in accountPoolGroups" :key="group.key" class="account-group">
+            <section v-else class="account-cross-panel">
+              <div class="account-cross-head">
+                <div>
+                  <div class="section-kicker">账户可参与交叉分析</div>
+                  <div class="account-cross-title">{{ accountCrossSummary.title }}</div>
+                  <div class="account-cross-desc">{{ accountCrossSummary.desc }}</div>
+                </div>
+                <div class="account-cross-state">
+                  <el-tag v-if="accountCrossLoading" size="small" type="info">买点同步中</el-tag>
+                  <el-tag v-else-if="accountCrossError" size="small" type="warning">买点同步失败</el-tag>
+                  <el-tag v-else size="small" type="success">已交叉买点</el-tag>
+                </div>
+              </div>
+              <el-alert
+                v-if="accountCrossError"
+                :title="accountCrossError"
+                type="warning"
+                show-icon
+                :closable="false"
+                class="account-cross-alert"
+              />
+              <div class="account-cross-rules">
+                <span v-for="item in accountCrossSummary.rules" :key="item">{{ item }}</span>
+              </div>
+              <div class="account-cross-grid">
+                <article
+                  v-for="item in accountCrossRows"
+                  :key="`account-cross-${item.stock.ts_code}`"
+                  class="account-cross-card"
+                >
+                  <div class="account-cross-card-head">
+                    <span class="account-cross-rank">{{ item.rank }}</span>
+                    <div>
+                      <strong>{{ item.stock.stock_name }}</strong>
+                      <span>{{ item.stock.ts_code }} · {{ item.stock.sector_name || '未标记方向' }}</span>
+                    </div>
+                    <el-tag size="small" :type="item.tone">{{ item.actionTag }}</el-tag>
+                  </div>
+                  <div class="account-cross-verdict">{{ item.verdict }}</div>
+                  <div class="account-cross-metrics">
+                    <span>
+                      账户分
+                      <strong>{{ formatScore(item.stock.account_entry_score) }}</strong>
+                    </span>
+                    <span>
+                      买点
+                      <strong>{{ item.buySignalLabel }}</strong>
+                    </span>
+                    <span>
+                      {{ item.planPriceLabel }}
+                      <strong>{{ item.planPriceValue }}</strong>
+                    </span>
+                    <span>
+                      {{ item.planGapLabel }}
+                      <strong :class="pctClass(item.planGapPct)">{{ item.planGapValue }}</strong>
+                    </span>
+                  </div>
+                  <div class="account-cross-reason">{{ item.reason }}</div>
+                  <div class="account-cross-actions">
+                    <span>{{ item.invalidLine }}</span>
+                    <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(item.stock)">买点详解</el-button>
+                    <el-button class="checkup-analysis-btn" size="small" @click="openCheckup(item.stock, '交易型')">全面体检</el-button>
+                  </div>
+                </article>
+              </div>
+            </section>
+            <div v-if="accountCount" class="account-group-stack">
+              <section
+                v-for="group in accountPoolGroups"
+                :id="`account-group-${group.key}`"
+                :key="group.key"
+                :class="['account-group', { 'account-group-focused': activeAccountGroupKey === group.key }]"
+              >
                 <div class="account-group-head">
                   <div>
                     <div class="account-group-title">{{ group.title }}</div>
@@ -1163,6 +1270,124 @@
         </el-card>
       </template>
     </el-card>
+    <el-drawer
+      v-model="candidateDiagnosticsVisible"
+      size="72%"
+      class="candidate-diagnostics-drawer"
+    >
+      <template #header>
+        <div class="candidate-diagnostics-drawer-head">
+          <div>
+            <span class="section-kicker">候选全集诊断</span>
+            <h3>为什么没有进入三池，以及下一步看什么</h3>
+          </div>
+          <span>{{ candidateDiagnosticFilteredRows.length }} 只当前筛选 / {{ candidateDiagnosticRows.length }} 只候选</span>
+        </div>
+      </template>
+      <div class="candidate-diagnostics">
+        <el-alert
+          v-if="candidateFreshnessAlert"
+          :title="candidateFreshnessAlert.title"
+          :description="candidateFreshnessAlert.description"
+          :type="candidateFreshnessAlert.type"
+          show-icon
+          :closable="false"
+          class="candidate-diagnostics-alert"
+        />
+        <section class="candidate-diagnostics-hero">
+          <div class="candidate-diagnostics-hero-copy">
+            <span class="section-kicker">诊断结论</span>
+            <strong>{{ candidateDiagnosticHeroTitle }}</strong>
+            <p>{{ candidateDiagnosticHeroText }}</p>
+          </div>
+          <div class="candidate-diagnostics-summary">
+            <button
+              v-for="stat in candidateDiagnosticStats"
+              :key="stat.label"
+              type="button"
+              :class="['candidate-diagnostics-stat', { 'candidate-diagnostics-stat-active': candidateDiagnosticFilter === stat.key }]"
+              @click="candidateDiagnosticFilter = stat.key"
+            >
+              <span>{{ stat.label }}</span>
+              <strong>{{ stat.value }}</strong>
+            </button>
+          </div>
+        </section>
+        <section v-if="candidateDiagnosticTopReasons.length" class="candidate-diagnostics-reasons">
+          <div class="candidate-diagnostics-section-head">
+            <div>
+              <span class="section-kicker">主要未执行原因</span>
+              <strong>先看共性阻塞，再看个股</strong>
+            </div>
+          </div>
+          <div class="candidate-diagnostics-reason-list">
+            <span
+              v-for="reason in candidateDiagnosticTopReasons"
+              :key="reason.label"
+              class="candidate-diagnostics-reason"
+            >
+              <strong>{{ reason.count }}</strong>{{ reason.label }}
+            </span>
+          </div>
+        </section>
+        <el-empty
+          v-if="!candidateDiagnosticFilteredRows.length"
+          :description="candidateDiagnosticRows.length ? '当前筛选下没有候选。点击“候选全集”可恢复全部。' : '当前响应没有返回候选全集。实时雷达和刷新后的稳定模式会返回候选诊断数据。'"
+        />
+        <div v-else class="candidate-diagnostics-groups">
+          <section
+            v-for="group in candidateDiagnosticGroups"
+            :key="group.status"
+            class="candidate-diagnostics-group"
+          >
+            <div class="candidate-diagnostics-group-head">
+              <div>
+                <strong>{{ group.title }}</strong>
+                <span>{{ group.desc }}</span>
+              </div>
+              <em>{{ group.rows.length }} 只</em>
+            </div>
+            <article
+              v-for="stock in group.rows"
+              :key="`diag-${stock.ts_code}`"
+              :class="['candidate-diagnostics-row', candidateDiagnosticStatusClass(stock)]"
+            >
+              <div class="candidate-diagnostics-row-rank">{{ stock.rank || '-' }}</div>
+              <div class="candidate-diagnostics-main">
+                <div class="candidate-diagnostics-stock-line">
+                  <div>
+                    <div class="candidate-diagnostics-stock">
+                      <strong>{{ stock.stock_name }}</strong>
+                      <span>{{ stock.ts_code }}</span>
+                    </div>
+                    <div class="candidate-diagnostics-meta">
+                      <span>{{ stock.sector_name || '无板块信息' }}</span>
+                      <span>{{ stock.candidate_source_tag || '无来源标记' }}</span>
+                      <span>{{ stock.next_tradeability_tag || '无买点标签' }}</span>
+                      <span>{{ stock.stock_tradeability_tag || '无交易性标签' }}</span>
+                    </div>
+                  </div>
+                  <div class="candidate-diagnostics-side">
+                    <em :class="pctClass(stock.change_pct)">{{ formatSignedPct(stock.change_pct) }}</em>
+                    <el-tag size="small" :type="candidateDiagnosticTagType(stock)">
+                      {{ candidateDiagnosticStatus(stock) }}
+                    </el-tag>
+                  </div>
+                </div>
+                <div class="candidate-diagnostics-reason-copy">
+                  {{ candidateDiagnosticReason(stock) }}
+                </div>
+              </div>
+              <div class="candidate-diagnostics-actions">
+                <span>市场分 {{ formatScore(stock.market_strength_score) }} / 执行分 {{ formatScore(stock.execution_opportunity_score) }}</span>
+                <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                <el-button class="checkup-analysis-btn" size="small" @click="openCheckup(stock, candidateDiagnosticCheckupTarget(stock))">全面体检</el-button>
+              </div>
+            </article>
+          </section>
+        </div>
+      </div>
+    </el-drawer>
     <StockCheckupDrawer
       v-model="checkupVisible"
       :ts-code="checkupStock.tsCode"
@@ -1220,6 +1445,9 @@ const poolsData = ref({
   mainline_sectors: [],
   sub_mainline_sectors: [],
   global_trade_gate: null,
+  candidate_data_status: '',
+  candidate_data_message: '',
+  snapshot_status_message: '',
   mode: 'stable',
   is_realtime: false,
   radar_generated_at: '',
@@ -1231,8 +1459,18 @@ const buyAnalysisStock = ref({ tsCode: '', stockName: '', sourcePoolTag: '', cur
 const sellAnalysisVisible = ref(false)
 const sellAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentPnlPct: null })
 const reviewStatsData = ref(null)
+const buyPointCrossData = ref({
+  available_buy_points: [],
+  observe_buy_points: [],
+  not_buy_points: [],
+})
+const accountCrossLoading = ref(false)
+const accountCrossError = ref('')
+const accountCrossSopSummaryMap = ref(new Map())
+const accountCrossTradeDate = ref('')
 const loadError = ref('')
 const POOLS_TIMEOUT = 90000
+const BUY_POINT_TIMEOUT = 90000
 const REVIEW_STATS_TIMEOUT = 90000
 const POOLS_REFRESH_POLL_MS = 2500
 const RADAR_AUTO_REFRESH_MS = 30000
@@ -1244,6 +1482,9 @@ let refreshPollTimer = null
 let radarAutoRefreshTimer = null
 const waitingForRefreshResult = ref(false)
 const watchCandidatesExpanded = ref(false)
+const candidateDiagnosticsVisible = ref(false)
+const candidateDiagnosticFilter = ref('all')
+const activeAccountGroupKey = ref('')
 
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const focusSectorSourceType = computed(() => String(route.query.focus_sector_source_type || '').trim())
@@ -1302,6 +1543,30 @@ const poolsFreshnessNote = computed(() => (
         || '稳定模式优先看最近稳定结论，更适合盘前和盘后判断。'
       )
 ))
+const isCandidateFallback = computed(() => Boolean(
+  poolsData.value.resolved_trade_date &&
+  displayDate.value &&
+  poolsData.value.resolved_trade_date !== displayDate.value
+))
+const candidateFreshnessAlert = computed(() => {
+  if (poolsData.value.candidate_data_status && poolsData.value.candidate_data_status !== 'ok') {
+    return {
+      type: poolsData.value.candidate_data_status === 'fallback' ? 'warning' : 'error',
+      title: poolsData.value.candidate_data_status === 'fallback'
+        ? '候选股口径已回退'
+        : '候选股链路异常',
+      description: poolsData.value.candidate_data_message || '当前候选股数据可能不完整，先不要把三池结果当作当日完整雷达。',
+    }
+  }
+  if (isCandidateFallback.value) {
+    return {
+      type: 'warning',
+      title: `候选股口径回退到 ${poolsData.value.resolved_trade_date}`,
+      description: `页面请求日是 ${displayDate.value}，但候选股实际使用 ${poolsData.value.resolved_trade_date}。如果今天行情变化很大，三池可能漏掉今天新走强的票。`,
+    }
+  }
+  return null
+})
 const buyAnalysisTradeDate = computed(() => (
   isRadarMode.value
     ? displayDate.value
@@ -1432,7 +1697,7 @@ const marketRadarExtraVisible = computed(() => (
   watchCandidatesExpanded.value ? marketRadarExtraCandidates.value : marketRadarExtraCandidates.value.slice(0, 6)
 ))
 const marketRadarHiddenCount = computed(() => Math.max(0, marketRadarExtraCandidates.value.length - marketRadarExtraVisible.value.length))
-const showRadarWatchExpansion = computed(() => isRadarMode.value && marketRadarExtraCandidates.value.length > 0)
+const showWatchCandidateDiagnostics = computed(() => marketRadarExtraCandidates.value.length > 0)
 const accountPool = computed(() => applyPoolFilters(poolsData.value.account_executable_pool || []).sort(compareAccountExecutionPriority))
 const focusMatches = computed(() => ({
   market: (poolsData.value.market_watch_pool || []).filter((stock) => matchesFocusSector(stock)).length,
@@ -1489,6 +1754,312 @@ const readyStandardExecutionPool = computed(() => standardExecutionPool.value.fi
 const waitingStandardExecutionPool = computed(() => standardExecutionPool.value.filter((stock) => stock.execution_proximity_tag !== '接近执行位'))
 const aggressiveTrialPool = computed(() => accountPool.value.filter((stock) => isAggressiveTrialExecution(stock)))
 const defenseTrialPool = computed(() => accountPool.value.filter((stock) => isDefenseTrialExecution(stock)))
+
+const buyPointCrossMap = computed(() => {
+  const rows = [
+    ...(buyPointCrossData.value.available_buy_points || []).map((point) => ({ ...point, cross_bucket: 'available' })),
+    ...(buyPointCrossData.value.observe_buy_points || []).map((point) => ({ ...point, cross_bucket: 'observe' })),
+    ...(buyPointCrossData.value.not_buy_points || []).map((point) => ({ ...point, cross_bucket: 'not_buy' })),
+  ]
+  return new Map(rows.map((point) => [String(point.ts_code || '').trim(), point]))
+})
+
+const accountSectorCounts = computed(() => {
+  const counts = new Map()
+  accountPool.value.forEach((stock) => {
+    const sector = String(stock.sector_name || '').trim() || '未标记方向'
+    counts.set(sector, (counts.get(sector) || 0) + 1)
+  })
+  return counts
+})
+
+const buySignalRank = (point) => {
+  if (!point) return 2
+  if (point.cross_bucket === 'available' || point.buy_signal_tag === '可买') return 0
+  if (point.cross_bucket === 'observe' || point.buy_signal_tag === '观察') return 1
+  return 3
+}
+
+const buySignalLabel = (point) => {
+  if (!point) return '未同步'
+  if (point.cross_bucket === 'available') return '可买'
+  if (point.cross_bucket === 'observe') return '观察'
+  if (point.cross_bucket === 'not_buy') return '不买'
+  return point.buy_signal_tag || '未分层'
+}
+
+const isActionablePlanLevel = (value) => {
+  const text = String(value || '').trim()
+  if (!text || text === '-') return false
+  return !text.includes('需确认')
+}
+
+const normalizePlanLevel = (value) => (isActionablePlanLevel(value) ? String(value).trim() : '当前不设')
+
+const parsePlanZoneCenter = (value) => {
+  const text = String(value || '').trim()
+  if (!text || text === '-' || text.includes('需确认')) return null
+  const normalized = text.replace(/[~～]/g, '-')
+  const parts = normalized.split('-').map((item) => Number(item))
+  if (parts.length === 2 && parts.every((item) => !Number.isNaN(item))) {
+    return (parts[0] + parts[1]) / 2
+  }
+  const single = Number(normalized)
+  return Number.isNaN(single) ? null : single
+}
+
+const resolveRetraceFloorRatio = (tsCode) => {
+  const code = String(tsCode || '').toUpperCase()
+  if (code.endsWith('.BJ')) return 0.82
+  if (code.startsWith('300') || code.startsWith('301') || code.startsWith('688')) return 0.88
+  return 0.93
+}
+
+const calcPlanGapPct = (currentPrice, referencePrice) => {
+  if (currentPrice === null || currentPrice === undefined || Number.isNaN(Number(currentPrice))) return null
+  if (referencePrice === null || referencePrice === undefined || Number.isNaN(Number(referencePrice)) || Number(referencePrice) === 0) return null
+  return ((Number(referencePrice) - Number(currentPrice)) / Number(referencePrice)) * 100
+}
+
+const accountCrossSopPrimaryPlan = (stock) => {
+  const summary = accountCrossSopSummaryMap.value.get(String(stock?.ts_code || '').trim())
+  if (!summary) return null
+  const basic = summary.basic_info || {}
+  const intraday = summary.intraday_judgement || {}
+  const orderPlan = summary.order_plan || {}
+  const execution = summary.execution || {}
+  const currentPrice = Number(stock?.close ?? NaN)
+  const currentAction = (execution.action || '等') === '加' ? '买' : (execution.action || '等')
+  const structureCueText = [
+    basic.buy_point_type,
+    intraday.intraday_structure,
+    orderPlan.trigger_condition,
+  ].filter(Boolean).join(' / ')
+  const prefersRetraceEntry = /回踩|承接|低吸|中继/.test(structureCueText)
+  const prefersBreakoutEntry = /突破|加速/.test(structureCueText)
+  const retraceCenter = parsePlanZoneCenter(orderPlan.retrace_confirm_price)
+  const isDeepRetraceReference = (
+    !Number.isNaN(currentPrice)
+    && retraceCenter !== null
+    && retraceCenter < currentPrice * resolveRetraceFloorRatio(stock?.ts_code || '')
+  )
+
+  let key = 'low_absorb'
+  if (currentAction === '放弃') {
+    key = isActionablePlanLevel(orderPlan.give_up_price) ? 'give_up' : 'invalid'
+  } else if (currentAction === '买') {
+    if (prefersBreakoutEntry && isActionablePlanLevel(orderPlan.breakout_price)) key = 'breakout'
+    else if (prefersRetraceEntry && isActionablePlanLevel(orderPlan.retrace_confirm_price) && !isDeepRetraceReference) key = 'retrace'
+    else if (isActionablePlanLevel(orderPlan.low_absorb_price)) key = 'low_absorb'
+    else if (isActionablePlanLevel(orderPlan.breakout_price)) key = 'breakout'
+    else if (isActionablePlanLevel(orderPlan.retrace_confirm_price)) key = 'retrace'
+    else if (isActionablePlanLevel(orderPlan.below_no_buy)) key = 'invalid'
+    else if (isActionablePlanLevel(orderPlan.give_up_price)) key = 'give_up'
+  } else if (prefersRetraceEntry && isActionablePlanLevel(orderPlan.retrace_confirm_price) && !isDeepRetraceReference) {
+    key = 'retrace'
+  } else if (isActionablePlanLevel(orderPlan.low_absorb_price)) {
+    key = 'low_absorb'
+  } else if (prefersBreakoutEntry && isActionablePlanLevel(orderPlan.breakout_price)) {
+    key = 'breakout'
+  } else if (isActionablePlanLevel(orderPlan.breakout_price)) {
+    key = 'breakout'
+  } else if (isActionablePlanLevel(orderPlan.retrace_confirm_price)) {
+    key = 'retrace'
+  } else if (isActionablePlanLevel(orderPlan.below_no_buy)) {
+    key = 'invalid'
+  } else if (isActionablePlanLevel(orderPlan.give_up_price)) {
+    key = 'give_up'
+  }
+
+  const configMap = {
+    low_absorb: {
+      label: '低吸区',
+      value: normalizePlanLevel(orderPlan.low_absorb_price),
+      center: parsePlanZoneCenter(orderPlan.low_absorb_price),
+    },
+    breakout: {
+      label: '突破区',
+      value: normalizePlanLevel(orderPlan.breakout_price),
+      center: parsePlanZoneCenter(orderPlan.breakout_price),
+    },
+    retrace: {
+      label: isDeepRetraceReference ? '深回踩位' : '确认区',
+      value: normalizePlanLevel(orderPlan.retrace_confirm_price),
+      center: retraceCenter,
+    },
+    give_up: {
+      label: '不追线',
+      value: normalizePlanLevel(orderPlan.give_up_price || orderPlan.above_no_chase),
+      center: parsePlanZoneCenter(orderPlan.give_up_price || orderPlan.above_no_chase),
+    },
+    invalid: {
+      label: '失效线',
+      value: normalizePlanLevel(orderPlan.below_no_buy),
+      center: parsePlanZoneCenter(orderPlan.below_no_buy),
+    },
+  }
+
+  const selected = configMap[key] || configMap.low_absorb
+  return {
+    key,
+    label: selected.label,
+    value: selected.value,
+    gapPct: calcPlanGapPct(currentPrice, selected.center),
+  }
+}
+
+const accountCrossPlanProximityBonus = (stock, sopPlan) => {
+  if (!sopPlan || sopPlan.gapPct === null || sopPlan.gapPct === undefined) {
+    return stock.execution_proximity_tag === '接近执行位'
+      ? 8
+      : stock.execution_proximity_tag === '已过确认位'
+        ? -2
+        : stock.execution_proximity_tag === '待深回踩'
+          ? -8
+          : 0
+  }
+  const gapPct = Number(sopPlan.gapPct)
+  if (Number.isNaN(gapPct)) return 0
+  if (sopPlan.key === 'give_up' || sopPlan.key === 'invalid') return -10
+  if (gapPct >= 0) return 8
+  if (gapPct >= -1.5) return 6
+  if (gapPct <= -6) return -8
+  return 0
+}
+
+const accountCrossScore = (stock, point, sopPlan) => {
+  const modeBonus = accountEntryMode(stock) === 'standard'
+    ? 8
+    : accountEntryMode(stock) === 'aggressive_trial'
+      ? 0
+      : -5
+  const buyBonus = point?.cross_bucket === 'available' ? 25 : point?.cross_bucket === 'observe' ? 5 : point ? -25 : -5
+  const proximityBonus = accountCrossPlanProximityBonus(stock, sopPlan)
+  const liquidityBonus = Math.min(8, Math.log10(Math.max(Number(stock.amount || 0), 1)) * 1.2)
+  const turnoverPenalty = Math.max(0, Number(stock.turnover_rate || 0) - 12) * 0.4
+  const sectorCrowdPenalty = accountSectorCounts.value.get(String(stock.sector_name || '').trim() || '未标记方向') > 2
+    && accountEntryMode(stock) !== 'standard'
+    ? 2
+    : 0
+  return (
+    Number(stock.account_entry_score || 0) +
+    Number(stock.execution_opportunity_score || 0) * 0.15 +
+    Number(stock.market_strength_score || 0) * 0.1 +
+    buyBonus +
+    modeBonus +
+    proximityBonus +
+    liquidityBonus -
+    turnoverPenalty -
+    sectorCrowdPenalty
+  )
+}
+
+const accountCrossVerdict = (stock, point, sopPlan) => {
+  if (!point) return '买点页暂未同步到这只票，先按三池进池原因跟踪，不直接执行。'
+  if (point.cross_bucket === 'available') return point.buy_comment || '买点页已给出可买信号，仍按触发和确认条件执行。'
+  if (point.cross_bucket === 'not_buy') return point.buy_comment || '买点页已归入不买，三池入围只保留观察价值。'
+  if (sopPlan?.value && sopPlan?.gapPct !== null && sopPlan?.gapPct !== undefined) {
+    if (Number(sopPlan.gapPct) < 0) {
+      return `现价高于计划${sopPlan.label} ${formatSignedPct(Math.abs(Number(sopPlan.gapPct)))}，等回到 ${sopPlan.value} 一带企稳再看。`
+    }
+    if (Number(sopPlan.gapPct) > 0) {
+      return `还差 ${formatSignedPct(sopPlan.gapPct)} 到计划${sopPlan.label} ${sopPlan.value}，不提前动手。`
+    }
+  }
+  if (Number(point.buy_trigger_gap_pct || 0) < 0 && point.buy_trigger_price) {
+    return `现价高于计划触发位 ${formatSignedPct(Math.abs(Number(point.buy_trigger_gap_pct)))}，等回踩到 ${formatPrice(point.buy_trigger_price)} 附近企稳再看。`
+  }
+  if (Number(point.buy_trigger_gap_pct || 0) > 0 && point.buy_trigger_price) {
+    return `还差 ${formatSignedPct(point.buy_trigger_gap_pct)} 到触发位 ${formatPrice(point.buy_trigger_price)}，不提前动手。`
+  }
+  return point.buy_comment || stock.execution_proximity_note || '买点页仍归为观察，等待确认条件。'
+}
+
+const accountCrossReason = (stock, point, rankIndex) => {
+  const pieces = []
+  pieces.push(accountEntryMode(stock) === 'standard' ? '标准候选优先于试错票' : '试错票只按小仓资格处理')
+  if (point?.buy_display_type || point?.buy_point_type) {
+    pieces.push(`买点语境是${point.buy_display_type || point.buy_point_type}`)
+  }
+  if ((accountSectorCounts.value.get(String(stock.sector_name || '').trim() || '未标记方向') || 0) > 1) {
+    pieces.push(`${stock.sector_name}方向已有多只入围，避免同方向重复下单`)
+  }
+  if (Number(stock.amount || 0) > 0) {
+    pieces.push(`流动性比较分已计入成交额与换手`)
+  }
+  return rankIndex === 0 ? `首选原因：${pieces.join('；')}。` : `排序原因：${pieces.join('；')}。`
+}
+
+const accountCrossRows = computed(() => (
+  accountPool.value
+    .map((stock) => {
+      const point = buyPointCrossMap.value.get(String(stock.ts_code || '').trim())
+      const sopPlan = accountCrossSopPrimaryPlan(stock)
+      return {
+        stock,
+        point,
+        sopPlan,
+        score: accountCrossScore(stock, point, sopPlan),
+      }
+    })
+    .sort((a, b) => {
+      const buyRankDiff = buySignalRank(a.point) - buySignalRank(b.point)
+      if (buyRankDiff !== 0) return buyRankDiff
+      return Number(b.score || 0) - Number(a.score || 0)
+    })
+    .map((item, index) => {
+      const point = item.point
+      const sopPlan = item.sopPlan
+      const buyLabel = buySignalLabel(point)
+      const isAvailable = point?.cross_bucket === 'available'
+      const isNotBuy = point?.cross_bucket === 'not_buy'
+      const isTrial = accountEntryMode(item.stock) !== 'standard'
+      const triggerGap = point?.buy_trigger_gap_pct ?? null
+      return {
+        ...item,
+        rank: index + 1,
+        actionTag: isAvailable ? '可执行' : isNotBuy ? '放弃' : isTrial ? '小仓试错' : '等待回踩',
+        tone: isAvailable ? 'success' : isNotBuy ? 'danger' : isTrial ? 'warning' : 'info',
+        buySignalLabel: buyLabel,
+        planPriceLabel: sopPlan?.label || '触发价',
+        planPriceValue: sopPlan?.value || (point?.buy_trigger_price ? formatPrice(point.buy_trigger_price) : '-'),
+        planGapLabel: sopPlan?.label ? `距${sopPlan.label}` : '距触发',
+        planGapPct: sopPlan?.gapPct ?? triggerGap,
+        planGapValue: sopPlan?.gapPct === null || sopPlan?.gapPct === undefined
+          ? (triggerGap === null || triggerGap === undefined ? '-' : formatSignedPct(triggerGap))
+          : formatSignedPct(sopPlan.gapPct),
+        verdict: accountCrossVerdict(item.stock, point, sopPlan),
+        reason: accountCrossReason(item.stock, point, index),
+        invalidLine: point?.buy_invalid_cond || item.stock.stock_falsification_cond || '确认失败就不要硬扛',
+      }
+    })
+))
+
+const accountCrossSummary = computed(() => {
+  const availableCount = accountCrossRows.value.filter((item) => item.point?.cross_bucket === 'available').length
+  const observeCount = accountCrossRows.value.filter((item) => item.point?.cross_bucket === 'observe').length
+  const trialCount = accountCrossRows.value.filter((item) => accountEntryMode(item.stock) !== 'standard').length
+  const top = accountCrossRows.value[0]
+  if (!accountCrossRows.value.length) {
+    return {
+      title: '当前没有可交叉分析的账户池标的',
+      desc: accountCrossLoading.value ? '等待买点数据同步后再给出排序。' : '账户可参与池为空，先回到持仓和观察池。',
+      rules: ['先持仓', '再账户池', '最后观察池'],
+    }
+  }
+  if (availableCount > 0) {
+    return {
+      title: `买点页已有 ${availableCount} 只可买，优先看 ${top?.stock.stock_name || '首位候选'}`,
+      desc: '可买信号仍需同时满足触发、确认、仓位和失效条件。',
+      rules: ['可买优先', '标准候选优先', '同方向不重复下单'],
+    }
+  }
+  return {
+    title: `账户池 ${accountCrossRows.value.length} 只都还不是立刻买点`,
+    desc: `${observeCount || accountCrossRows.value.length} 只仍在买点观察层；${trialCount} 只属于试错分支，首位先看 ${top?.stock.stock_name || '标准候选'}。`,
+    rules: ['先等回踩承接', '标准候选优先', '试错只小仓'],
+  }
+})
 
 const getEnvTagType = (tag) => {
   if (tag === '进攻') return 'success'
@@ -1904,6 +2475,19 @@ const activateTab = async (tab, options = {}) => {
   target.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
+const jumpFromAccountOverview = async (groupKey) => {
+  activeAccountGroupKey.value = groupKey
+  await activateTab('account', { scroll: true })
+  await nextTick()
+  const target = document.getElementById(`account-group-${groupKey}`)
+  if (target && typeof target.scrollIntoView === 'function') {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+  window.setTimeout(() => {
+    if (activeAccountGroupKey.value === groupKey) activeAccountGroupKey.value = ''
+  }, 2400)
+}
+
 const focusItemTab = (item) => {
   if (item?.poolKey === 'holding') return 'holding'
   if (item?.poolKey === 'account') return 'account'
@@ -1914,6 +2498,12 @@ const focusItemPoolLabel = (item) => {
   if (item?.poolKey === 'holding') return '持仓处理池'
   if (item?.poolKey === 'account') return '账户可参与池'
   return '市场观察池'
+}
+
+const focusItemCheckupTarget = (item) => {
+  if (item?.poolKey === 'holding') return '持仓型'
+  if (item?.poolKey === 'account') return '交易型'
+  return '观察型'
 }
 
 const openFocusAnalysis = (item) => {
@@ -2149,6 +2739,117 @@ const watchOnlyReasonLine = (stock) => (
   notOtherPoolsLine(stock)
 )
 
+const candidateDiagnosticStatus = (stock) => {
+  const code = String(stock?.ts_code || '').trim()
+  if (!code) return '候选'
+  if (accountPool.value.some((item) => String(item.ts_code || '').trim() === code)) return '已进账户池'
+  if (marketPool.value.some((item) => String(item.ts_code || '').trim() === code)) return '前排观察'
+  return '候选补充'
+}
+
+const candidateDiagnosticTagType = (stock) => {
+  const status = candidateDiagnosticStatus(stock)
+  if (status === '已进账户池') return 'success'
+  if (status === '前排观察') return 'warning'
+  return 'info'
+}
+
+const candidateDiagnosticStatusClass = (stock) => {
+  const status = candidateDiagnosticStatus(stock)
+  if (status === '已进账户池') return 'candidate-diagnostics-row-account'
+  if (status === '前排观察') return 'candidate-diagnostics-row-market'
+  return 'candidate-diagnostics-row-extra'
+}
+
+const candidateDiagnosticCheckupTarget = (stock) => (
+  candidateDiagnosticStatus(stock) === '已进账户池' ? '交易型' : '观察型'
+)
+
+const candidateDiagnosticReason = (stock) => {
+  const status = candidateDiagnosticStatus(stock)
+  if (status === '已进账户池') return stock.pool_entry_reason || stock.why_this_pool || '已通过账户准入，仍需回买点页确认执行条件。'
+  if (status === '前排观察') return watchOnlyReasonLine(stock) || '进入前排观察池，但不等于已经可以执行。'
+  return watchOnlyReasonLine(stock) || stock.why_this_pool || '在候选全集里，但未排入当前前排代表票。'
+}
+
+const normalizeDiagnosticReason = (reason) => {
+  const text = String(reason || '').replace(/^未进账户可参与池：/, '').trim()
+  if (!text) return ''
+  if (text.includes('涨幅已偏大') || text.includes('追价') || text.includes('情绪宣泄')) return '涨幅/追价风险'
+  if (text.includes('不属主线') || text.includes('非主流')) return '不属主线或次主线'
+  if (text.includes('账户条件') || text.includes('持仓') || text.includes('旧仓')) return '账户或旧仓约束'
+  if (text.includes('买点') || text.includes('回踩') || text.includes('低吸') || text.includes('确认')) return '买点尚未确认'
+  if (text.includes('换手') || text.includes('上影') || text.includes('承接')) return '量价承接不舒服'
+  return text.length > 16 ? `${text.slice(0, 16)}...` : text
+}
+
+const candidateDiagnosticRows = computed(() => marketWatchCandidates.value.slice(0, 120))
+
+const candidateDiagnosticFilteredRows = computed(() => {
+  if (candidateDiagnosticFilter.value === 'account') {
+    return candidateDiagnosticRows.value.filter((stock) => candidateDiagnosticStatus(stock) === '已进账户池')
+  }
+  if (candidateDiagnosticFilter.value === 'market') {
+    return candidateDiagnosticRows.value.filter((stock) => candidateDiagnosticStatus(stock) === '前排观察')
+  }
+  if (candidateDiagnosticFilter.value === 'extra') {
+    return candidateDiagnosticRows.value.filter((stock) => candidateDiagnosticStatus(stock) === '候选补充')
+  }
+  return candidateDiagnosticRows.value
+})
+
+const candidateDiagnosticHeroTitle = computed(() => {
+  if (!candidateDiagnosticRows.value.length) return '当前没有候选全集数据'
+  if (!accountPool.value.length && marketPool.value.length) return '候选主要停留在观察层，暂未形成账户可参与'
+  if (!marketPool.value.length) return '当前没有形成前排观察样本'
+  return '先确认前排质量，再处理候选补充'
+})
+
+const candidateDiagnosticHeroText = computed(() => {
+  if (!candidateDiagnosticRows.value.length) {
+    return '请先刷新实时雷达或稳定模式数据，再查看候选全集的准入路径和未执行原因。'
+  }
+  if (!accountPool.value.length) {
+    return '这类结果通常意味着行情有热度，但个股还缺买点、承接或账户条件确认，先看前排观察和主要阻塞原因。'
+  }
+  return '账户池用于执行确认，前排观察用于盯盘，候选补充只作为扩展样本，不直接等同于买入信号。'
+})
+
+const candidateDiagnosticStats = computed(() => [
+  { key: 'all', label: '候选全集', value: marketWatchCandidateCount.value },
+  { key: 'market', label: '前排代表', value: marketPool.value.length },
+  { key: 'account', label: '账户可参与', value: accountPool.value.length },
+  { key: 'extra', label: '候选补充', value: marketRadarExtraCandidates.value.length },
+])
+
+const candidateDiagnosticTopReasons = computed(() => {
+  const counter = new Map()
+  candidateDiagnosticFilteredRows.value.forEach((stock) => {
+    const label = normalizeDiagnosticReason(candidateDiagnosticReason(stock))
+    if (!label) return
+    counter.set(label, (counter.get(label) || 0) + 1)
+  })
+  return Array.from(counter.entries())
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+})
+
+const candidateDiagnosticGroups = computed(() => {
+  const groups = [
+    { status: '已进账户池', title: '账户可参与', desc: '已通过账户准入，但仍要回买点页确认执行位。', rows: [] },
+    { status: '前排观察', title: '前排观察', desc: '值得盯盘的代表票，不等同于已经可执行。', rows: [] },
+    { status: '候选补充', title: '候选补充', desc: '扩展样本，用来解释为什么没有排入当前三池前排。', rows: [] },
+  ]
+  const groupByStatus = new Map(groups.map((group) => [group.status, group]))
+  candidateDiagnosticFilteredRows.value.forEach((stock) => {
+    const status = candidateDiagnosticStatus(stock)
+    const group = groupByStatus.get(status) || groupByStatus.get('候选补充')
+    group.rows.push(stock)
+  })
+  return groups.filter((group) => group.rows.length)
+})
+
 const emptyPoolText = (poolKey) => {
   if (poolKey === 'account') {
     return accountEmptyReason.value
@@ -2303,6 +3004,70 @@ const clearFocusSector = () => {
   router.replace({ query })
 }
 
+const resetAccountCrossData = () => {
+  buyPointCrossData.value = {
+    available_buy_points: [],
+    observe_buy_points: [],
+    not_buy_points: [],
+  }
+  accountCrossSopSummaryMap.value = new Map()
+  accountCrossTradeDate.value = ''
+  accountCrossError.value = ''
+  accountCrossLoading.value = false
+}
+
+const loadAccountCrossSopSummaries = async (tradeDate, stocks) => {
+  const targets = (stocks || []).filter((stock) => stock?.ts_code)
+  if (!targets.length) {
+    accountCrossSopSummaryMap.value = new Map()
+    return
+  }
+  const responses = await Promise.allSettled(
+    targets.map((stock) => stockApi.buyAnalysis(stock.ts_code, tradeDate, {
+      sourcePoolTag: String(stock.stock_pool_tag || ''),
+      timeout: BUY_POINT_TIMEOUT,
+    }))
+  )
+  const nextMap = new Map()
+  responses.forEach((result, index) => {
+    if (result.status !== 'fulfilled') return
+    const payload = result.value?.data || {}
+    if ((payload.code ?? 200) !== 200 || !payload.data) return
+    nextMap.set(String(targets[index].ts_code || '').trim(), payload.data)
+  })
+  accountCrossSopSummaryMap.value = nextMap
+}
+
+const loadAccountCrossAnalysis = async (tradeDate, options = {}) => {
+  if (!accountCount.value) {
+    resetAccountCrossData()
+    return
+  }
+  if (!options.refresh && accountCrossTradeDate.value === tradeDate && !accountCrossError.value) {
+    return
+  }
+  accountCrossLoading.value = true
+  accountCrossError.value = ''
+  try {
+    const res = await decisionApi.buyPoint(tradeDate, 50, {
+      refresh: Boolean(options.refresh),
+      timeout: BUY_POINT_TIMEOUT,
+    })
+    const payload = res.data || {}
+    const responseCode = payload.code ?? 200
+    if (responseCode !== 200 || !payload.data) {
+      throw new Error(payload.message || '买点分析暂不可用')
+    }
+    buyPointCrossData.value = payload.data
+    await loadAccountCrossSopSummaries(tradeDate, accountPool.value)
+    accountCrossTradeDate.value = tradeDate
+  } catch (error) {
+    accountCrossError.value = `买点交叉分析暂不可用：${error?.response?.data?.message || error?.message || '未知错误'}`
+  } finally {
+    accountCrossLoading.value = false
+  }
+}
+
 const loadData = async (options = {}) => {
   if (!options.polling) {
     loading.value = true
@@ -2340,6 +3105,11 @@ const loadData = async (options = {}) => {
       radar_generated_at: '',
     }
     poolsData.value = payload
+    if (!accountCount.value) {
+      resetAccountCrossData()
+    } else if (!payload.refresh_in_progress && (!options.polling || waitingForRefreshResult.value || options.refresh)) {
+      loadAccountCrossAnalysis(tradeDate, { refresh: Boolean(options.refresh) })
+    }
     if (!isRadarMode.value) {
       watchCandidatesExpanded.value = false
     }
@@ -2451,6 +3221,10 @@ onUnmounted(() => {
 
 .page-alert {
   margin-bottom: 16px;
+}
+
+.candidate-freshness-alert {
+  border-color: rgba(255, 164, 58, 0.35);
 }
 
 .command-center {
@@ -3440,6 +4214,304 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
+.candidate-diagnostic-strip,
+.candidate-diagnostics-summary,
+.candidate-diagnostics-reason-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.candidate-diagnostic-chip,
+.candidate-diagnostics-reason {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.candidate-diagnostic-chip strong,
+.candidate-diagnostics-reason strong {
+  color: #fff;
+}
+
+.candidate-diagnostics {
+  display: grid;
+  gap: 16px;
+}
+
+.candidate-diagnostics-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+}
+
+.candidate-diagnostics-drawer-head h3 {
+  margin: 4px 0 0;
+  font-size: 18px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.candidate-diagnostics-drawer-head > span {
+  margin-top: 4px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.candidate-diagnostics-alert {
+  margin-bottom: 2px;
+}
+
+.candidate-diagnostics-hero {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.4fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.candidate-diagnostics-hero-copy {
+  display: flex;
+  min-height: 150px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 18px;
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, rgba(44, 93, 166, 0.34), rgba(27, 34, 52, 0.56)),
+    rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(96, 165, 250, 0.22);
+}
+
+.candidate-diagnostics-hero-copy strong {
+  margin-top: 10px;
+  font-size: 22px;
+  line-height: 1.35;
+  color: #fff;
+}
+
+.candidate-diagnostics-hero-copy p {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.candidate-diagnostics-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.candidate-diagnostics-stat {
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top right, rgba(95, 170, 255, 0.16), transparent 44%),
+    rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  appearance: none;
+  font: inherit;
+}
+
+.candidate-diagnostics-stat span {
+  display: block;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.candidate-diagnostics-stat strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 26px;
+  color: #fff;
+}
+
+.candidate-diagnostics-stat:hover,
+.candidate-diagnostics-stat:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.42);
+  background:
+    radial-gradient(circle at top right, rgba(95, 170, 255, 0.24), transparent 46%),
+    rgba(255, 255, 255, 0.07);
+  outline: none;
+}
+
+.candidate-diagnostics-stat-active {
+  border-color: rgba(96, 165, 250, 0.72);
+  background:
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.3), transparent 48%),
+    linear-gradient(135deg, rgba(37, 99, 235, 0.22), rgba(255, 255, 255, 0.05));
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.18) inset;
+}
+
+.candidate-diagnostics-stat-active span {
+  color: rgba(219, 234, 254, 0.82);
+}
+
+.candidate-diagnostics-reasons,
+.candidate-diagnostics-groups,
+.candidate-diagnostics-group {
+  display: grid;
+  gap: 10px;
+}
+
+.candidate-diagnostics-section-head,
+.candidate-diagnostics-group-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.candidate-diagnostics-section-head strong,
+.candidate-diagnostics-group-head strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.candidate-diagnostics-group-head span {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.56);
+}
+
+.candidate-diagnostics-group-head em {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.candidate-diagnostics-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.candidate-diagnostics-row-account {
+  border-color: rgba(87, 211, 142, 0.28);
+  background: linear-gradient(135deg, rgba(24, 119, 78, 0.12), rgba(255, 255, 255, 0.035));
+}
+
+.candidate-diagnostics-row-market {
+  border-color: rgba(255, 198, 92, 0.28);
+  background: linear-gradient(135deg, rgba(132, 92, 24, 0.12), rgba(255, 255, 255, 0.035));
+}
+
+.candidate-diagnostics-row-rank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.candidate-diagnostics-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.candidate-diagnostics-stock-line,
+.candidate-diagnostics-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.candidate-diagnostics-stock {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.candidate-diagnostics-stock strong {
+  font-size: 16px;
+  color: #fff;
+}
+
+.candidate-diagnostics-stock span,
+.candidate-diagnostics-meta,
+.candidate-diagnostics-reason-copy,
+.candidate-diagnostics-actions {
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.candidate-diagnostics-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.candidate-diagnostics-meta span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.candidate-diagnostics-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.candidate-diagnostics-side em {
+  font-style: normal;
+  font-weight: 800;
+}
+
+.candidate-diagnostics-actions {
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.checkup-analysis-btn {
+  border-color: rgba(96, 165, 250, 0.55);
+  color: #dbeafe;
+  background: rgba(37, 99, 235, 0.2);
+}
+
+.checkup-analysis-btn:hover {
+  border-color: rgba(147, 197, 253, 0.9);
+  color: #fff;
+  background: rgba(37, 99, 235, 0.38);
+}
+
 .signal-grid-candidate {
   margin-top: 0;
 }
@@ -3559,12 +4631,38 @@ onUnmounted(() => {
 }
 
 .overview-mini-stat {
+  appearance: none;
+  text-align: left;
+  color: inherit;
   display: grid;
   gap: 4px;
+  width: 100%;
   padding: 12px;
   border-radius: 14px;
   background: rgba(15, 23, 42, 0.38);
   border: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.overview-mini-stat:hover,
+.overview-mini-stat:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.38);
+  background: rgba(30, 41, 59, 0.58);
+  outline: none;
+}
+
+.overview-mini-stat:focus-visible {
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.24);
+}
+
+.overview-mini-stat::after {
+  content: "点击查看";
+  justify-self: flex-start;
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(147, 197, 253, 0.78);
 }
 
 .overview-mini-stat-holding {
@@ -3886,8 +4984,23 @@ onUnmounted(() => {
   .overview-mini-stats,
   .direction-grid,
   .decision-summary-grid,
+  .account-cross-grid,
   .focus-hit-inline-grid {
     grid-template-columns: 1fr;
+  }
+
+  .candidate-diagnostics-hero,
+  .candidate-diagnostics-summary,
+  .candidate-diagnostics-row,
+  .candidate-diagnostics-stock-line,
+  .candidate-diagnostics-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .candidate-diagnostics-actions,
+  .candidate-diagnostics-side {
+    justify-content: flex-start;
   }
 
   .direction-card-lead {
@@ -3921,9 +5034,168 @@ onUnmounted(() => {
   margin-top: 8px;
 }
 
+.account-cross-panel {
+  display: grid;
+  gap: 14px;
+  margin: 8px 0 22px;
+  padding: 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(84, 210, 164, 0.14);
+}
+
+.account-cross-head,
+.account-cross-card-head,
+.account-cross-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-cross-title {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--color-text-main);
+}
+
+.account-cross-desc {
+  margin-top: 6px;
+  line-height: 1.6;
+  color: var(--color-text-sec);
+}
+
+.account-cross-state {
+  flex: 0 0 auto;
+}
+
+.account-cross-alert {
+  margin: 0;
+}
+
+.account-cross-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.account-cross-rules span {
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #dffdf1;
+  background: rgba(30, 145, 103, 0.12);
+  border: 1px solid rgba(84, 210, 164, 0.14);
+}
+
+.account-cross-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.account-cross-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.account-cross-card-head {
+  align-items: center;
+}
+
+.account-cross-card-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.account-cross-card-head strong {
+  color: var(--color-text-main);
+  font-size: 16px;
+}
+
+.account-cross-card-head span {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.account-cross-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-weight: 800;
+  color: #e5fff4;
+  background: rgba(30, 145, 103, 0.2);
+  border: 1px solid rgba(84, 210, 164, 0.18);
+}
+
+.account-cross-verdict {
+  line-height: 1.65;
+  color: var(--color-text-main);
+}
+
+.account-cross-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.account-cross-metrics span {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--color-text-sec);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.account-cross-metrics strong {
+  color: var(--color-text-main);
+  font-size: 13px;
+}
+
+.account-cross-reason {
+  color: var(--color-text-sec);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.account-cross-actions {
+  align-items: center;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.account-cross-actions span {
+  color: var(--color-text-sec);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .account-group {
   display: grid;
   gap: 10px;
+  padding: 10px;
+  margin: -10px;
+  border-radius: 18px;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.account-group-focused {
+  background: rgba(96, 165, 250, 0.08);
+  box-shadow:
+    0 0 0 1px rgba(96, 165, 250, 0.28),
+    0 18px 34px rgba(37, 99, 235, 0.12);
 }
 
 .account-group-head {
@@ -4353,6 +5625,8 @@ onUnmounted(() => {
 
 @media (max-width: 1024px) {
   .action-card-top,
+  .account-cross-head,
+  .account-cross-actions,
   .watch-group-head,
   .priority-panel-head,
   .signal-card-header,
@@ -4371,6 +5645,7 @@ onUnmounted(() => {
   }
 
   .quote-strip,
+  .account-cross-metrics,
   .top-focus-item {
     grid-template-columns: 1fr;
   }

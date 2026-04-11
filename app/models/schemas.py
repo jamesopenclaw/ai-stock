@@ -761,6 +761,13 @@ class BuyPointSopExecution(BaseModel):
     reason: str = ""
 
 
+class LlmBuySopSummary(BaseModel):
+    """买点 SOP 的 LLM 人话解读"""
+    plain_note: str = ""
+    execution_hint: str = ""
+    risk_hint: str = ""
+
+
 class BuyPointSopResponse(BaseModel):
     """单股买点分析 SOP 响应"""
     trade_date: str
@@ -774,6 +781,8 @@ class BuyPointSopResponse(BaseModel):
     add_position_decision: Optional[BuyPointSopAddPositionDecision] = None
     position_advice: BuyPointSopPositionAdvice
     execution: BuyPointSopExecution
+    llm_summary: Optional[LlmBuySopSummary] = None
+    llm_status: Optional["LlmCallStatus"] = None
 
 
 # ========== 卖点相关 ==========

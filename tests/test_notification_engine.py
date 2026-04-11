@@ -254,6 +254,123 @@ async def test_realtime_cache_source_counts_as_degraded(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_radar_execution_proximity_emits_on_new_near_execution(monkeypatch):
+    engine = NotificationEngine()
+    emitted = []
+    resolved = {}
+    stock_pools = SimpleNamespace(
+        account_executable_pool=[
+            SimpleNamespace(
+                ts_code="300781.SZ",
+                stock_name="因赛集团",
+                execution_proximity_tag="接近执行位",
+                execution_proximity_note="当前价距离突破确认位 37.36 约 0.42%，接近突破确认区。",
+                execution_reference_gap_pct=-0.42,
+                next_tradeability_tag="突破确认",
+                data_source="realtime_em",
+            )
+        ]
+    )
+
+    async def fake_sync_states(account_id, *, state_type, trade_date, states):
+        assert account_id == "acct-001"
+        assert state_type == engine.STATE_TYPE_RADAR_EXECUTION
+        assert trade_date == "2026-04-10"
+        assert len(states) == 1
+        assert states[0].state_key == "radar-execution:300781.SZ"
+        assert states[0].current_value == "near_execution"
+        assert states[0].current_rank == 2
+        return {
+            states[0].state_key: SimpleNamespace(
+                previous_rank=1,
+                current_rank=2,
+                current_value="near_execution",
+                payload=states[0].payload,
+            )
+        }
+
+    async def fake_upsert_event(account_id, **kwargs):
+        emitted.append({"account_id": account_id, **kwargs})
+        return SimpleNamespace(id="evt-001")
+
+    async def fake_resolve(account_id, *, active_dedupe_keys, event_types):
+        resolved["account_id"] = account_id
+        resolved["active_dedupe_keys"] = active_dedupe_keys
+        resolved["event_types"] = event_types
+        return 0
+
+    monkeypatch.setattr("app.services.notification_engine.notification_state_service.sync_states", fake_sync_states)
+    monkeypatch.setattr("app.services.notification_engine.notification_service.upsert_event", fake_upsert_event)
+    monkeypatch.setattr("app.services.notification_engine.notification_service.resolve_inactive_events", fake_resolve)
+
+    emitted_count = await engine.sync_radar_execution_proximity_events(
+        "acct-001",
+        user_id="user-001",
+        trade_date="2026-04-10",
+        stock_pools=stock_pools,
+    )
+
+    assert emitted_count == 1
+    assert emitted[0]["event_type"] == "radar_candidate_near_execution"
+    assert emitted[0]["title"] == "因赛集团接近执行位"
+    assert emitted[0]["action_target_type"] == "buy_analysis"
+    assert emitted[0]["dedupe_key"] == "acct-001:radar_candidate_near_execution:300781.SZ:2026-04-10"
+    assert resolved == {
+        "account_id": "acct-001",
+        "active_dedupe_keys": {"acct-001:radar_candidate_near_execution:300781.SZ:2026-04-10"},
+        "event_types": {"radar_candidate_near_execution"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_radar_execution_proximity_does_not_reemit_stable_near_execution(monkeypatch):
+    engine = NotificationEngine()
+    emitted = []
+    stock_pools = SimpleNamespace(
+        account_executable_pool=[
+            SimpleNamespace(
+                ts_code="300781.SZ",
+                stock_name="因赛集团",
+                execution_proximity_tag="接近执行位",
+                execution_reference_gap_pct=-0.32,
+                data_source="realtime_em",
+            )
+        ]
+    )
+
+    async def fake_sync_states(account_id, *, state_type, trade_date, states):
+        return {
+            states[0].state_key: SimpleNamespace(
+                previous_rank=2,
+                current_rank=2,
+                current_value="near_execution",
+                payload=states[0].payload,
+            )
+        }
+
+    async def fake_upsert_event(account_id, **kwargs):
+        emitted.append(kwargs)
+        return SimpleNamespace(id="evt-001")
+
+    async def fake_resolve(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr("app.services.notification_engine.notification_state_service.sync_states", fake_sync_states)
+    monkeypatch.setattr("app.services.notification_engine.notification_service.upsert_event", fake_upsert_event)
+    monkeypatch.setattr("app.services.notification_engine.notification_service.resolve_inactive_events", fake_resolve)
+
+    emitted_count = await engine.sync_radar_execution_proximity_events(
+        "acct-001",
+        user_id="user-001",
+        trade_date="2026-04-10",
+        stock_pools=stock_pools,
+    )
+
+    assert emitted_count == 0
+    assert emitted == []
+
+
+@pytest.mark.asyncio
 async def test_refresh_account_events_does_not_reemit_stable_state(monkeypatch):
     engine = NotificationEngine()
     emitted = []

@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Dict, List, Optional
@@ -35,6 +37,8 @@ from app.services.decision_context import decision_context_service
 from app.services.stock_checkup import stock_checkup_service
 from app.services.stock_filter import stock_filter_service
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class DailyLevelSnapshot:
@@ -59,6 +63,17 @@ class DirectionExposureSnapshot:
     summary: str
 
 
+@dataclass
+class PrimaryExecutionPlanSummary:
+    key: str
+    label: str
+    value: str
+    center: Optional[float]
+    gap_pct: Optional[float]
+    proximity_tag: Optional[str]
+    proximity_note: Optional[str]
+
+
 class BuyPointSopService:
     """生成符合交易 SOP 的单股买点分析结果。"""
 
@@ -72,6 +87,49 @@ class BuyPointSopService:
             trade_date,
         )
         return history_rows, resolved_trade_date
+
+    async def enrich_execution_proximity(
+        self,
+        stocks: List[StockOutput],
+        trade_date: str,
+        *,
+        account_id: Optional[str] = None,
+        concurrency: int = 4,
+    ) -> None:
+        """用买点 SOP 主路径回填账户池执行位口径。"""
+        if not stocks:
+            return
+
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def _enrich_one(stock: StockOutput) -> None:
+            code = normalize_ts_code(getattr(stock, "ts_code", "") or "")
+            if not code:
+                return
+            async with semaphore:
+                try:
+                    analysis = await self.analyze(
+                        code,
+                        trade_date,
+                        account_id=account_id,
+                        preferred_pool_tag=getattr(getattr(stock, "stock_pool_tag", None), "value", getattr(stock, "stock_pool_tag", None)),
+                    )
+                    summary = self.build_primary_execution_plan_summary(
+                        analysis,
+                        ts_code=code,
+                        current_price=getattr(stock, "close", None),
+                    )
+                    self.apply_primary_execution_plan_summary(stock, summary)
+                except Exception as exc:
+                    logger.warning(
+                        "buy_point_sop enrich_execution_proximity failed ts_code=%s trade_date=%s error=%s",
+                        code,
+                        trade_date,
+                        exc,
+                    )
+                    return
+
+        await asyncio.gather(*(_enrich_one(stock) for stock in stocks))
 
     async def analyze(
         self,
@@ -275,6 +333,138 @@ class BuyPointSopService:
             execution=execution,
         )
 
+    def build_primary_execution_plan_summary(
+        self,
+        analysis: BuyPointSopResponse,
+        *,
+        ts_code: str,
+        current_price: Optional[float],
+    ) -> Optional[PrimaryExecutionPlanSummary]:
+        if analysis is None:
+            return None
+
+        basic = getattr(analysis, "basic_info", None)
+        intraday = getattr(analysis, "intraday_judgement", None)
+        order_plan = getattr(analysis, "order_plan", None)
+        execution = getattr(analysis, "execution", None)
+        if order_plan is None:
+            return None
+
+        current_action = str(getattr(execution, "action", "等") or "等")
+        if current_action == "加":
+            current_action = "买"
+
+        structure_cue_text = " / ".join(
+            str(item or "").strip()
+            for item in [
+                getattr(basic, "buy_point_type", None),
+                getattr(intraday, "intraday_structure", None),
+                getattr(order_plan, "trigger_condition", None),
+            ]
+            if str(item or "").strip()
+        )
+        prefers_retrace_entry = any(word in structure_cue_text for word in ("回踩", "承接", "低吸", "中继"))
+        prefers_breakout_entry = any(word in structure_cue_text for word in ("突破", "加速"))
+        retrace_value = getattr(order_plan, "retrace_confirm_price", None)
+        retrace_center = self._parse_plan_zone_center(retrace_value)
+        current_price_value = self._coerce_float(current_price)
+        is_deep_retrace_reference = (
+            current_price_value is not None
+            and retrace_center is not None
+            and retrace_center < current_price_value * self._resolve_retrace_floor_ratio(ts_code)
+        )
+
+        key = "low_absorb"
+        if current_action == "放弃":
+            key = "give_up" if self._is_actionable_plan_level(getattr(order_plan, "give_up_price", None)) else "invalid"
+        elif current_action == "买":
+            if prefers_breakout_entry and self._is_actionable_plan_level(getattr(order_plan, "breakout_price", None)):
+                key = "breakout"
+            elif prefers_retrace_entry and self._is_actionable_plan_level(retrace_value) and not is_deep_retrace_reference:
+                key = "retrace"
+            elif self._is_actionable_plan_level(getattr(order_plan, "low_absorb_price", None)):
+                key = "low_absorb"
+            elif self._is_actionable_plan_level(getattr(order_plan, "breakout_price", None)):
+                key = "breakout"
+            elif self._is_actionable_plan_level(retrace_value):
+                key = "retrace"
+            elif self._is_actionable_plan_level(getattr(order_plan, "below_no_buy", None)):
+                key = "invalid"
+            elif self._is_actionable_plan_level(getattr(order_plan, "give_up_price", None)):
+                key = "give_up"
+        elif prefers_retrace_entry and self._is_actionable_plan_level(retrace_value) and not is_deep_retrace_reference:
+            key = "retrace"
+        elif self._is_actionable_plan_level(getattr(order_plan, "low_absorb_price", None)):
+            key = "low_absorb"
+        elif prefers_breakout_entry and self._is_actionable_plan_level(getattr(order_plan, "breakout_price", None)):
+            key = "breakout"
+        elif self._is_actionable_plan_level(getattr(order_plan, "breakout_price", None)):
+            key = "breakout"
+        elif self._is_actionable_plan_level(retrace_value):
+            key = "retrace"
+        elif self._is_actionable_plan_level(getattr(order_plan, "below_no_buy", None)):
+            key = "invalid"
+        elif self._is_actionable_plan_level(getattr(order_plan, "give_up_price", None)):
+            key = "give_up"
+
+        config_map = {
+            "low_absorb": (
+                "低吸区",
+                self._normalize_plan_level(getattr(order_plan, "low_absorb_price", None)),
+                self._parse_plan_zone_center(getattr(order_plan, "low_absorb_price", None)),
+            ),
+            "breakout": (
+                "突破区",
+                self._normalize_plan_level(getattr(order_plan, "breakout_price", None)),
+                self._parse_plan_zone_center(getattr(order_plan, "breakout_price", None)),
+            ),
+            "retrace": (
+                "深回踩位" if is_deep_retrace_reference else "确认区",
+                self._normalize_plan_level(retrace_value),
+                retrace_center,
+            ),
+            "give_up": (
+                "不追线",
+                self._normalize_plan_level(getattr(order_plan, "give_up_price", None) or getattr(order_plan, "above_no_chase", None)),
+                self._parse_plan_zone_center(getattr(order_plan, "give_up_price", None) or getattr(order_plan, "above_no_chase", None)),
+            ),
+            "invalid": (
+                "失效线",
+                self._normalize_plan_level(getattr(order_plan, "below_no_buy", None)),
+                self._parse_plan_zone_center(getattr(order_plan, "below_no_buy", None)),
+            ),
+        }
+        label, value, center = config_map.get(key, config_map["low_absorb"])
+        gap_pct = self._calc_plan_gap_pct(current_price_value, center)
+        proximity_tag, proximity_note = self._classify_primary_execution_proximity(
+            ts_code=ts_code,
+            key=key,
+            label=label,
+            value=value,
+            gap_pct=gap_pct,
+        )
+        return PrimaryExecutionPlanSummary(
+            key=key,
+            label=label,
+            value=value,
+            center=center,
+            gap_pct=gap_pct,
+            proximity_tag=proximity_tag,
+            proximity_note=proximity_note,
+        )
+
+    def apply_primary_execution_plan_summary(
+        self,
+        stock: StockOutput,
+        summary: Optional[PrimaryExecutionPlanSummary],
+    ) -> None:
+        if summary is None:
+            return
+        stock.execution_reference_price = round(float(summary.center), 2) if summary.center is not None else None
+        stock.execution_reference_gap_pct = summary.gap_pct
+        stock.execution_proximity_tag = summary.proximity_tag
+        stock.execution_proximity_note = summary.proximity_note
+
     def _resolve_preferred_pool_tag(self, preferred_pool_tag: Optional[str]) -> Optional[StockPoolTag]:
         if not preferred_pool_tag:
             return None
@@ -357,6 +547,109 @@ class BuyPointSopService:
             structure_state_tag=None,
             stock_comment="候选评分缺失，按最小上下文生成买点 SOP。",
         )
+
+    def _is_actionable_plan_level(self, value) -> bool:
+        text = str(value or "").strip()
+        if not text or text == "-":
+            return False
+        return "需确认" not in text
+
+    def _normalize_plan_level(self, value) -> str:
+        return str(value or "").strip() if self._is_actionable_plan_level(value) else "当前不设"
+
+    def _parse_plan_zone_center(self, value) -> Optional[float]:
+        text = str(value or "").strip()
+        if not text or text == "-" or "需确认" in text:
+            return None
+        normalized = text.replace("~", "-").replace("～", "-")
+        parts = [item.strip() for item in normalized.split("-") if item.strip()]
+        if len(parts) == 2:
+            try:
+                return round((float(parts[0]) + float(parts[1])) / 2, 4)
+            except ValueError:
+                return None
+        try:
+            return float(normalized)
+        except ValueError:
+            return None
+
+    def _resolve_retrace_floor_ratio(self, ts_code: str) -> float:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return 0.82
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return 0.88
+        return 0.93
+
+    def _calc_plan_gap_pct(
+        self,
+        current_price: Optional[float],
+        reference_price: Optional[float],
+    ) -> Optional[float]:
+        if current_price is None or reference_price is None or reference_price == 0:
+            return None
+        return round((float(reference_price) - float(current_price)) / float(reference_price) * 100, 2)
+
+    def _execution_breakout_window_pct(self, ts_code: str) -> float:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return 2.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return 1.5
+        return 1.0
+
+    def _execution_retrace_window_pct(self, ts_code: str) -> float:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return 4.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return 2.5
+        return 1.5
+
+    def _execution_deep_retrace_window_pct(self, ts_code: str) -> float:
+        code = normalize_ts_code(ts_code)
+        if code.endswith(".BJ"):
+            return 12.0
+        if code.startswith("300") or code.startswith("301") or code.startswith("688"):
+            return 8.0
+        return 6.0
+
+    def _classify_primary_execution_proximity(
+        self,
+        *,
+        ts_code: str,
+        key: str,
+        label: str,
+        value: str,
+        gap_pct: Optional[float],
+    ) -> tuple[Optional[str], Optional[str]]:
+        if gap_pct is None:
+            return None, None
+
+        level_text = value or label
+        gap_abs = abs(float(gap_pct))
+
+        if key == "breakout":
+            near_window = self._execution_breakout_window_pct(ts_code)
+            if gap_pct <= 0:
+                return "已过确认位", f"当前价已站上{label} {level_text}，回买点页判断是否还能追。"
+            if gap_pct <= near_window:
+                return "接近执行位", f"当前价距离{label} {level_text} 约 {gap_abs:.2f}%，已接近主买位。"
+            return "待突破", f"当前价距离{label} {level_text} 约 {gap_abs:.2f}%，先等更接近再看。"
+
+        if key in {"give_up", "invalid"}:
+            return None, f"当前主路径已落在{label} {level_text}，先回买点页重新判断是否还有执行条件。"
+
+        retrace_window = self._execution_retrace_window_pct(ts_code)
+        deep_window = self._execution_deep_retrace_window_pct(ts_code)
+        if gap_pct >= 0:
+            return "接近执行位", f"当前价已回到{label} {level_text} 附近，优先结合承接与量能确认。"
+        if gap_abs <= retrace_window:
+            return "接近执行位", f"当前价距离{label} {level_text} 约 {gap_abs:.2f}%，已接近主买位。"
+        if label == "深回踩位" or gap_abs >= deep_window:
+            return "待深回踩", f"当前价高于{label} {level_text} 约 {gap_abs:.2f}%，先等更深回踩再看。"
+        wait_label = "待低吸" if key == "low_absorb" else "待回踩"
+        return wait_label, f"当前价高于{label} {level_text} 约 {gap_abs:.2f}%，先回买点页等触发。"
 
     def _build_daily_levels(self, target_input, history_rows: List[Dict]) -> DailyLevelSnapshot:
         closes = [float(row.get("close") or 0) for row in history_rows if float(row.get("close") or 0) > 0]
@@ -1273,6 +1566,9 @@ class BuyPointSopService:
         if not payload:
             return None
         value = payload.get(key)
+        return self._coerce_float(value)
+
+    def _coerce_float(self, value) -> Optional[float]:
         if value is None:
             return None
         try:

@@ -178,6 +178,7 @@ const ruleOptions = [
   { key: 'holding_to_reduce', label: '持仓转减仓' },
   { key: 'candidate_to_executable', label: '候选转可执行' },
   { key: 'candidate_near_trigger', label: '接近触发位' },
+  { key: 'radar_candidate_near_execution', label: '雷达接近执行位' },
   { key: 'market_env_downgraded', label: '市场转防守' },
   { key: 'realtime_source_degraded', label: '实时源降级' },
 ]

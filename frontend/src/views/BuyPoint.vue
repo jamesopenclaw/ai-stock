@@ -23,7 +23,7 @@
         <div v-if="buyData.market_env_tag" class="decision-overview">
           <div v-if="reviewBucketFilter" class="focus-context focus-context-review">
             <div class="focus-context-copy">
-              当前按复盘来源 <strong>{{ reviewSourceLabel }}</strong> 的 <strong>{{ reviewBucketFilter }}</strong> 结构查看买点。
+              当前从复盘统计跳转而来，已自动切到 <strong>{{ reviewSourceLabel }}</strong>，并只展示 <strong>{{ reviewBucketFilter }}</strong> 结构。
             </div>
             <div class="focus-context-actions">
               <el-button link type="primary" size="small" @click="clearReviewFilter">清除筛选</el-button>
@@ -146,7 +146,7 @@
 		              <article
 		                v-for="point in group.items"
 		                :key="point.ts_code"
-		                :class="['signal-card', 'signal-card-buy', entryModeCardClass(point), { 'signal-card-focused': matchesFocusSector(point) }]"
+		                :class="['signal-card', 'signal-card-buy', entryModeCardClass(point), { 'signal-card-focused': matchesFocusSector(point), 'signal-card-review-focused': matchesReviewFocus(point, 'buy_available') }]"
 	              >
                 <div class="signal-card-header">
                   <div class="signal-title-wrap">
@@ -200,8 +200,8 @@
                   </div>
                   <div class="quote-side">
                     <span class="quote-pair">
-                      距触发
-                      <strong :class="priceClass(point.buy_trigger_gap_pct)">{{ formatGap(point.buy_trigger_gap_pct) }}</strong>
+                      {{ executionGapLabel(point) }}
+                      <strong :class="priceClass(executionGapValue(point))">{{ formatGap(executionGapValue(point)) }}</strong>
                     </span>
                     <span class="quote-pair">
                       距失效
@@ -210,10 +210,10 @@
                   </div>
                 </div>
 
-	                <div class="price-strip">
+	                  <div class="price-strip">
 	                  <div class="metric-card">
-	                    <span class="metric-label">触发价</span>
-	                    <strong class="metric-value">{{ formatPrice(point.buy_trigger_price) }}</strong>
+	                    <span class="metric-label">{{ executionReferenceLabel(point) }}</span>
+	                    <strong class="metric-value">{{ formatPrice(executionReferencePrice(point)) }}</strong>
 	                  </div>
                   <div class="metric-card">
                     <span class="metric-label">失效价</span>
@@ -363,7 +363,7 @@
 	                <article
 	                  v-for="point in group.items"
 	                  :key="`backup-${point.ts_code}`"
-	                  :class="['signal-card', 'signal-card-watch', entryModeCardClass(point)]"
+	                  :class="['signal-card', 'signal-card-watch', entryModeCardClass(point), { 'signal-card-review-focused': matchesReviewFocus(point, 'buy_available') }]"
 	                >
                   <div class="signal-card-header">
                     <div class="signal-title-wrap">
@@ -405,8 +405,8 @@
                     </div>
                     <div class="quote-side">
                       <span class="quote-pair">
-                        距触发
-                        <strong :class="priceClass(point.buy_trigger_gap_pct)">{{ formatGap(point.buy_trigger_gap_pct) }}</strong>
+                        {{ executionGapLabel(point) }}
+                        <strong :class="priceClass(executionGapValue(point))">{{ formatGap(executionGapValue(point)) }}</strong>
                       </span>
                     </div>
                   </div>
@@ -446,7 +446,7 @@
                   <article
                     v-for="point in group.items"
                     :key="point.ts_code"
-                    :class="['signal-card', 'signal-card-watch', { 'signal-card-focused': matchesFocusSector(point) }]"
+                    :class="['signal-card', 'signal-card-watch', { 'signal-card-focused': matchesFocusSector(point), 'signal-card-review-focused': matchesReviewFocus(point, 'buy_observe') }]"
                   >
                 <div class="signal-card-header">
                   <div class="signal-title-wrap">
@@ -496,7 +496,7 @@
                   <div class="quote-side">
                     <span class="quote-pair">
                       {{ observeTriggerGapLabel(point) }}
-                      <strong :class="priceClass(point.buy_trigger_gap_pct)">{{ formatGap(point.buy_trigger_gap_pct) }}</strong>
+                      <strong :class="priceClass(executionGapValue(point))">{{ formatGap(executionGapValue(point)) }}</strong>
                     </span>
                   </div>
                 </div>
@@ -747,11 +747,21 @@ const matchesReviewBucket = (point) => {
   return String(point.candidate_bucket_tag || '').trim() === reviewBucketFilter.value
 }
 
-const applyPageFilters = (points = []) => sortByFocusSector(points).filter(matchesReviewBucket)
+const matchesReviewSource = (sourceType) => {
+  if (!reviewSourceFilter.value) return true
+  return reviewSourceFilter.value === sourceType
+}
 
-const availablePoints = computed(() => applyPageFilters(buyData.value.available_buy_points || []))
-const observePoints = computed(() => applyPageFilters(buyData.value.observe_buy_points || []))
-const notBuyPoints = computed(() => applyPageFilters(buyData.value.not_buy_points || []))
+const matchesReviewFocus = (point, sourceType) => matchesReviewSource(sourceType) && matchesReviewBucket(point)
+
+const applyPageFilters = (points = [], sourceType = '') => {
+  if (!matchesReviewSource(sourceType)) return []
+  return sortByFocusSector(points).filter(matchesReviewBucket)
+}
+
+const availablePoints = computed(() => applyPageFilters(buyData.value.available_buy_points || [], 'buy_available'))
+const observePoints = computed(() => applyPageFilters(buyData.value.observe_buy_points || [], 'buy_observe'))
+const notBuyPoints = computed(() => applyPageFilters(buyData.value.not_buy_points || [], 'buy_not'))
 
 const displayBuyPointType = (point) => String(point?.buy_display_type || point?.buy_point_type || '').trim()
 const normalizeBuyPointType = (value) => String(value || '').trim() || '其他'
@@ -1212,6 +1222,34 @@ const executionProximityMetaClass = (point) => {
   return 'signal-meta-chip-wait'
 }
 
+const hasUnifiedExecutionReference = (point) => {
+  if (!point) return false
+  const poolTag = String(point.stock_pool_tag || '').trim()
+  return poolTag === '账户可参与池' && point.execution_reference_price !== null && point.execution_reference_price !== undefined
+}
+
+const executionReferencePrice = (point) => (
+  hasUnifiedExecutionReference(point) ? point.execution_reference_price : point?.buy_trigger_price
+)
+
+const executionGapValue = (point) => (
+  hasUnifiedExecutionReference(point) ? point.execution_reference_gap_pct : point?.buy_trigger_gap_pct
+)
+
+const executionReferenceLabel = (point) => {
+  if (!hasUnifiedExecutionReference(point)) return '执行位'
+  const tag = String(point?.execution_proximity_tag || '').trim()
+  if (tag === '待深回踩') return '深回踩位'
+  return '执行位'
+}
+
+const executionGapLabel = (point) => {
+  if (!hasUnifiedExecutionReference(point)) return '距执行位'
+  const tag = String(point?.execution_proximity_tag || '').trim()
+  if (tag === '待深回踩') return '距深回踩'
+  return '距执行位'
+}
+
 const splitCond = (text) => {
   if (!text) return ['-']
   return String(text)
@@ -1259,10 +1297,11 @@ const envChecklist = (tag) => {
 }
 
 const primaryActionLine = (point, envTag) => {
-  const trigger = formatPrice(point.buy_trigger_price)
+  const trigger = formatPrice(executionReferencePrice(point))
   const invalid = formatPrice(point.buy_invalid_price)
   const prefix = envTag === '防守' ? '轻仓试错' : envTag === '中性偏谨慎' ? '低吸确认' : envTag === '弱中性' ? '观察优先' : '执行计划'
-  return `${prefix}：到 ${trigger} 附近再看，跌回 ${invalid} 下方就放弃。`
+  const triggerLabel = executionReferenceLabel(point)
+  return `${prefix}：到 ${triggerLabel}${trigger} 附近再看，跌回 ${invalid} 下方就放弃。`
 }
 
 const observeTypeLabel = (point) => displayBuyPointType(point)
@@ -1275,14 +1314,15 @@ const resolveRetraceFloorRatio = (tsCode) => {
 }
 
 const isObserveDeepRetraceReference = (point) => {
+  if (String(point?.execution_proximity_tag || '').trim() === '待深回踩') return true
   if (observeTypeLabel(point) !== '回踩承接') return false
   const current = Number(point?.buy_current_price)
-  const trigger = Number(point?.buy_trigger_price)
+  const trigger = Number(executionReferencePrice(point))
   if (Number.isNaN(current) || Number.isNaN(trigger) || current <= 0 || trigger <= 0) return false
   return trigger < current * resolveRetraceFloorRatio(point?.ts_code)
 }
 
-const observeTriggerGapLabel = (point) => (isObserveDeepRetraceReference(point) ? '深回踩' : '距触发')
+const observeTriggerGapLabel = (point) => (isObserveDeepRetraceReference(point) ? '距深回踩' : executionGapLabel(point))
 
 const observeFooterFlag = (point) => (isObserveDeepRetraceReference(point) ? '深回踩参考' : '未到执行位')
 
@@ -1306,22 +1346,23 @@ const observeFocusSubtitle = (point) => {
 
 const observeFocusBody = (point) => {
   const type = observeTypeLabel(point)
-  const trigger = formatPrice(point?.buy_trigger_price)
+  const trigger = formatPrice(executionReferencePrice(point))
   const invalid = formatPrice(point?.buy_invalid_price)
+  const triggerLabel = executionReferenceLabel(point)
 
   if (isObserveDeepRetraceReference(point)) {
-    return `触发价 ${trigger} 离现价较远，当前先把它当深回踩参考；更近端先看现价附近能否横住，不要快速跌回 ${invalid} 下方。`
+    return `${triggerLabel}${trigger} 离现价较远，当前先把它当深回踩参考；更近端先看现价附近能否横住，不要快速跌回 ${invalid} 下方。`
   }
   if (type === '突破') {
-    return `先看能否靠近 ${trigger} 一带并放量站稳；没到这一步前，先别把它当成已经突破。`
+    return `先看能否靠近 ${triggerLabel}${trigger} 一带并放量站稳；没到这一步前，先别把它当成已经突破。`
   }
   if (type === '修复转强') {
-    return `先等价格重新站回 ${trigger} 一带，再看修复动作能不能延续；提前转弱跌回 ${invalid} 下方就不继续跟。`
+    return `先等价格重新站回 ${triggerLabel}${trigger} 一带，再看修复动作能不能延续；提前转弱跌回 ${invalid} 下方就不继续跟。`
   }
   if (type === '低吸') {
-    return `先等价格回到 ${trigger} 一带附近再看承接，不要在离支撑还远的时候抢低吸。`
+    return `先等价格回到 ${triggerLabel}${trigger} 一带附近再看承接，不要在离支撑还远的时候抢低吸。`
   }
-  return `先等价格回踩到 ${trigger} 一带稳住；没回到这里前，不把现价附近当执行位，跌回 ${invalid} 下方则直接失效。`
+  return `先等价格回踩到 ${triggerLabel}${trigger} 一带稳住；没回到这里前，不把现价附近当执行位，跌回 ${invalid} 下方则直接失效。`
 }
 
 const observeConfirmTitle = (point) => {
@@ -1345,11 +1386,12 @@ const observeConfirmSubtitle = (point) => {
 const observeConfirmBody = (point) => {
   const type = observeTypeLabel(point)
   const summary = summarizeCond(point?.buy_confirm_cond)
-  const trigger = formatPrice(point?.buy_trigger_price)
+  const trigger = formatPrice(executionReferencePrice(point))
   const invalid = formatPrice(point?.buy_invalid_price)
+  const triggerLabel = executionReferenceLabel(point)
 
   if (isObserveDeepRetraceReference(point)) {
-    return `重点看 ${summary}；在没回到 ${trigger} 前，先确认现价附近不放量转弱，也不要快速跌回 ${invalid} 下方。`
+    return `重点看 ${summary}；在没回到 ${triggerLabel}${trigger} 前，先确认现价附近不放量转弱，也不要快速跌回 ${invalid} 下方。`
   }
   if (type === '突破') {
     return `重点看 ${summary}；只有突破后的量价和承接都站住，才算从观察转成可执行。`
@@ -2025,6 +2067,13 @@ watch(
   border-color: rgba(84, 210, 164, 0.26);
 }
 
+.signal-card-review-focused {
+  border-color: rgba(255, 196, 64, 0.34);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 196, 64, 0.22),
+    0 0 0 1px rgba(255, 196, 64, 0.10);
+}
+
 .signal-card-header {
   display: flex;
   justify-content: space-between;
@@ -2180,8 +2229,10 @@ watch(
 .quote-side {
   display: flex;
   gap: 14px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  align-items: center;
+  min-width: max-content;
 }
 
 .quote-pair {
@@ -2190,6 +2241,8 @@ watch(
   display: inline-flex;
   gap: 6px;
   align-items: baseline;
+  white-space: nowrap;
+  min-width: max-content;
 }
 
 .price-strip {
@@ -2464,6 +2517,8 @@ watch(
 
   .quote-side {
     justify-content: flex-start;
+    flex-wrap: wrap;
+    min-width: 0;
   }
 
   .price-strip {
@@ -2509,6 +2564,8 @@ watch(
 
   .quote-side {
     justify-content: flex-start;
+    flex-wrap: wrap;
+    min-width: 0;
   }
 
   .signal-footer {

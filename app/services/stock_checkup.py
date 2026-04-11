@@ -153,6 +153,10 @@ class StockCheckupService:
             normalized_code,
             trade_date,
         )
+        moneyflow_rows = self._load_moneyflow_rows(
+            normalized_code,
+            resolved_trade_date or trade_date,
+        )
         rule_snapshot = self._build_rule_snapshot(
             trade_date=trade_date,
             target_input=target_input,
@@ -161,6 +165,7 @@ class StockCheckupService:
             scored_stocks=scored_stocks,
             history_rows=history_rows,
             valuation_row=valuation_row,
+            moneyflow_rows=moneyflow_rows,
             checkup_target=checkup_target,
             buy_view=buy_view,
             sell_view=sell_view,
@@ -286,6 +291,59 @@ class StockCheckupService:
                 valuation_row = basic_df.iloc[0].to_dict()
         return history_rows, valuation_row, self._format_trade_date(resolved_trade_date)
 
+    def _load_moneyflow_rows(
+        self,
+        ts_code: str,
+        trade_date: str,
+        *,
+        days: int = 5,
+    ) -> List[Dict]:
+        if not market_data_gateway.token or not market_data_gateway.pro:
+            return []
+        moneyflow = getattr(market_data_gateway.pro, "moneyflow", None)
+        if not callable(moneyflow):
+            return []
+
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        if not compact_trade_date:
+            return []
+        resolved_trade_date = market_data_gateway.resolve_trade_date(compact_trade_date)
+        recent_dates = market_data_gateway.recent_open_dates(
+            resolved_trade_date,
+            count=max(days, 1),
+        )
+        start_date = recent_dates[-1] if recent_dates else resolved_trade_date
+        fields = (
+            "ts_code,trade_date,buy_lg_amount,sell_lg_amount,"
+            "buy_elg_amount,sell_elg_amount,net_mf_amount"
+        )
+        try:
+            df = moneyflow(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=resolved_trade_date,
+                fields=fields,
+            )
+        except TypeError:
+            try:
+                df = moneyflow(
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=resolved_trade_date,
+                )
+            except Exception:
+                return []
+        except Exception:
+            return []
+
+        if df is None or df.empty:
+            return []
+        work = df.copy()
+        if "trade_date" in work.columns:
+            work["trade_date"] = work["trade_date"].astype(str)
+            work = work.sort_values("trade_date")
+        return work.to_dict("records")
+
     def _build_rule_snapshot(
         self,
         *,
@@ -296,6 +354,7 @@ class StockCheckupService:
         scored_stocks: List[StockOutput],
         history_rows: List[Dict],
         valuation_row: Dict,
+        moneyflow_rows: List[Dict],
         checkup_target: StockCheckupTarget,
         buy_view: Optional[StockCheckupBuyView],
         sell_view: Optional[StockCheckupSellView],
@@ -312,7 +371,11 @@ class StockCheckupService:
             ),
             daily_structure=self._build_daily_structure(target_input, target_stock, history_rows),
             intraday_strength=self._build_intraday_strength(target_input, target_stock),
-            fund_quality=self._build_fund_quality(target_input, target_stock),
+            fund_quality=self._build_fund_quality(
+                target_input,
+                target_stock,
+                moneyflow_rows,
+            ),
             peer_comparison=peer_comparison,
             valuation_profile=self._build_valuation_profile(valuation_row, target_stock),
             key_levels=self._build_key_levels(target_input, history_rows),
@@ -456,9 +519,57 @@ class StockCheckupService:
             strength_level=self._strength_level(target_stock),
         )
 
-    def _build_fund_quality(self, target_input, target_stock: StockOutput) -> StockCheckupFundQuality:
+    def _build_fund_quality(
+        self,
+        target_input,
+        target_stock: StockOutput,
+        moneyflow_rows: Optional[List[Dict]] = None,
+    ) -> StockCheckupFundQuality:
         vol_ratio = float(target_input.vol_ratio or 0)
         close_quality = self._close_quality(target_input)
+        moneyflow_rows = moneyflow_rows or []
+        if moneyflow_rows:
+            recent_rows = moneyflow_rows[-5:]
+            latest = recent_rows[-1]
+            recent_net = sum(self._safe_float(row.get("net_mf_amount")) or 0 for row in recent_rows)
+            latest_net = self._safe_float(latest.get("net_mf_amount")) or 0
+            big_net = (
+                (self._safe_float(latest.get("buy_lg_amount")) or 0)
+                + (self._safe_float(latest.get("buy_elg_amount")) or 0)
+                - (self._safe_float(latest.get("sell_lg_amount")) or 0)
+                - (self._safe_float(latest.get("sell_elg_amount")) or 0)
+            )
+            if latest_net > 0 and big_net > 0 and close_quality >= 0.55:
+                quality = "资金净流入，质量较好"
+                note = "moneyflow 显示今日净流入且大单/超大单同步净流入，收盘位置没有明显走弱。"
+            elif latest_net > 0:
+                quality = "资金净流入，但仍有分歧"
+                note = "moneyflow 显示今日净流入，但大单/超大单或收盘位置仍需结合盘口确认。"
+            elif latest_net < 0 and vol_ratio >= 1.5:
+                quality = "放量净流出，质量偏弱"
+                note = "moneyflow 显示今日净流出，叠加放量，需防范边拉边出的资金压力。"
+            elif latest_net < 0:
+                quality = "资金净流出，谨慎"
+                note = "moneyflow 显示今日净流出，短线承接质量需要保守看。"
+            else:
+                quality = "资金流向中性"
+                note = "moneyflow 今日净额接近持平，仍需结合盘口承接确认。"
+            return StockCheckupFundQuality(
+                recent_fund_flow=(
+                    f"近{len(recent_rows)}日 moneyflow 净额：{self._format_amount_wan(recent_net)}"
+                ),
+                big_order_status=(
+                    f"大单/超大单净额：{self._format_amount_wan(big_net)}"
+                ),
+                volume_behavior=(
+                    f"量比 {vol_ratio:.1f}；今日净额 {self._format_amount_wan(latest_net)}"
+                    if vol_ratio
+                    else f"今日净额 {self._format_amount_wan(latest_net)}"
+                ),
+                cash_flow_quality=quality,
+                note=note,
+            )
+
         if vol_ratio >= 2 and close_quality >= 0.65:
             quality = "干净流入"
             note = "量能放大且收盘位置好，更像进攻而不是兑现。"
@@ -475,6 +586,15 @@ class StockCheckupService:
             cash_flow_quality=quality,
             note=note,
         )
+
+    def _format_amount_wan(self, value: Optional[float]) -> str:
+        if value is None:
+            return "[需确认]"
+        amount = float(value)
+        if amount == 0:
+            return "0万"
+        label = f"{amount:+.0f}万" if abs(amount) >= 100 else f"{amount:+.1f}万"
+        return label.replace("+", "流入 ").replace("-", "流出 ")
 
     def _build_peer_comparison(
         self,

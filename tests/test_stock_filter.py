@@ -2738,10 +2738,10 @@ class TestStockFilter:
 
         service._annotate_execution_proximity(stock)
 
-        assert stock.execution_reference_price == 10.0
-        assert stock.execution_reference_gap_pct == -1.19
+        assert stock.execution_reference_price == 10.03
+        assert stock.execution_reference_gap_pct == -0.89
         assert stock.execution_proximity_tag == "接近执行位"
-        assert "开盘价 10.00" in (stock.execution_proximity_note or "")
+        assert "日内均价 10.03" in (stock.execution_proximity_note or "")
 
     def test_account_execution_proximity_marks_deep_retrace_reference(self, service):
         stock = StockOutput(
@@ -2771,10 +2771,10 @@ class TestStockFilter:
 
         service._annotate_execution_proximity(stock)
 
-        assert stock.execution_reference_price == 10.0
-        assert stock.execution_reference_gap_pct == -7.41
-        assert stock.execution_proximity_tag == "待深回踩"
-        assert "深回踩参考" in (stock.execution_proximity_note or "")
+        assert stock.execution_reference_price == 10.18
+        assert stock.execution_reference_gap_pct == -5.74
+        assert stock.execution_proximity_tag == "待回踩"
+        assert "日内均价 10.18" in (stock.execution_proximity_note or "")
 
     def test_holding_pool_contains_position_context(self, service, mock_market_env_attack):
         """

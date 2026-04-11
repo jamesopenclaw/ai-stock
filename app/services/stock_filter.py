@@ -2506,10 +2506,9 @@ class StockFilterService:
                 return None, "突破确认位"
             return round(base * 1.002, 2), "突破确认位"
         if stock.next_tradeability_tag == NextTradeabilityTag.RETRACE_CONFIRM:
-            base = float(stock.open or stock.avg_price or stock.pre_close or stock.low or 0)
-            if base <= 0:
+            label, base = self._preferred_retrace_anchor(stock)
+            if not base or base <= 0:
                 return None, "回踩确认位"
-            label = self._nearest_retrace_anchor_label(stock, base)
             return round(base, 2), label
         if stock.next_tradeability_tag == NextTradeabilityTag.LOW_SUCK:
             base = float(stock.low or stock.pre_close or stock.avg_price or 0)
@@ -2519,12 +2518,7 @@ class StockFilterService:
         return None, "执行位"
 
     def _nearest_retrace_anchor_label(self, stock: StockOutput, reference_price: float) -> str:
-        candidates = [
-            ("开盘价", stock.open),
-            ("前收价", stock.pre_close),
-            ("日内均价", stock.avg_price),
-            ("最低价", stock.low),
-        ]
+        candidates = self._preferred_retrace_anchor_candidates(stock)
         valid = [
             (label, float(price))
             for label, price in candidates
@@ -2532,8 +2526,33 @@ class StockFilterService:
         ]
         if not valid:
             return "回踩确认位"
+        tolerance = max(0.02, abs(float(reference_price)) * 0.001)
+        for label, price in valid:
+            if abs(price - float(reference_price)) <= tolerance:
+                return label
         label, _ = min(valid, key=lambda item: abs(item[1] - reference_price))
         return label
+
+    def _preferred_retrace_anchor(self, stock: StockOutput) -> tuple[str, Optional[float]]:
+        candidates = [
+            (label, float(price))
+            for label, price in self._preferred_retrace_anchor_candidates(stock)
+            if price is not None and float(price) > 0
+        ]
+        if not candidates:
+            return "回踩确认位", None
+        return candidates[0][0], candidates[0][1]
+
+    def _preferred_retrace_anchor_candidates(
+        self,
+        stock: StockOutput,
+    ) -> list[tuple[str, Optional[float]]]:
+        return [
+            ("日内均价", stock.avg_price),
+            ("前收价", stock.pre_close),
+            ("开盘价", stock.open),
+            ("最低价", stock.low),
+        ]
 
     def _classify_execution_proximity(
         self,

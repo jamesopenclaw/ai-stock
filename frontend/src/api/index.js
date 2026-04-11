@@ -271,7 +271,7 @@ export const stockApi = {
         limit,
         refresh: Boolean(options.refresh),
         mode: options.mode || 'stable',
-        include_watch_candidates: (options.mode || 'stable') === 'radar',
+        include_watch_candidates: true,
       },
       timeout: options.timeout
     }),
@@ -286,7 +286,9 @@ export const stockApi = {
   buyAnalysis: (tsCode, tradeDate, options = {}) => api.get(`/stock/buy-analysis/${encodeURIComponent(tsCode)}`, {
     params: {
       trade_date: tradeDate,
-      source_pool_tag: options.sourcePoolTag
+      source_pool_tag: options.sourcePoolTag,
+      force_llm_refresh: Boolean(options.forceLlmRefresh),
+      include_llm: options.includeLlm !== undefined ? Boolean(options.includeLlm) : true,
     },
     timeout: options.timeout ?? 90000,
   }),

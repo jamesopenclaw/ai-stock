@@ -3843,8 +3843,16 @@ class TushareClient:
                 "rows": result,
                 "data_trade_date": effective_trade_date,
                 "used_mock": False,
-                "data_status": "ok",
-                "data_message": "",
+                "data_status": (
+                    "fallback"
+                    if prefer_today and effective_trade_date != compact_trade_date
+                    else "ok"
+                ),
+                "data_message": (
+                    f"当日实时候选源暂不可用，候选股已回退到 {effective_trade_date[:4]}-{effective_trade_date[4:6]}-{effective_trade_date[6:8]}。"
+                    if prefer_today and effective_trade_date != compact_trade_date
+                    else ""
+                ),
             }
             self._cache_expanded_stock_list(cache_key, response, compact_trade_date, effective_trade_date)
             return copy.deepcopy(response)

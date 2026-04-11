@@ -185,10 +185,12 @@ class BuyPointService:
             review_bias_profile=review_bias_profile,
         )
         pool_tag_by_code = {}
+        account_execution_by_code = {}
         for stock in stock_pools.market_watch_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.MARKET_WATCH
         for stock in stock_pools.account_executable_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.ACCOUNT_EXECUTABLE
+            account_execution_by_code[normalize_ts_code(stock.ts_code)] = stock
         for stock in stock_pools.holding_process_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.HOLDING_PROCESS
         direction_context = self._build_direction_context(sector_scan=sector_scan, stock_pools=stock_pools)
@@ -202,6 +204,10 @@ class BuyPointService:
 
         for stock in scored_stocks:
             stock.stock_pool_tag = pool_tag_by_code.get(stock.ts_code, StockPoolTag.NOT_IN_POOL)
+            self._attach_execution_reference_from_pool(
+                stock,
+                account_execution_by_code.get(normalize_ts_code(stock.ts_code)),
+            )
             if stock.stock_pool_tag == StockPoolTag.HOLDING_PROCESS:
                 continue
 
@@ -278,6 +284,10 @@ class BuyPointService:
             current_price,
             buy_point.buy_trigger_price,
         )
+        buy_point.execution_reference_gap_pct = self._price_gap_pct(
+            current_price,
+            buy_point.execution_reference_price,
+        )
         buy_point.buy_invalid_gap_pct = self._price_gap_pct(
             current_price,
             buy_point.buy_invalid_price,
@@ -291,7 +301,7 @@ class BuyPointService:
     ) -> BuyPointOutput:
         """
         可买列表强调“当前接近执行位”，不是“将来某个位置可买”。
-        对回踩/低吸型，如果现价离触发位仍明显偏远，就降回观察。
+        对回踩/低吸型，如果现价离执行位仍明显偏远，就降回观察。
         """
         if buy_point.buy_signal_tag != BuySignalTag.CAN_BUY:
             return buy_point
@@ -299,7 +309,11 @@ class BuyPointService:
             return buy_point
         if buy_point.buy_point_type not in {BuyPointType.RETRACE_SUPPORT, BuyPointType.LOW_SUCK}:
             return buy_point
-        gap_pct = buy_point.buy_trigger_gap_pct
+        gap_pct = (
+            buy_point.execution_reference_gap_pct
+            if buy_point.execution_reference_gap_pct is not None
+            else buy_point.buy_trigger_gap_pct
+        )
         if gap_pct is None:
             return buy_point
         if gap_pct >= self._available_trigger_gap_floor_pct(stock.ts_code):
@@ -307,9 +321,9 @@ class BuyPointService:
 
         buy_point.buy_signal_tag = BuySignalTag.OBSERVE
         if buy_point.buy_comment:
-            buy_point.buy_comment = f"{buy_point.buy_comment}，现价离触发位仍偏远，先等回到计划位附近再看"
+            buy_point.buy_comment = f"{buy_point.buy_comment}，现价离执行位仍偏远，先等回到计划位附近再看"
         else:
-            buy_point.buy_comment = "现价离触发位仍偏远，先等回到计划位附近再看"
+            buy_point.buy_comment = "现价离执行位仍偏远，先等回到计划位附近再看"
         buy_point.recommended_order_pct = None
         buy_point.recommended_order_amount = None
         buy_point.recommended_shares = None
@@ -320,9 +334,9 @@ class BuyPointService:
 
     def _available_trigger_gap_floor_pct(self, ts_code: str) -> float:
         """
-        可买列表要求当前价离触发位足够近。
-        返回的是 buy_trigger_gap_pct 的下限，单位为百分比。
-        例如 -1.5 代表当前价最多只能高出触发价约 1.5%。
+        可买列表要求当前价离执行位足够近。
+        返回的是 execution_reference_gap_pct 的下限，单位为百分比。
+        例如 -1.5 代表当前价最多只能高出执行位约 1.5%。
         """
         code = str(ts_code or "").upper()
         if code.endswith(".BJ"):
@@ -330,6 +344,18 @@ class BuyPointService:
         if code.startswith(("300", "301", "688")):
             return -2.5
         return -1.5
+
+    def _attach_execution_reference_from_pool(
+        self,
+        stock: StockOutput,
+        pool_stock: Optional[StockOutput],
+    ) -> None:
+        if pool_stock is None:
+            return
+        stock.execution_reference_price = pool_stock.execution_reference_price
+        stock.execution_reference_gap_pct = pool_stock.execution_reference_gap_pct
+        stock.execution_proximity_tag = pool_stock.execution_proximity_tag
+        stock.execution_proximity_note = pool_stock.execution_proximity_note
 
     def _apply_recommended_order_sizing(
         self,
@@ -742,6 +768,8 @@ class BuyPointService:
         elif buy_type == BuyPointType.RETRACE_SUPPORT:
             anchor_label, anchor_price = self._resolve_retrace_anchor(stock, trigger_price)
             if anchor_label and anchor_price:
+                if anchor_label == "执行位":
+                    return f"先到执行位 {anchor_price:.2f} 附近再开始盯盘"
                 return f"先等回踩到{anchor_label} {anchor_price:.2f} 附近企稳，再看承接"
             if trigger_price:
                 return f"先等回踩到触发价 {trigger_price:.2f} 一带企稳，再看承接"
@@ -777,7 +805,10 @@ class BuyPointService:
         elif buy_type == BuyPointType.RETRACE_SUPPORT:
             anchor_label, anchor_price = self._resolve_retrace_anchor(stock, trigger_price)
             if anchor_label and anchor_price:
-                conds.append(f"回踩到{anchor_label} {anchor_price:.2f} 后收出止跌K线")
+                if anchor_label == "执行位":
+                    conds.append(f"先看能否靠近执行位 {anchor_price:.2f} 并重新站稳")
+                else:
+                    conds.append(f"回踩到{anchor_label} {anchor_price:.2f} 后收出止跌K线")
             elif trigger_price:
                 conds.append(f"回踩到触发价 {trigger_price:.2f} 后收出止跌K线")
             else:
@@ -829,7 +860,14 @@ class BuyPointService:
             base = stock.high or stock.close or stock.pre_close
             return round(base * 1.002, 2) if base else None
         if buy_type == BuyPointType.RETRACE_SUPPORT:
-            base = stock.open or stock.close or stock.pre_close
+            tradeability_tag = self._normalize_next_tradeability_tag(stock.next_tradeability_tag)
+            if (
+                tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
+                and stock.execution_reference_price
+                and float(stock.execution_reference_price) > 0
+            ):
+                return round(float(stock.execution_reference_price), 2)
+            _, base = self._preferred_retrace_anchor(stock)
             return round(base, 2) if base else None
         base = stock.close or stock.pre_close
         return round(base * 1.01, 2) if base else None
@@ -854,12 +892,7 @@ class BuyPointService:
         if not trigger_price:
             return None, None
 
-        candidates = [
-            ("开盘价", stock.open),
-            ("前收价", stock.pre_close),
-            ("日内均价", stock.avg_price),
-            ("最低价", stock.low),
-        ]
+        candidates = self._preferred_retrace_anchor_candidates(stock)
         valid = [
             (label, float(price))
             for label, price in candidates
@@ -868,8 +901,44 @@ class BuyPointService:
         if not valid:
             return "触发价", round(float(trigger_price), 2)
 
+        tolerance = max(0.02, abs(float(trigger_price)) * 0.001)
+        for label, price in valid:
+            if abs(price - float(trigger_price)) <= tolerance:
+                return label, round(price, 2)
         label, price = min(valid, key=lambda item: abs(item[1] - float(trigger_price)))
         return label, round(price, 2)
+
+    def _preferred_retrace_anchor(self, stock: StockOutput) -> Tuple[Optional[str], Optional[float]]:
+        candidates = [
+            (label, float(price))
+            for label, price in self._preferred_retrace_anchor_candidates(stock)
+            if price is not None and float(price) > 0
+        ]
+        if not candidates:
+            return None, None
+        return candidates[0][0], round(candidates[0][1], 2)
+
+    def _preferred_retrace_anchor_candidates(
+        self,
+        stock: StockOutput,
+    ) -> List[Tuple[str, Optional[float]]]:
+        tradeability_tag = self._normalize_next_tradeability_tag(stock.next_tradeability_tag)
+        candidates: List[Tuple[str, Optional[float]]] = []
+        if (
+            tradeability_tag == NextTradeabilityTag.BREAKTHROUGH
+            and stock.execution_reference_price
+            and float(stock.execution_reference_price) > 0
+        ):
+            candidates.append(("执行位", stock.execution_reference_price))
+        candidates.extend(
+            [
+                ("日内均价", stock.avg_price),
+                ("前收价", stock.pre_close),
+                ("开盘价", stock.open),
+                ("最低价", stock.low),
+            ]
+        )
+        return candidates
 
     def _required_volume_ratio(self, buy_type: BuyPointType) -> float:
         """返回结构化量能门槛。"""

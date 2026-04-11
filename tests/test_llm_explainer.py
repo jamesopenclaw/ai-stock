@@ -45,6 +45,13 @@ from app.services.llm_explainer import LlmExplainerService  # noqa: E402
 from app.services.llm_explainer import llm_client, llm_cache_service  # noqa: E402
 
 
+def _checkup_sections(content="先按规则结论保守处理。"):
+    return [
+        {"key": key, "title": title, "content": content}
+        for key, title in LlmExplainerService.CHECKUP_SECTIONS
+    ]
+
+
 class TestLlmExplainer:
     @pytest.fixture
     def service(self):
@@ -602,9 +609,7 @@ class TestLlmExplainer:
         async def fake_cache_get(*, cache_key):
             return {
                 "overall_summary": "命中缓存的个股体检摘要。",
-                "llm_report_sections": [
-                    {"key": "strategy", "title": "10）策略结论", "content": "先等修复确认。"}
-                ],
+                "llm_report_sections": _checkup_sections("先等修复确认。"),
                 "key_risks": ["跌破支撑"],
                 "one_line_conclusion": "这票能看，但不舒服追。",
             }
@@ -627,8 +632,109 @@ class TestLlmExplainer:
         assert isinstance(report, LlmStockCheckupReport)
         assert report.overall_summary == "命中缓存的个股体检摘要。"
         assert report.one_line_conclusion == "这票能看，但不舒服追。"
+        assert len(report.llm_report_sections) == 11
         assert status.success is True
         assert status.status == "cached"
+
+    def test_checkup_payload_includes_prompt_version(self, service, sample_checkup_snapshot):
+        payload = service._build_checkup_payload(
+            sample_checkup_snapshot,
+            StockCheckupTarget.OBSERVE,
+            "2026-03-20",
+        )
+
+        compact_payload = service._build_checkup_payload(
+            sample_checkup_snapshot,
+            StockCheckupTarget.OBSERVE,
+            "2026-03-20",
+            mode="compact",
+        )
+
+        assert payload["prompt_version"] == service.CHECKUP_PROMPT_VERSION
+        assert compact_payload["prompt_version"] == service.CHECKUP_PROMPT_VERSION
+
+    def test_validate_stock_checkup_report_rejects_generic_placeholder(self, service):
+        data = {
+            "overall_summary": "先保守看。",
+            "llm_report_sections": _checkup_sections("这项需要结合盘口确认，先降低确定性，别把单一字段当成交易理由。"),
+            "key_risks": ["跌破支撑"],
+            "one_line_conclusion": "这票能看，但不舒服追。",
+        }
+        data["llm_report_sections"][0] = {
+            "key": "basic_info",
+            "title": "1）基本信息",
+            "content": "该项需确认。",
+        }
+
+        with pytest.raises(ValueError, match="1）基本信息"):
+            service._validate_stock_checkup_report(data)
+
+    def test_explain_stock_checkup_ignores_incomplete_cache(self, service, sample_checkup_snapshot, monkeypatch):
+        calls = {"model": 0, "cache_write": 0}
+
+        async def fake_runtime():
+            return {
+                "enabled": True,
+                "api_key": "test-key",
+                "model": "test-model",
+                "base_url": "https://example.com/v1",
+                "provider": "openai",
+                "max_input_items": 8,
+            }
+
+        async def fake_cache_get(*, cache_key):
+            return {
+                "overall_summary": "旧缓存只返回了策略章。",
+                "llm_report_sections": [
+                    {"key": "strategy", "title": "10）策略结论", "content": "先等修复确认。"}
+                ],
+                "key_risks": ["跌破支撑"],
+                "one_line_conclusion": "这票能看，但不舒服追。",
+            }
+
+        async def fake_chat_json_with_status(*args, **kwargs):
+            calls["model"] += 1
+            return (
+                {
+                    "overall_summary": "新生成的完整个股体检摘要。",
+                    "llm_report_sections": _checkup_sections("完整章节已返回。"),
+                    "key_risks": ["跌破支撑"],
+                    "one_line_conclusion": "这票能看，但不舒服追。",
+                },
+                type(
+                    "_Status",
+                    (),
+                    {
+                        "enabled": True,
+                        "success": True,
+                        "status": "success",
+                        "message": "LLM 解释增强已生效",
+                    },
+                )(),
+            )
+
+        async def fake_cache_upsert(**kwargs):
+            calls["cache_write"] += 1
+
+        monkeypatch.setattr(llm_client, "get_runtime_config", fake_runtime)
+        monkeypatch.setattr(llm_cache_service, "get_cache", fake_cache_get)
+        monkeypatch.setattr(llm_client, "chat_json_with_status", fake_chat_json_with_status)
+        monkeypatch.setattr(llm_cache_service, "upsert_cache", fake_cache_upsert)
+
+        report, status = asyncio.run(
+            service.explain_stock_checkup_with_status(
+                sample_checkup_snapshot,
+                trade_date="2026-03-20",
+                checkup_target=StockCheckupTarget.OBSERVE,
+            )
+        )
+
+        assert report is not None
+        assert report.overall_summary == "新生成的完整个股体检摘要。"
+        assert len(report.llm_report_sections) == 11
+        assert status.status == "success"
+        assert calls["model"] == 1
+        assert calls["cache_write"] == 1
 
     def test_explain_stock_checkup_retries_with_compact_and_ultra_payloads_after_timeout(
         self,
@@ -684,13 +790,7 @@ class TestLlmExplainer:
             return (
                 {
                     "overall_summary": "精简后成功返回。",
-                    "llm_report_sections": [
-                        {
-                            "key": "strategy",
-                            "title": "10）策略结论",
-                            "content": "先等确认。",
-                        }
-                    ],
+                    "llm_report_sections": _checkup_sections("先等确认。"),
                     "key_risks": ["跌破支撑"],
                     "one_line_conclusion": "这票能看，但不舒服追。",
                 },
@@ -728,10 +828,14 @@ class TestLlmExplainer:
 
         assert report is not None
         assert report.overall_summary == "精简后成功返回。"
+        assert len(report.llm_report_sections) == 11
         assert status.success is True
         assert len(calls) == 3
         assert calls[0].get("payload_mode") is None
         assert calls[1].get("payload_mode") == "compact_retry"
         assert calls[2].get("payload_mode") == "ultra_compact_retry"
+        assert calls[0]["prompt_version"] == service.CHECKUP_PROMPT_VERSION
+        assert calls[1]["prompt_version"] == service.CHECKUP_PROMPT_VERSION
+        assert calls[2]["prompt_version"] == service.CHECKUP_PROMPT_VERSION
         assert len(calls[1]["rule_snapshot"]["peer_comparison"]["peers"]) <= 2
         assert "peer_comparison" not in calls[2]["rule_snapshot"]

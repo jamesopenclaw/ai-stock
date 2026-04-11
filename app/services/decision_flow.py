@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 
 from app.models.schemas import BuyPointResponse, SellPointResponse, StockPoolsOutput, StockOutput
 from app.services.buy_point import buy_point_service
+from app.services.buy_point_sop import buy_point_sop_service
 from app.services.decision_context import (
     DecisionContext,
     SharedDecisionContext,
@@ -84,6 +85,11 @@ class DecisionFlowService:
             sector_scan=context.sector_scan,
             scored_stocks=scored_stocks,
             review_bias_profile=review_bias_profile,
+        )
+        await buy_point_sop_service.enrich_execution_proximity(
+            stock_pools.account_executable_pool,
+            trade_date,
+            account_id=account_id,
         )
         return CandidateAnalysisBundle(
             context=context,

@@ -6,6 +6,7 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -68,6 +69,106 @@ def _sample_stock(pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE):
         stock_comment="强势修复，等待承接确认",
         pool_decision_summary="主线前排，修复中的趋势票",
     )
+
+
+def test_load_moneyflow_rows_uses_tushare_moneyflow(monkeypatch):
+    calls = []
+
+    class FakePro:
+        def moneyflow(self, ts_code=None, start_date=None, end_date=None, fields=None):
+            calls.append(
+                {
+                    "ts_code": ts_code,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "fields": fields,
+                }
+            )
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "002463.SZ",
+                        "trade_date": "20260322",
+                        "buy_lg_amount": 3000,
+                        "sell_lg_amount": 2100,
+                        "buy_elg_amount": 1600,
+                        "sell_elg_amount": 900,
+                        "net_mf_amount": 1800,
+                    },
+                    {
+                        "ts_code": "002463.SZ",
+                        "trade_date": "20260320",
+                        "buy_lg_amount": 1000,
+                        "sell_lg_amount": 1200,
+                        "buy_elg_amount": 600,
+                        "sell_elg_amount": 800,
+                        "net_mf_amount": -400,
+                    },
+                ]
+            )
+
+    fake_gateway = SimpleNamespace(
+        token="token",
+        pro=FakePro(),
+        resolve_trade_date=lambda trade_date: "20260322",
+        recent_open_dates=lambda trade_date, count=5: [
+            "20260322",
+            "20260321",
+            "20260320",
+        ],
+    )
+    monkeypatch.setattr("app.services.stock_checkup.market_data_gateway", fake_gateway)
+
+    rows = stock_checkup_service._load_moneyflow_rows("002463.SZ", "2026-03-22")
+
+    assert calls == [
+        {
+            "ts_code": "002463.SZ",
+            "start_date": "20260320",
+            "end_date": "20260322",
+            "fields": "ts_code,trade_date,buy_lg_amount,sell_lg_amount,buy_elg_amount,sell_elg_amount,net_mf_amount",
+        }
+    ]
+    assert [row["trade_date"] for row in rows] == ["20260320", "20260322"]
+
+
+def test_build_fund_quality_uses_moneyflow_rows():
+    target_input = SimpleNamespace(
+        high=29.1,
+        low=27.4,
+        close=28.8,
+        vol_ratio=1.5,
+    )
+    rows = [
+        {
+            "trade_date": "20260320",
+            "buy_lg_amount": 1000,
+            "sell_lg_amount": 1200,
+            "buy_elg_amount": 600,
+            "sell_elg_amount": 700,
+            "net_mf_amount": -300,
+        },
+        {
+            "trade_date": "20260323",
+            "buy_lg_amount": 3000,
+            "sell_lg_amount": 2100,
+            "buy_elg_amount": 1600,
+            "sell_elg_amount": 900,
+            "net_mf_amount": 1800,
+        },
+    ]
+
+    fund_quality = stock_checkup_service._build_fund_quality(
+        target_input,
+        _sample_stock(),
+        rows,
+    )
+
+    assert fund_quality.recent_fund_flow == "近2日 moneyflow 净额：流入 1500万"
+    assert fund_quality.big_order_status == "大单/超大单净额：流入 1600万"
+    assert fund_quality.volume_behavior == "量比 1.5；今日净额 流入 1800万"
+    assert fund_quality.cash_flow_quality == "资金净流入，质量较好"
+    assert "moneyflow" in fund_quality.note
 
 
 @pytest.mark.asyncio
