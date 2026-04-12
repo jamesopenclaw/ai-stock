@@ -559,6 +559,22 @@ def test_resolve_trade_date_uses_short_cache():
     assert len(client.pro.trade_cal_calls) == 1
 
 
+def test_recent_open_dates_reuses_local_cache_for_same_trade_date():
+    """同一交易日重复获取最近开市日时，应命中本地缓存，避免重复查 trade_cal。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FallbackStockListPro()
+    client._recent_open_dates_cache = {}
+    client._recent_open_dates_lock = threading.Lock()
+
+    first = client._recent_open_dates("20260323", count=2)
+    second = client._recent_open_dates("20260323", count=5)
+
+    assert first == ["20260323", "20260320"]
+    assert second == ["20260323", "20260320", "20260319"]
+    assert len(client.pro.trade_cal_calls) == 1
+
+
 def test_get_stock_quote_map_reuses_daily_and_daily_basic_caches():
     """同一交易日重复取批量行情时，应复用 daily 和 daily_basic 结果。"""
     client = TushareClient.__new__(TushareClient)

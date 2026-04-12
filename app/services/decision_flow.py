@@ -87,7 +87,10 @@ class DecisionFlowService:
             review_bias_profile=review_bias_profile,
         )
         await buy_point_sop_service.enrich_execution_proximity(
-            stock_pools.account_executable_pool,
+            [
+                *list(stock_pools.account_executable_pool or []),
+                *list(stock_pools.market_watch_pool or []),
+            ],
             trade_date,
             account_id=account_id,
         )

@@ -70,6 +70,7 @@ class TushareClient:
     STOCK_BASIC_CACHE_TTL_SECONDS = 6 * 60 * 60
     EXPANDED_STOCK_LIST_CACHE_TTL_SECONDS = 5 * 60
     TRADE_DATE_RESOLUTION_CACHE_TTL_SECONDS = 6 * 60 * 60
+    RECENT_OPEN_DATES_CACHE_TTL_SECONDS = 6 * 60 * 60
     DAILY_API_INTRADAY_CACHE_TTL_SECONDS = 60
     DAILY_API_HISTORY_CACHE_TTL_SECONDS = 6 * 60 * 60
     LOCAL_THS_SNAPSHOT_RELOAD_COOLDOWN_SECONDS = 30
@@ -94,6 +95,7 @@ class TushareClient:
         }
         self._realtime_market_source_cooldowns = {}
         self._realtime_market_fetch_lock = threading.Lock()
+        self._recent_open_dates_lock = threading.Lock()
         self._sina_hot_sector_cache = {
             "cache_key": "",
             "fetched_at": 0.0,
@@ -113,6 +115,7 @@ class TushareClient:
             "mapping": {},
         }
         self._intraday_volume_ratio_cache = {}
+        self._recent_open_dates_cache = {}
         self._ths_concept_index_cache = {
             "fetched_at": 0.0,
             "mapping": {},
@@ -2292,25 +2295,61 @@ class TushareClient:
         if not self.token:
             return [trade_date]
 
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        cache = getattr(self, "_recent_open_dates_cache", None)
+        if cache is None:
+            cache = {}
+            setattr(self, "_recent_open_dates_cache", cache)
+        ttl = float(getattr(self, "RECENT_OPEN_DATES_CACHE_TTL_SECONDS", 0) or 0)
+        now_ts = time_module.monotonic()
+        cached = cache.get(compact_trade_date)
+        if (
+            cached
+            and ttl > 0
+            and now_ts - float(cached.get("fetched_at") or 0.0) <= ttl
+        ):
+            open_days = list(cached.get("open_days") or [])
+            return open_days[:count] or [compact_trade_date]
+
+        lock = getattr(self, "_recent_open_dates_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            setattr(self, "_recent_open_dates_lock", lock)
+
         try:
             from datetime import datetime, timedelta
 
-            end_dt = datetime.strptime(trade_date, "%Y%m%d")
-            start_dt = end_dt - timedelta(days=20)
-            cal_df = self._call_pro_trade_cal(
-                exchange="SSE",
-                start_date=start_dt.strftime("%Y%m%d"),
-                end_date=trade_date,
-                fields="cal_date,is_open",
-            )
+            with lock:
+                cached = cache.get(compact_trade_date)
+                now_ts = time_module.monotonic()
+                if (
+                    cached
+                    and ttl > 0
+                    and now_ts - float(cached.get("fetched_at") or 0.0) <= ttl
+                ):
+                    open_days = list(cached.get("open_days") or [])
+                    return open_days[:count] or [compact_trade_date]
+
+                end_dt = datetime.strptime(compact_trade_date, "%Y%m%d")
+                start_dt = end_dt - timedelta(days=20)
+                cal_df = self._call_pro_trade_cal(
+                    exchange="SSE",
+                    start_date=start_dt.strftime("%Y%m%d"),
+                    end_date=compact_trade_date,
+                    fields="cal_date,is_open",
+                )
             if cal_df is None or cal_df.empty:
-                return [trade_date]
+                return [compact_trade_date]
             open_days = cal_df[cal_df["is_open"] == 1]["cal_date"].tolist()
             open_days = sorted((str(day) for day in open_days), reverse=True)
-            return open_days[:count] or [trade_date]
+            cache[compact_trade_date] = {
+                "fetched_at": time_module.monotonic(),
+                "open_days": list(open_days),
+            }
+            return open_days[:count] or [compact_trade_date]
         except Exception as e:
             logger.warning(f"获取最近交易日序列失败: {e}")
-            return [trade_date]
+            return [compact_trade_date]
 
     def _get_stock_basic_snapshot_map(self) -> Dict[str, Dict[str, str]]:
         """获取股票基础映射，并做进程内缓存。"""

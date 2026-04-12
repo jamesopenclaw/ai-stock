@@ -244,8 +244,20 @@ async def test_buy_point_page_saves_review_snapshot(monkeypatch):
     async def fake_get_review_bias_profile(*args, **kwargs):
         return {"exact": {}, "bucket": {}}
 
+    enrich_calls = []
+
+    async def fake_enrich_execution_proximity(stocks, trade_date, *, account_id=None, concurrency=4):
+        enrich_calls.append(
+            {
+                "trade_date": trade_date,
+                "account_id": account_id,
+                "codes": [stock.ts_code for stock in stocks],
+            }
+        )
+
     monkeypatch.setattr(decision.decision_flow_service, "build_candidate_analysis", fake_build_candidate_analysis)
     monkeypatch.setattr(decision.buy_point_service, "analyze", fake_analyze)
+    monkeypatch.setattr(decision.buy_point_sop_service, "enrich_execution_proximity", fake_enrich_execution_proximity)
     monkeypatch.setattr(decision.review_snapshot_service, "get_stock_pools_page_snapshot", fake_get_page_snapshot)
     monkeypatch.setattr(decision.review_snapshot_service, "get_review_bias_profile_safe", fake_get_review_bias_profile)
     monkeypatch.setattr(decision.review_snapshot_service, "save_analysis_snapshot_safe", fake_save_snapshot)
@@ -266,6 +278,13 @@ async def test_buy_point_page_saves_review_snapshot(monkeypatch):
     assert response.data["theme_leaders"][0]["sector_name"] == "草甘膦"
     assert response.data["industry_leaders"][0]["sector_name"] == "农化制品"
     assert response.data["available_buy_points"][0]["direction_match_role"] == "theme"
+    assert enrich_calls == [
+        {
+            "trade_date": "2026-03-24",
+            "account_id": None,
+            "codes": ["000001.SZ"],
+        }
+    ]
     assert len(snapshot_calls) == 1
     assert snapshot_calls[0]["trade_date"] == "2026-03-24"
     assert snapshot_calls[0]["stock_pools"] is pools
@@ -333,6 +352,17 @@ async def test_buy_point_prefers_cached_stock_pools_snapshot(monkeypatch):
     async def fake_get_review_bias_profile(*args, **kwargs):
         return {"exact": {}, "bucket": {}}
 
+    enrich_calls = []
+
+    async def fake_enrich_execution_proximity(stocks, trade_date, *, account_id=None, concurrency=4):
+        enrich_calls.append(
+            {
+                "trade_date": trade_date,
+                "account_id": account_id,
+                "codes": [stock.ts_code for stock in stocks],
+            }
+        )
+
     saved_snapshots = []
 
     async def fake_save_snapshot(trade_date, stock_pools=None, buy_analysis=None, **kwargs):
@@ -360,6 +390,7 @@ async def test_buy_point_prefers_cached_stock_pools_snapshot(monkeypatch):
     monkeypatch.setattr(decision.review_snapshot_service, "get_review_bias_profile_safe", fake_get_review_bias_profile)
     monkeypatch.setattr(decision.review_snapshot_service, "save_analysis_snapshot_safe", fake_save_snapshot)
     monkeypatch.setattr(decision.buy_point_service, "analyze", fake_analyze)
+    monkeypatch.setattr(decision.buy_point_sop_service, "enrich_execution_proximity", fake_enrich_execution_proximity)
     monkeypatch.setattr(
         decision.market_env_service,
         "get_current_env",
@@ -378,6 +409,13 @@ async def test_buy_point_prefers_cached_stock_pools_snapshot(monkeypatch):
 
     assert response.code == 200
     assert response.data["total_count"] == 1
+    assert enrich_calls == [
+        {
+            "trade_date": "2026-03-24",
+            "account_id": None,
+            "codes": ["000001.SZ"],
+        }
+    ]
     assert saved_snapshots == [
         {
             "trade_date": "2026-03-24",
@@ -385,6 +423,63 @@ async def test_buy_point_prefers_cached_stock_pools_snapshot(monkeypatch):
             "buy_analysis": buy_result,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_buy_point_pool_execution_enrich_skips_already_populated_stocks(monkeypatch):
+    pools = StockPoolsOutput(
+        trade_date="2026-03-24",
+        market_watch_pool=[
+            StockOutput(
+                ts_code="000001.SZ",
+                stock_name="平安银行",
+                sector_name="银行",
+                change_pct=2.1,
+                stock_strength_tag=StockStrengthTag.STRONG,
+                stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+                stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+                stock_core_tag=StockCoreTag.CORE,
+                stock_pool_tag=StockPoolTag.MARKET_WATCH,
+                execution_reference_price=12.1,
+            )
+        ],
+        account_executable_pool=[
+            StockOutput(
+                ts_code="000002.SZ",
+                stock_name="万科A",
+                sector_name="地产",
+                change_pct=1.2,
+                stock_strength_tag=StockStrengthTag.STRONG,
+                stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+                stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+                stock_core_tag=StockCoreTag.CORE,
+                stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+                execution_reference_price=9.8,
+            )
+        ],
+        holding_process_pool=[],
+        total_count=2,
+    )
+    enrich_calls = []
+
+    async def fake_enrich_execution_proximity(stocks, trade_date, *, account_id=None, concurrency=4):
+        enrich_calls.append(
+            {
+                "trade_date": trade_date,
+                "account_id": account_id,
+                "codes": [stock.ts_code for stock in stocks],
+            }
+        )
+
+    monkeypatch.setattr(decision.buy_point_sop_service, "enrich_execution_proximity", fake_enrich_execution_proximity)
+
+    await decision._enrich_buy_point_pool_execution_references(
+        pools,
+        "2026-03-24",
+        account_id="acct-001",
+    )
+
+    assert enrich_calls == []
 
 
 @pytest.mark.asyncio

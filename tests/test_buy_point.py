@@ -977,6 +977,63 @@ class TestBuyPoint:
         assert buy_point.execution_proximity_tag == "待回踩"
         assert buy_point.execution_reference_gap_pct == -6.06
 
+    def test_analyze_syncs_execution_reference_from_market_watch_pool(self, service, strong_stock, monkeypatch):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        strong_stock.close = 68.3
+        strong_stock.pre_close = 62.0
+        strong_stock.open = 62.5
+        strong_stock.high = 69.0
+        strong_stock.low = 61.8
+        strong_stock.execution_reference_price = None
+        strong_stock.execution_reference_gap_pct = None
+        strong_stock.execution_proximity_tag = None
+
+        pool_stock = strong_stock.model_copy(deep=True)
+        pool_stock.execution_reference_price = 68.465
+        pool_stock.execution_reference_gap_pct = 0.24
+        pool_stock.execution_proximity_tag = "接近执行位"
+        pool_stock.execution_proximity_note = "回踩确认区已接近。"
+
+        monkeypatch.setattr(
+            "app.services.buy_point.tushare_client._should_use_realtime_quote",
+            lambda trade_date: True,
+        )
+        monkeypatch.setattr(
+            "app.services.buy_point.tushare_client._fetch_realtime_stock_quote_map",
+            lambda ts_codes: {
+                "000001.SZ": {
+                    "close": 68.30,
+                    "change_pct": 10.16,
+                    "quote_time": "2026-04-12 10:31:00",
+                    "data_source": "realtime_dc",
+                }
+            },
+        )
+
+        response = service.analyze(
+            "2026-04-12",
+            stocks=[],
+            market_env=MockMarketEnv(),
+            scored_stocks=[strong_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-04-12",
+                market_watch_pool=[pool_stock],
+                account_executable_pool=[],
+                holding_process_pool=[],
+                total_count=1,
+            ),
+        )
+
+        buy_point = response.observe_buy_points[0]
+        assert buy_point.stock_pool_tag == StockPoolTag.MARKET_WATCH.value
+        assert buy_point.execution_reference_price == 68.465
+        assert buy_point.execution_proximity_tag == "接近执行位"
+        assert buy_point.execution_reference_gap_pct == 0.24
+
     def test_analyze_attaches_dual_mainline_direction_context(self, service):
         class MockMarketEnv:
             market_env_tag = MarketEnvTag.ATTACK

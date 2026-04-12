@@ -1370,8 +1370,7 @@ const executionProximityMetaClass = (point) => {
 
 const hasUnifiedExecutionReference = (point) => {
   if (!point) return false
-  const poolTag = String(point.stock_pool_tag || '').trim()
-  return poolTag === '账户可参与池' && point.execution_reference_price !== null && point.execution_reference_price !== undefined
+  return point.execution_reference_price !== null && point.execution_reference_price !== undefined
 }
 
 const executionReferencePrice = (point) => (

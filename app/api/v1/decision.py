@@ -101,6 +101,37 @@ def _cache_sell_point_payload(cache_key: str, payload: dict) -> None:
     }
 
 
+async def _enrich_buy_point_pool_execution_references(
+    stock_pools,
+    trade_date: str,
+    *,
+    account_id: Optional[str] = None,
+) -> None:
+    if stock_pools is None:
+        return
+
+    deduped_stocks = OrderedDict()
+    for stock in list(getattr(stock_pools, "account_executable_pool", []) or []) + list(
+        getattr(stock_pools, "market_watch_pool", []) or []
+    ):
+        code = normalize_ts_code(getattr(stock, "ts_code", "") or "")
+        if (
+            code
+            and code not in deduped_stocks
+            and getattr(stock, "execution_reference_price", None) is None
+        ):
+            deduped_stocks[code] = stock
+
+    if not deduped_stocks:
+        return
+
+    await buy_point_sop_service.enrich_execution_proximity(
+        list(deduped_stocks.values()),
+        trade_date,
+        account_id=account_id,
+    )
+
+
 def _resolve_add_signal_from_buy_sop(point: SellPointOutput, buy_sop_result) -> tuple[Optional[str], Optional[str]]:
     """基于买点 SOP 结果为持有观察票补充加仓提示。"""
     pnl_pct = getattr(point, "pnl_pct", None)
@@ -681,6 +712,12 @@ async def analyze_buy_point(
             bundle_context_market_env = bundle.context.market_env
             bundle_context_sector_scan = bundle.context.sector_scan
             should_persist_snapshots = True
+
+        await _enrich_buy_point_pool_execution_references(
+            stock_pools,
+            trade_date,
+            account_id=account_id,
+        )
 
         result = buy_point_service.analyze(
             trade_date,

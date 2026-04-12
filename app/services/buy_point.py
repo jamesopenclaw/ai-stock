@@ -185,12 +185,13 @@ class BuyPointService:
             review_bias_profile=review_bias_profile,
         )
         pool_tag_by_code = {}
-        account_execution_by_code = {}
+        execution_reference_by_code = {}
         for stock in stock_pools.market_watch_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.MARKET_WATCH
+            execution_reference_by_code[normalize_ts_code(stock.ts_code)] = stock
         for stock in stock_pools.account_executable_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.ACCOUNT_EXECUTABLE
-            account_execution_by_code[normalize_ts_code(stock.ts_code)] = stock
+            execution_reference_by_code[normalize_ts_code(stock.ts_code)] = stock
         for stock in stock_pools.holding_process_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.HOLDING_PROCESS
         direction_context = self._build_direction_context(sector_scan=sector_scan, stock_pools=stock_pools)
@@ -206,7 +207,7 @@ class BuyPointService:
             stock.stock_pool_tag = pool_tag_by_code.get(stock.ts_code, StockPoolTag.NOT_IN_POOL)
             self._attach_execution_reference_from_pool(
                 stock,
-                account_execution_by_code.get(normalize_ts_code(stock.ts_code)),
+                execution_reference_by_code.get(normalize_ts_code(stock.ts_code)),
             )
             if stock.stock_pool_tag == StockPoolTag.HOLDING_PROCESS:
                 continue
