@@ -13,9 +13,14 @@ class WeChatNotifier:
 
     def __init__(self, webhook_url: str = None):
         self.webhook_url = webhook_url or settings.wecom_webhook_url
-        self.enabled = bool(self.webhook_url)
 
-    async def send_text(self, content: str, mentioned_list: List[str] = None) -> bool:
+    async def send_text(
+        self,
+        content: str,
+        mentioned_list: List[str] = None,
+        *,
+        webhook_url: Optional[str] = None,
+    ) -> bool:
         """
         发送文本消息
 
@@ -26,7 +31,8 @@ class WeChatNotifier:
         Returns:
             是否发送成功
         """
-        if not self.enabled:
+        target_webhook = str(webhook_url or self.webhook_url or "").strip()
+        if not target_webhook:
             logger.warning("企业微信 webhook 未配置，跳过推送")
             return False
 
@@ -40,7 +46,7 @@ class WeChatNotifier:
             }
 
             async with httpx.AsyncClient() as client:
-                resp = await client.post(self.webhook_url, json=payload, timeout=10)
+                resp = await client.post(target_webhook, json=payload, timeout=10)
                 result = resp.json()
 
                 if result.get("errcode") == 0:
@@ -54,7 +60,7 @@ class WeChatNotifier:
             logger.error(f"企业微信消息推送异常: {e}")
             return False
 
-    async def send_markdown(self, content: str) -> bool:
+    async def send_markdown(self, content: str, *, webhook_url: Optional[str] = None) -> bool:
         """
         发送 Markdown 消息
 
@@ -64,7 +70,8 @@ class WeChatNotifier:
         Returns:
             是否发送成功
         """
-        if not self.enabled:
+        target_webhook = str(webhook_url or self.webhook_url or "").strip()
+        if not target_webhook:
             logger.warning("企业微信 webhook 未配置，跳过推送")
             return False
 
@@ -77,7 +84,7 @@ class WeChatNotifier:
             }
 
             async with httpx.AsyncClient() as client:
-                resp = await client.post(self.webhook_url, json=payload, timeout=10)
+                resp = await client.post(target_webhook, json=payload, timeout=10)
                 result = resp.json()
 
                 if result.get("errcode") == 0:

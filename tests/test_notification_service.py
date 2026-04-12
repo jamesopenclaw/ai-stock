@@ -4,6 +4,7 @@
 from datetime import datetime
 
 import pytest
+from pydantic import ValidationError
 
 from app.models.notification_event import NotificationEvent
 from app.models.schemas import NotificationSettingsPayload
@@ -105,11 +106,12 @@ async def test_upsert_event_skips_disabled_rule_and_resolves_existing(monkeypatc
         return NotificationSettingsPayload(
             in_app_enabled=True,
             wecom_enabled=True,
+            wecom_webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=acct-001",
             rules={"holding_to_sell": "off"},
             quiet_windows=[],
         )
 
-    async def fake_send_markdown(message):
+    async def fake_send_markdown(message, *, webhook_url=None):
         raise AssertionError("disabled event should not push wecom")
 
     monkeypatch.setattr("app.services.notification_service.async_session_factory", lambda: session)
@@ -148,11 +150,12 @@ async def test_upsert_event_applies_rule_priority_override(monkeypatch):
         return NotificationSettingsPayload(
             in_app_enabled=True,
             wecom_enabled=True,
+            wecom_webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=acct-001",
             rules={"candidate_to_executable": "low"},
             quiet_windows=[],
         )
 
-    async def fake_send_markdown(message):
+    async def fake_send_markdown(message, *, webhook_url=None):
         raise AssertionError("low priority event should not push wecom")
 
     monkeypatch.setattr("app.services.notification_service.async_session_factory", lambda: session)
@@ -270,12 +273,13 @@ async def test_upsert_event_suppresses_wecom_inside_quiet_window(monkeypatch):
         return NotificationSettingsPayload(
             in_app_enabled=True,
             wecom_enabled=True,
+            wecom_webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=acct-001",
             rules={"holding_to_sell": "high"},
             quiet_windows=[{"start": "11:30", "end": "13:00"}],
         )
 
-    async def fake_send_markdown(message):
-        send_calls.append(message)
+    async def fake_send_markdown(message, *, webhook_url=None):
+        send_calls.append((message, webhook_url))
 
     monkeypatch.setattr("app.services.notification_service.async_session_factory", lambda: session)
     monkeypatch.setattr(notification_service, "get_settings", fake_get_settings)
@@ -337,6 +341,7 @@ async def test_get_summary_marks_quiet_window_active(monkeypatch):
         return NotificationSettingsPayload(
             in_app_enabled=True,
             wecom_enabled=True,
+            wecom_webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=acct-001",
             rules={"holding_to_sell": "high"},
             quiet_windows=[{"start": "11:30", "end": "13:00"}],
         )
@@ -417,3 +422,101 @@ async def test_mark_all_read_excludes_high_priority(monkeypatch):
     assert updated == 1
     assert high_row.status == "pending"
     assert low_row.status == "read"
+
+
+@pytest.mark.asyncio
+async def test_upsert_event_pushes_account_specific_wecom_webhook(monkeypatch):
+    session = _FakeSession()
+    send_calls = []
+
+    async def fake_get_settings(account_id, *, user_id=None):
+        return NotificationSettingsPayload(
+            in_app_enabled=True,
+            wecom_enabled=True,
+            wecom_webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=acct-xyz",
+            rules={"holding_to_sell": "high"},
+            quiet_windows=[],
+        )
+
+    async def fake_send_markdown(message, *, webhook_url=None):
+        send_calls.append({"message": message, "webhook_url": webhook_url})
+        return True
+
+    monkeypatch.setattr("app.services.notification_service.async_session_factory", lambda: session)
+    monkeypatch.setattr(notification_service, "get_settings", fake_get_settings)
+    monkeypatch.setattr(
+        notification_service,
+        "get_active_quiet_window",
+        lambda quiet_windows, now=None: None,
+    )
+    monkeypatch.setattr("app.services.notification_service.notify_service.wecom.send_markdown", fake_send_markdown)
+
+    result = await notification_service.upsert_event(
+        "acct-001",
+        user_id="user-001",
+        event_type="holding_to_sell",
+        category="holding",
+        priority="high",
+        title="沪电股份转为建议卖出",
+        message="盘中优先退出",
+        action_label="看卖点详解",
+        action_target_type="sell_analysis",
+        action_target_payload={"route": "/sell"},
+        entity_type="stock",
+        entity_code="002463.SZ",
+        trade_date="2026-04-04",
+        dedupe_key="acct-001:holding_to_sell:002463.SZ:2026-04-04",
+        trigger_value={"sell_signal_tag": "卖出"},
+    )
+
+    assert result is not None
+    assert send_calls == [
+        {
+            "message": "## 盘中提醒\n\n**沪电股份转为建议卖出**\n\n盘中优先退出",
+            "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=acct-xyz",
+        }
+    ]
+
+
+def test_notification_settings_payload_requires_webhook_when_wecom_enabled():
+    with pytest.raises(ValidationError):
+        NotificationSettingsPayload(
+            in_app_enabled=True,
+            wecom_enabled=True,
+            wecom_webhook_url="",
+            rules={},
+            quiet_windows=[],
+        )
+
+
+def test_notification_settings_payload_rejects_invalid_wecom_webhook():
+    with pytest.raises(ValidationError):
+        NotificationSettingsPayload(
+            in_app_enabled=True,
+            wecom_enabled=False,
+            wecom_webhook_url="https://example.com/webhook",
+            rules={},
+            quiet_windows=[],
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_wecom_test_message_uses_explicit_webhook(monkeypatch):
+    send_calls = []
+
+    async def fake_send_markdown(message, *, webhook_url=None):
+        send_calls.append({"message": message, "webhook_url": webhook_url})
+        return True
+
+    monkeypatch.setattr("app.services.notification_service.notify_service.wecom.send_markdown", fake_send_markdown)
+
+    success = await notification_service.send_wecom_test_message(
+        "acct-001",
+        account_name="测试账户",
+        user_id="user-001",
+        webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=acct-test",
+    )
+
+    assert success is True
+    assert send_calls[0]["webhook_url"] == "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=acct-test"
+    assert "测试账户" in send_calls[0]["message"]

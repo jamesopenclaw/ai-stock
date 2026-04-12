@@ -382,6 +382,7 @@ export const notificationApi = {
   snooze: (eventId, minutes = 30) => api.post(`/notifications/${encodeURIComponent(eventId)}/snooze`, { minutes }),
   settings: (options = {}) => api.get('/notifications/settings', { timeout: options.timeout }),
   updateSettings: (payload) => api.put('/notifications/settings', payload),
+  testWecom: (payload = {}) => api.post('/notifications/settings/test-wecom', payload),
 }
 
 export const systemApi = {

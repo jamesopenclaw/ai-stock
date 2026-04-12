@@ -6,8 +6,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, Optional
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+from loguru import logger
 from sqlalchemy import desc, or_, select
 
 from app.core.config import settings
@@ -173,6 +175,47 @@ class NotificationService:
         hour_text, minute_text = value.split(":", 1)
         return int(hour_text) * 60 + int(minute_text)
 
+    def normalize_wecom_webhook_url(self, webhook_url: Any) -> str:
+        value = str(webhook_url or "").strip()
+        if not value:
+            return ""
+        parsed = urlparse(value)
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc.lower() != "qyapi.weixin.qq.com"
+            or not parsed.path.startswith("/cgi-bin/webhook/send")
+        ):
+            raise ValueError("企业微信机器人 Webhook URL 格式不正确")
+        return value
+
+    async def send_wecom_test_message(
+        self,
+        account_id: str,
+        *,
+        account_name: str,
+        user_id: Optional[str] = None,
+        webhook_url: str = "",
+    ) -> bool:
+        resolved_webhook_url = str(webhook_url or "").strip()
+        if not resolved_webhook_url:
+            settings_payload = await self.get_settings(account_id, user_id=user_id)
+            resolved_webhook_url = str(getattr(settings_payload, "wecom_webhook_url", "") or "").strip()
+
+        normalized_webhook_url = self.normalize_wecom_webhook_url(resolved_webhook_url)
+        if not normalized_webhook_url:
+            raise ValueError("当前账号尚未配置企业微信机器人 Webhook URL")
+
+        content = (
+            "## 企业微信通知测试\n\n"
+            f"**账户**：{account_name}\n\n"
+            f"**账号 ID**：{account_id}\n\n"
+            "这是一条测试消息，用于验证当前交易账号的企业微信通知配置是否可用。"
+        )
+        return await notify_service.wecom.send_markdown(
+            content,
+            webhook_url=normalized_webhook_url,
+        )
+
     async def get_settings(
         self,
         account_id: str,
@@ -191,6 +234,7 @@ class NotificationService:
                     user_id=user_id,
                     in_app_enabled=True,
                     wecom_enabled=False,
+                    wecom_webhook_url="",
                     rules_json=dict(DEFAULT_NOTIFICATION_RULES),
                     quiet_windows=[],
                     created_at=_utcnow(),
@@ -202,6 +246,7 @@ class NotificationService:
             return NotificationSettingsPayload(
                 in_app_enabled=bool(row.in_app_enabled),
                 wecom_enabled=bool(row.wecom_enabled),
+                wecom_webhook_url=str(getattr(row, "wecom_webhook_url", "") or ""),
                 rules=self.normalize_rules(row.rules_json),
                 quiet_windows=self.normalize_quiet_windows(row.quiet_windows),
             )
@@ -212,7 +257,8 @@ class NotificationService:
         payload: NotificationSettingsPayload,
         *,
         user_id: Optional[str] = None,
-    ) -> NotificationSettingsPayload:
+        ) -> NotificationSettingsPayload:
+        normalized_webhook_url = self.normalize_wecom_webhook_url(payload.wecom_webhook_url)
         async with async_session_factory() as session:
             result = await session.execute(
                 select(NotificationSetting).where(NotificationSetting.account_id == account_id)
@@ -229,6 +275,7 @@ class NotificationService:
             row.user_id = user_id or row.user_id
             row.in_app_enabled = bool(payload.in_app_enabled)
             row.wecom_enabled = bool(payload.wecom_enabled)
+            row.wecom_webhook_url = normalized_webhook_url
             row.rules_json = self.normalize_rules(payload.rules)
             row.quiet_windows = self.normalize_quiet_windows(payload.quiet_windows)
             row.updated_at = _utcnow()
@@ -237,6 +284,7 @@ class NotificationService:
             normalized_payload = NotificationSettingsPayload(
                 in_app_enabled=bool(row.in_app_enabled),
                 wecom_enabled=bool(row.wecom_enabled),
+                wecom_webhook_url=str(getattr(row, "wecom_webhook_url", "") or ""),
                 rules=self.normalize_rules(row.rules_json),
                 quiet_windows=self.normalize_quiet_windows(row.quiet_windows),
             )
@@ -503,9 +551,24 @@ class NotificationService:
             and effective_priority == NotificationPriority.HIGH.value
             and not active_quiet_window
         ):
-            await notify_service.wecom.send_markdown(
-                f"## 盘中提醒\n\n**{title}**\n\n{message}"
-            )
+            webhook_url = self.normalize_wecom_webhook_url(getattr(settings, "wecom_webhook_url", ""))
+            if not webhook_url:
+                logger.warning(
+                    "账户未配置企业微信 webhook，跳过外部推送 account_id={} event_type={}",
+                    account_id,
+                    event_type,
+                )
+            else:
+                logger.info(
+                    "推送企业微信盘中提醒 account_id={} event_type={} priority={}",
+                    account_id,
+                    event_type,
+                    effective_priority,
+                )
+                await notify_service.wecom.send_markdown(
+                    f"## 盘中提醒\n\n**{title}**\n\n{message}",
+                    webhook_url=webhook_url,
+                )
         return _serialize_notification_item(row)
 
     async def apply_settings_to_existing_events(self, account_id: str, rules: Optional[Dict[str, Any]] = None) -> int:

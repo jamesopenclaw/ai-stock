@@ -1,8 +1,11 @@
 """通知中心 API"""
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
 
+from app.core.config import settings
 from app.core.security import AuthenticatedAccount, AuthenticatedUser, get_current_account, get_current_user
 from app.models.schemas import (
     ApiResponse,
@@ -12,7 +15,9 @@ from app.models.schemas import (
     NotificationSettingsPayload,
     NotificationSnoozeRequest,
     NotificationStatus,
+    NotificationWecomTestRequest,
 )
+from app.services.notification_engine import notification_engine
 from app.services.notification_service import notification_service
 
 router = APIRouter()
@@ -23,14 +28,36 @@ def _enum_value(value):
     return getattr(raw, "value", raw)
 
 
+def _current_trade_date() -> str:
+    return datetime.now(ZoneInfo(settings.notification_timezone)).strftime("%Y-%m-%d")
+
+
+async def _refresh_notifications(
+    current_account: AuthenticatedAccount,
+    current_user: Optional[AuthenticatedUser] = None,
+) -> None:
+    try:
+        await notification_engine.refresh_account_events(
+            current_account.id,
+            user_id=getattr(current_user, "id", None),
+            trade_date=_current_trade_date(),
+            force=False,
+        )
+    except Exception:
+        # 通知面板不能因为后台刷新失败而阻塞读取。
+        return
+
+
 @router.get("/notifications", response_model=ApiResponse)
 async def list_notifications(
-    status: Optional[NotificationStatus] = Query(NotificationStatus.PENDING, description="状态筛选"),
+    status: Optional[NotificationStatus] = Query(None, description="状态筛选"),
     category: Optional[NotificationCategory] = Query(None, description="分类筛选"),
     priority: Optional[NotificationPriority] = Query(None, description="优先级筛选"),
     limit: int = Query(20, ge=1, le=100, description="返回条数"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
+    await _refresh_notifications(current_account, current_user)
     result = await notification_service.list_events(
         current_account.id,
         status=_enum_value(status) if status else None,
@@ -43,8 +70,10 @@ async def list_notifications(
 
 @router.get("/notifications/summary", response_model=ApiResponse)
 async def get_notification_summary(
+    current_user: AuthenticatedUser = Depends(get_current_user),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
+    await _refresh_notifications(current_account, current_user)
     result = await notification_service.get_summary(current_account.id)
     return ApiResponse(data=result.model_dump(mode="json"))
 
@@ -117,3 +146,18 @@ async def update_notification_settings(
         user_id=current_user.id,
     )
     return ApiResponse(data=result.model_dump(mode="json"))
+
+
+@router.post("/notifications/settings/test-wecom", response_model=ApiResponse)
+async def test_notification_wecom(
+    request: NotificationWecomTestRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
+    success = await notification_service.send_wecom_test_message(
+        current_account.id,
+        account_name=current_account.account_name,
+        user_id=current_user.id,
+        webhook_url=request.webhook_url,
+    )
+    return ApiResponse(data={"success": bool(success)})

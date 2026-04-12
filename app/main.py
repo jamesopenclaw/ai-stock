@@ -4,7 +4,9 @@
 import asyncio
 import uuid
 from contextlib import suppress
+from datetime import datetime, time
 from time import monotonic
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,6 +45,25 @@ app.add_middleware(
 
 _notification_refresh_task: asyncio.Task | None = None
 
+_MARKET_TIMEZONE = ZoneInfo(settings.notification_timezone)
+_TRADING_WINDOWS = (
+    (time(9, 25), time(11, 30)),
+    (time(13, 0), time(15, 0)),
+)
+
+
+def _is_market_monitor_window(now: datetime | None = None) -> bool:
+    if now is None:
+        current = datetime.now(_MARKET_TIMEZONE)
+    elif now.tzinfo is None:
+        current = now.replace(tzinfo=_MARKET_TIMEZONE)
+    else:
+        current = now.astimezone(_MARKET_TIMEZONE)
+    if current.weekday() >= 5:
+        return False
+    current_time = current.time().replace(second=0, microsecond=0)
+    return any(start <= current_time <= end for start, end in _TRADING_WINDOWS)
+
 
 async def _notification_refresh_loop() -> None:
     """后台定时生成通知事件，避免请求路径同步重算。"""
@@ -55,8 +76,11 @@ async def _notification_refresh_loop() -> None:
     while True:
         cycle_started_at = monotonic()
         try:
-            refreshed_accounts = await notification_engine.refresh_active_accounts()
-            logger.debug("通知后台刷新完成 accounts={}", refreshed_accounts)
+            if _is_market_monitor_window():
+                refreshed_accounts = await notification_engine.refresh_active_accounts()
+                logger.debug("通知后台刷新完成 accounts={}", refreshed_accounts)
+            else:
+                logger.debug("当前不在交易监控时段，跳过本轮通知刷新")
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -15,17 +15,21 @@ from app.data.tushare_client import normalize_ts_code
 from app.models.schemas import MarketEnvTag, NotificationPriority, SellSignalTag, StockPoolTag
 from app.models.trading_account import TradingAccount
 from app.services.decision_context import SharedDecisionContext, decision_context_service
-from app.services.decision_flow import decision_flow_service
+from app.services.decision_flow import FullDecisionBundle, decision_flow_service
 from app.services.market_data_gateway import market_data_gateway
 from app.services.notification_service import notification_service
 from app.services.notification_state_service import (
     NotificationStateInput,
     notification_state_service,
 )
+from app.services.review_snapshot import review_snapshot_service
 
 
 class NotificationEngine:
     """基于当前账户状态生成关键通知事件。"""
+
+    NOTIFICATION_CANDIDATE_LIMIT = 100
+    STABLE_STOCK_POOLS_SNAPSHOT_VERSION = 7
 
     MANAGED_EVENT_TYPES = {
         "holding_to_sell",
@@ -77,7 +81,7 @@ class NotificationEngine:
             try:
                 shared_context = await decision_context_service.build_shared_context(
                     resolved_trade_date,
-                    top_gainers=120,
+                    top_gainers=self.NOTIFICATION_CANDIDATE_LIMIT,
                 )
             except Exception as exc:
                 logger.warning(
@@ -114,13 +118,19 @@ class NotificationEngine:
         try:
             bundle = await decision_flow_service.build_full_decision(
                 resolved_trade_date,
-                top_gainers=120,
+                top_gainers=self.NOTIFICATION_CANDIDATE_LIMIT,
                 account_id=account_id,
                 shared_context=shared_context,
             )
         except Exception as exc:
             logger.warning("notification refresh failed account_id={} error={}", account_id, exc)
             return
+
+        await self._sync_stable_snapshot_if_needed(
+            account_id,
+            trade_date=resolved_trade_date,
+            bundle=bundle,
+        )
 
         market_env = bundle.context.market_env
         buy_analysis = bundle.buy_analysis
@@ -161,6 +171,37 @@ class NotificationEngine:
             account_id,
             active_dedupe_keys=active_keys,
             event_types=set(self.MANAGED_EVENT_TYPES),
+        )
+
+    async def _sync_stable_snapshot_if_needed(
+        self,
+        account_id: str,
+        *,
+        trade_date: str,
+        bundle: FullDecisionBundle,
+    ) -> None:
+        if market_data_gateway.should_use_realtime_quote(trade_date):
+            return
+
+        stock_pools = bundle.stock_pools.model_copy(deep=True)
+        stock_pools.resolved_trade_date = bundle.context.resolved_stock_trade_date
+        stock_pools.candidate_data_status = getattr(bundle.context, "candidate_data_status", None)
+        stock_pools.candidate_data_message = getattr(bundle.context, "candidate_data_message", None)
+        stock_pools.sector_scan_trade_date = getattr(bundle.context, "sector_scan_trade_date", None)
+        stock_pools.sector_scan_resolved_trade_date = getattr(bundle.context, "sector_scan_resolved_trade_date", None)
+        stock_pools.snapshot_version = self.STABLE_STOCK_POOLS_SNAPSHOT_VERSION
+        stock_pools.market_env = bundle.context.market_env
+        stock_pools.theme_leaders = list(getattr(bundle.context.sector_scan, "theme_leaders", []) or [])[:3]
+        stock_pools.industry_leaders = list(getattr(bundle.context.sector_scan, "industry_leaders", []) or [])[:3]
+        stock_pools.mainline_sectors = list(getattr(bundle.context.sector_scan, "mainline_sectors", []) or [])[:5]
+        stock_pools.sub_mainline_sectors = list(getattr(bundle.context.sector_scan, "sub_mainline_sectors", []) or [])[:3]
+        stock_pools.snapshot_status_message = None
+
+        await review_snapshot_service.save_stock_pools_page_snapshot_safe(
+            trade_date,
+            self.NOTIFICATION_CANDIDATE_LIMIT,
+            stock_pools,
+            account_id=account_id,
         )
 
     async def _sync_market_event(self, account_id, *, user_id, trade_date, market_env, active_keys: set[str]) -> None:

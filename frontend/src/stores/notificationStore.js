@@ -17,6 +17,7 @@ const createDefaultSummary = () => ({
 const createDefaultSettings = () => ({
   in_app_enabled: true,
   wecom_enabled: false,
+  wecom_webhook_url: '',
   rules: {},
   quiet_windows: [],
 })
@@ -192,6 +193,7 @@ const loadSettings = async ({ force = false } = {}) => {
       state.settings = {
         in_app_enabled: Boolean(payload.in_app_enabled),
         wecom_enabled: Boolean(payload.wecom_enabled),
+        wecom_webhook_url: payload.wecom_webhook_url || '',
         rules: { ...(payload.rules || {}) },
         quiet_windows: Array.isArray(payload.quiet_windows) ? [...payload.quiet_windows] : [],
       }
@@ -213,6 +215,7 @@ const updateSettings = async (payload) => {
   state.settings = {
     in_app_enabled: Boolean(data.in_app_enabled),
     wecom_enabled: Boolean(data.wecom_enabled),
+    wecom_webhook_url: data.wecom_webhook_url || '',
     rules: { ...(data.rules || {}) },
     quiet_windows: Array.isArray(data.quiet_windows) ? [...data.quiet_windows] : [],
   }
@@ -220,6 +223,12 @@ const updateSettings = async (payload) => {
   invalidateLists()
   await loadSummary({ force: true })
   return state.settings
+}
+
+const testWecom = async (payload = {}) => {
+  ensureAccountScope()
+  const res = await notificationApi.testWecom(payload)
+  return Boolean(res.data?.data?.success)
 }
 
 const markRead = async (eventId) => {
@@ -251,6 +260,7 @@ export const useNotificationStore = () => ({
   loadList,
   loadSettings,
   updateSettings,
+  testWecom,
   markRead,
   markAllRead,
   snooze,

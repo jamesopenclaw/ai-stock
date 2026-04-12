@@ -22,6 +22,20 @@
           <el-form-item label="企业微信提醒">
             <el-switch v-model="settings.wecom_enabled" active-text="开启" inactive-text="关闭" />
           </el-form-item>
+          <el-form-item label="企业微信机器人 URL">
+            <el-input
+              v-model="settings.wecom_webhook_url"
+              type="textarea"
+              :rows="2"
+              placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+            />
+            <div class="wecom-webhook-hint">
+              该 URL 只对当前交易账号生效。开启企业微信提醒后必须填写合法的机器人 Webhook。
+            </div>
+            <div class="wecom-webhook-actions">
+              <el-button size="small" :loading="testingWecom" @click="handleTestWecom">测试发送</el-button>
+            </div>
+          </el-form-item>
           <el-form-item label="提醒级别">
             <div class="rule-grid">
               <div v-for="rule in ruleOptions" :key="rule.key" class="rule-row">
@@ -159,6 +173,7 @@ const router = useRouter()
 const loading = ref(false)
 const settingsLoading = ref(false)
 const settingsSaving = ref(false)
+const testingWecom = ref(false)
 const activeTab = ref('pending')
 const items = ref([])
 const notificationStore = useNotificationStore()
@@ -169,6 +184,7 @@ const filters = reactive({
 const settings = reactive({
   in_app_enabled: true,
   wecom_enabled: false,
+  wecom_webhook_url: '',
   rules: {},
   quiet_windows: [],
 })
@@ -177,7 +193,7 @@ const ruleOptions = [
   { key: 'holding_to_sell', label: '持仓转卖出' },
   { key: 'holding_to_reduce', label: '持仓转减仓' },
   { key: 'candidate_to_executable', label: '候选转可执行' },
-  { key: 'candidate_near_trigger', label: '接近触发位' },
+  { key: 'candidate_near_trigger', label: '接近主买位' },
   { key: 'radar_candidate_near_execution', label: '雷达接近执行位' },
   { key: 'market_env_downgraded', label: '市场转防守' },
   { key: 'realtime_source_degraded', label: '实时源降级' },
@@ -217,6 +233,7 @@ const loadSettings = async () => {
     const payload = await notificationStore.loadSettings()
     settings.in_app_enabled = Boolean(payload.in_app_enabled)
     settings.wecom_enabled = Boolean(payload.wecom_enabled)
+    settings.wecom_webhook_url = payload.wecom_webhook_url || ''
     settings.rules = { ...payload.rules }
     settings.quiet_windows = Array.isArray(payload.quiet_windows) ? [...payload.quiet_windows] : []
   } catch (error) {
@@ -230,9 +247,14 @@ const loadSettings = async () => {
 const saveSettings = async () => {
   settingsSaving.value = true
   try {
+    if (settings.wecom_enabled && !String(settings.wecom_webhook_url || '').trim()) {
+      ElMessage.error('开启企业微信提醒前，请先填写当前账号的机器人 Webhook URL')
+      return
+    }
     await notificationStore.updateSettings({
       in_app_enabled: settings.in_app_enabled,
       wecom_enabled: settings.wecom_enabled,
+      wecom_webhook_url: settings.wecom_webhook_url,
       rules: settings.rules,
       quiet_windows: settings.quiet_windows,
     })
@@ -242,6 +264,30 @@ const saveSettings = async () => {
     ElMessage.error(message)
   } finally {
     settingsSaving.value = false
+  }
+}
+
+const handleTestWecom = async () => {
+  testingWecom.value = true
+  try {
+    const webhookUrl = String(settings.wecom_webhook_url || '').trim()
+    if (!webhookUrl) {
+      ElMessage.error('请先填写要测试的企业微信机器人 Webhook URL')
+      return
+    }
+    const success = await notificationStore.testWecom({
+      webhook_url: webhookUrl,
+    })
+    if (success) {
+      ElMessage.success('测试消息已发送，请检查对应企业微信群')
+      return
+    }
+    ElMessage.error('测试消息发送失败，请检查机器人配置')
+  } catch (error) {
+    const message = error?.response?.data?.message || error?.message || '测试消息发送失败'
+    ElMessage.error(message)
+  } finally {
+    testingWecom.value = false
   }
 }
 
@@ -497,5 +543,16 @@ watch(
   font-size: 12px;
   line-height: 1.6;
   color: var(--color-text-sec);
+}
+
+.wecom-webhook-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-sec);
+}
+
+.wecom-webhook-actions {
+  margin-top: 10px;
 }
 </style>

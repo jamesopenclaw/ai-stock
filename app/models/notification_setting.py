@@ -19,6 +19,7 @@ class NotificationSetting(Base):
     user_id = Column(String(36), nullable=True, index=True)
     in_app_enabled = Column(Boolean, nullable=False, default=True)
     wecom_enabled = Column(Boolean, nullable=False, default=False)
+    wecom_webhook_url = Column(String(500), nullable=False, default="")
     rules_json = Column(JSON, nullable=False, default=dict)
     quiet_windows = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)

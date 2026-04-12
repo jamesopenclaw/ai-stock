@@ -1,7 +1,7 @@
 """
 数据模型 - Pydantic schemas
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List
 from datetime import date, datetime
 from enum import Enum
@@ -1343,11 +1343,44 @@ class NotificationSnoozeRequest(BaseModel):
     minutes: int = Field(..., ge=5, le=480)
 
 
+class NotificationWecomTestRequest(BaseModel):
+    webhook_url: str = ""
+
+    @field_validator("webhook_url", mode="before")
+    @classmethod
+    def _normalize_webhook_url(cls, value):
+        if value is None:
+            return ""
+        return str(value).strip()
+
+
 class NotificationSettingsPayload(BaseModel):
     in_app_enabled: bool = True
     wecom_enabled: bool = False
+    wecom_webhook_url: str = ""
     rules: dict = Field(default_factory=dict)
     quiet_windows: List[dict] = Field(default_factory=list)
+
+    @field_validator("wecom_webhook_url", mode="before")
+    @classmethod
+    def _normalize_wecom_webhook_url(cls, value):
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    @model_validator(mode="after")
+    def _validate_wecom_settings(self):
+        webhook_url = str(self.wecom_webhook_url or "").strip()
+        if self.wecom_enabled and not webhook_url:
+            raise ValueError("开启企业微信提醒时必须填写机器人 Webhook URL")
+        if webhook_url:
+            normalized = webhook_url.lower()
+            if not (
+                normalized.startswith("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?")
+                or normalized.startswith("https://qyapi.weixin.qq.com/cgi-bin/webhook/send")
+            ):
+                raise ValueError("企业微信机器人 Webhook URL 格式不正确")
+        return self
 
 
 # ========== 通用响应 ==========
