@@ -885,7 +885,7 @@ class BuyPointSopService:
         if (
             buy_point.buy_signal_tag == BuySignalTag.CAN_BUY
             and target_stock.stock_tradeability_tag == StockTradeabilityTag.TRADABLE
-            and market_env.market_env_tag == MarketEnvTag.ATTACK
+            and self._allow_daily_level_a(market_env)
             and stage not in {"高潮", "退潮"}
             and not is_near_pressure
             and not distorted
@@ -926,6 +926,12 @@ class BuyPointSopService:
             risk_items=risk_items,
             reference_levels=reference_levels,
         )
+
+    def _allow_daily_level_a(self, market_env) -> bool:
+        if getattr(market_env, "market_env_tag", None) == MarketEnvTag.ATTACK:
+            return True
+        market_profile = str(getattr(market_env, "market_env_profile", "") or "")
+        return market_profile == "中性偏强"
 
     def _build_intraday_judgement(
         self,

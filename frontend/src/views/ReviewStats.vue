@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <div class="card-header-title">
-            <span>复盘统计</span>
+            <span>明日复盘决策</span>
             <span class="header-date">最近 {{ limitDays }} 个交易日</span>
           </div>
           <div class="header-actions">
@@ -40,90 +40,165 @@
             </div>
           </div>
 
-          <section class="overview-panel">
-            <div class="overview-copy">
-              <div class="overview-kicker">复盘结论</div>
-              <div class="overview-title">{{ headlineTitle }}</div>
-              <div class="overview-desc">{{ headlineDesc }}</div>
-              <div class="overview-legend">类型 = 来源，分层 = 结构。先看动作，再看证据。</div>
+          <section class="hero-panel">
+            <div class="hero-copy">
+              <div class="overview-kicker">明日结论</div>
+              <div class="hero-title">{{ headlineTitle }}</div>
+              <div class="hero-desc">{{ headlineDesc }}</div>
+              <div class="hero-chip-row">
+                <span :class="['hero-chip', `hero-chip-${confidenceMeta.tone}`]">
+                  结论置信度：{{ confidenceMeta.label }}
+                </span>
+                <span class="hero-chip hero-chip-muted">{{ sortBasisText }}</span>
+              </div>
             </div>
 
-            <div class="overview-stats">
-              <article v-for="item in overviewStats" :key="item.label" class="stat-card">
-                <div class="stat-label">{{ item.label }}</div>
-                <div class="stat-value">{{ item.value }}</div>
-              </article>
+            <div class="hero-stats">
+              <div class="overview-stats">
+                <article v-for="item in overviewStats" :key="item.label" class="stat-card">
+                  <div class="stat-label">{{ item.label }}</div>
+                  <div class="stat-value">{{ item.value }}</div>
+                </article>
+              </div>
+              <div class="stats-footnote">{{ overviewStatsFootnote }}</div>
             </div>
           </section>
 
-          <section class="focus-grid">
-            <article class="focus-card focus-card-good">
-              <div class="focus-kicker">当前优先</div>
-              <div class="focus-title">{{ bestSignal?.shortLabel || '暂无明确优先组' }}</div>
-              <div class="focus-copy">{{ bestSignalSummary }}</div>
-              <div v-if="bestSignal" class="focus-metrics">
-                <span>5日均值 {{ formatPctValue(bestSignal.avg_return_5d) }}</span>
-                <span>5日胜率 {{ formatPctValue(bestSignal.win_rate_5d, true) }}</span>
-                <span>样本 {{ bestSignal.count }}</span>
+          <section class="decision-grid">
+            <article class="decision-card">
+              <div class="section-mini">明日动作</div>
+              <div class="decision-list">
+                <div v-for="item in decisionItems" :key="item.label" class="decision-item">
+                  <div class="decision-label">{{ item.label }}</div>
+                  <div class="decision-text">{{ item.text }}</div>
+                  <div class="decision-note">{{ item.note }}</div>
+                </div>
               </div>
             </article>
 
-            <article class="focus-card focus-card-bad">
-              <div class="focus-kicker">当前降权</div>
-              <div class="focus-title">{{ weakSignal?.shortLabel || '暂无明确降权组' }}</div>
-              <div class="focus-copy">{{ weakSignalSummary }}</div>
-              <div v-if="weakSignal" class="focus-metrics">
-                <span>5日均值 {{ formatPctValue(weakSignal.avg_return_5d) }}</span>
-                <span>5日胜率 {{ formatPctValue(weakSignal.win_rate_5d, true) }}</span>
-                <span>样本 {{ weakSignal.count }}</span>
+            <article class="decision-card">
+              <div class="section-mini">判断依据</div>
+              <div class="signal-stack">
+                <div class="signal-brief signal-brief-good">
+                  <div class="signal-label">优先结构</div>
+                  <div class="signal-title">{{ bestSignal?.shortLabel || '暂无明确优先组' }}</div>
+                  <div class="signal-copy">{{ bestSignalSummary }}</div>
+                  <div v-if="bestSignal" class="signal-metrics">
+                    <span>样本 {{ bestSignal.count }}</span>
+                    <span>已结算 {{ resolvedCount(bestSignal) }}</span>
+                    <span>5日胜率 {{ formatPctValue(bestSignal.win_rate_5d, true) }}</span>
+                  </div>
+                </div>
+
+                <div class="signal-brief signal-brief-bad">
+                  <div class="signal-label">谨慎结构</div>
+                  <div class="signal-title">{{ weakSignal?.shortLabel || '暂无明确谨慎组' }}</div>
+                  <div class="signal-copy">{{ weakSignalSummary }}</div>
+                  <div v-if="weakSignal" class="signal-metrics">
+                    <span>样本 {{ weakSignal.count }}</span>
+                    <span>已结算 {{ resolvedCount(weakSignal) }}</span>
+                    <span>5日胜率 {{ formatPctValue(weakSignal.win_rate_5d, true) }}</span>
+                  </div>
+                </div>
               </div>
             </article>
 
-            <article class="focus-card focus-card-playbook">
-              <div class="focus-kicker">明日动作</div>
-              <div class="playbook-list">
-                <div v-for="item in actionItems" :key="item.label" class="playbook-item">
-                  <span class="playbook-label">{{ item.label }}</span>
-                  <span class="playbook-text">{{ item.text }}</span>
+            <article class="decision-card">
+              <div class="section-mini">数据完整性</div>
+              <div class="integrity-main">{{ integrityTitle }}</div>
+              <div class="integrity-copy">{{ integrityDesc }}</div>
+              <div class="integrity-list">
+                <div v-for="item in integrityItems" :key="item.label" class="integrity-item">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
                 </div>
               </div>
             </article>
           </section>
 
-          <section class="shortcut-panel">
+          <section class="compare-panel">
             <div class="section-head">
               <div>
-                <div class="section-title">来源捷径</div>
-                <div class="section-desc">先确认这条结论来自三池、买点还是加仓，再回到源页面处理。</div>
+                <div class="section-title">为什么是这个结论</div>
+                <div class="section-desc">推荐不是只看收益均值，更看样本厚度、已结算比例和稳定性。</div>
               </div>
             </div>
 
-            <div class="shortcut-grid">
-              <article
-                v-for="item in sourceGuideCards"
-                :key="item.key"
-                :class="['shortcut-card', `shortcut-card-${item.tone}`]"
-              >
-                <div class="shortcut-name">{{ item.name }}</div>
-                <div class="shortcut-copy">{{ item.copy }}</div>
-                <div class="shortcut-chip-row">
-                  <span class="shortcut-chip">{{ item.useFor }}</span>
-                  <span class="shortcut-chip">{{ item.hint }}</span>
-                </div>
-                <el-button size="small" @click="openSourceGroup(item.snapshotType)">
-                  {{ item.actionText }}
-                </el-button>
-              </article>
-            </div>
+            <el-table :data="compareRows" style="width: 100%">
+              <el-table-column label="建议" width="96">
+                <template #default="{ row }">
+                  <span :class="['table-judgement', `table-judgement-${rowRecommendation(row).tone}`]">
+                    {{ rowRecommendation(row).label }}
+                  </span>
+                </template>
+              </el-table-column>
+
+              <el-table-column label="结构" min-width="260">
+                <template #default="{ row }">
+                  <div class="structure-cell">
+                    <div class="structure-main">
+                      <strong>{{ row.snapshot_type_label }}</strong>
+                      <span class="structure-divider">/</span>
+                      <span>{{ row.candidate_bucket_tag || '未分层' }}</span>
+                    </div>
+                    <div class="structure-hint">{{ bucketHint(row.candidate_bucket_tag) }}</div>
+                  </div>
+                </template>
+              </el-table-column>
+
+              <el-table-column label="样本" width="100" prop="count" />
+
+              <el-table-column label="已结算" width="100">
+                <template #default="{ row }">
+                  <span class="resolved-text">{{ resolvedCount(row) }}</span>
+                </template>
+              </el-table-column>
+
+              <el-table-column label="收益" min-width="190">
+                <template #default="{ row }">
+                  <div class="metric-stack">
+                    <div v-for="item in metricItems(row, 'return')" :key="`${row.shortLabel}-${item.label}-return`" class="metric-line">
+                      <span>{{ item.label }}</span>
+                      <strong>{{ item.value }}</strong>
+                    </div>
+                  </div>
+                </template>
+              </el-table-column>
+
+              <el-table-column label="胜率" min-width="190">
+                <template #default="{ row }">
+                  <div class="metric-stack">
+                    <div v-for="item in metricItems(row, 'win')" :key="`${row.shortLabel}-${item.label}-win`" class="metric-line">
+                      <span>{{ item.label }}</span>
+                      <strong>{{ item.value }}</strong>
+                    </div>
+                  </div>
+                </template>
+              </el-table-column>
+
+              <el-table-column label="稳定性" width="92">
+                <template #default="{ row }">
+                  <span :class="['stability-badge', `stability-badge-${stabilityMeta(row).tone}`]">
+                    {{ stabilityMeta(row).label }}
+                  </span>
+                </template>
+              </el-table-column>
+
+              <el-table-column label="结论说明" min-width="280">
+                <template #default="{ row }">
+                  <div class="summary-copy">{{ rowReason(row) }}</div>
+                </template>
+              </el-table-column>
+            </el-table>
           </section>
 
           <section class="evidence-panel">
             <div class="section-head">
               <div>
                 <div class="section-title">结构证据</div>
-                <div class="section-desc">一次只看一组来源，避免把开仓、加仓和三池样本混着读。</div>
+                <div class="section-desc">证据层只按来源分组，避免把开仓、加仓和三池样本混着读。</div>
               </div>
-              <div class="evidence-tip">先看建议，再看样本和 1/3/5 日表现。</div>
+              <div class="evidence-tip">先看首页结论，再回看来源和样本细节。</div>
             </div>
 
             <el-tabs v-model="activeEvidenceGroup" class="evidence-tabs">
@@ -204,6 +279,33 @@
               </el-tab-pane>
             </el-tabs>
           </section>
+
+          <section class="shortcut-panel">
+            <div class="section-head">
+              <div>
+                <div class="section-title">相关来源</div>
+                <div class="section-desc">首页先给结论，只有需要回到原始池子核对时，再从这里跳转。</div>
+              </div>
+            </div>
+
+            <div class="shortcut-grid">
+              <article
+                v-for="item in sourceGuideCards"
+                :key="item.key"
+                :class="['shortcut-card', `shortcut-card-${item.tone}`]"
+              >
+                <div class="shortcut-name">{{ item.name }}</div>
+                <div class="shortcut-copy">{{ item.copy }}</div>
+                <div class="shortcut-chip-row">
+                  <span class="shortcut-chip">{{ item.useFor }}</span>
+                  <span class="shortcut-chip">{{ item.hint }}</span>
+                </div>
+                <el-button size="small" @click="openSourceGroup(item.snapshotType)">
+                  {{ item.actionText }}
+                </el-button>
+              </article>
+            </div>
+          </section>
         </template>
       </template>
     </el-card>
@@ -222,6 +324,7 @@ const limitDays = ref(10)
 const reviewData = ref(null)
 const activeEvidenceGroup = ref('open')
 const REVIEW_STATS_TIMEOUT = 90000
+const sortBasisText = '排序依据：样本量 > 已结算比例 > 5日胜率 > 近期收益'
 const router = useRouter()
 
 const SNAPSHOT_TYPE_LABELS = {
@@ -321,7 +424,16 @@ const metricItems = (row, type) => {
   }))
 }
 
-const resolvedCount = (row) => Number(row.resolved_5d_count || row.resolved_3d_count || row.resolved_1d_count || 0)
+const resolvedCount = (row) => Number(row?.resolved_5d_count || row?.resolved_3d_count || row?.resolved_1d_count || 0)
+
+const stabilityMeta = (row) => {
+  const resolved = Number(row?.resolved_5d_count || 0)
+  const winRate = Number(row?.win_rate_5d || 0)
+  if (resolved >= 20 && winRate >= 80) return { label: '高', tone: 'high' }
+  if (resolved >= 8 && winRate >= 60) return { label: '中', tone: 'mid' }
+  if (resolved > 0) return { label: '低', tone: 'low' }
+  return { label: '待补', tone: 'pending' }
+}
 
 const rankedRows = (rows) => (
   rows
@@ -358,7 +470,6 @@ const evidenceGroups = computed(() => {
     groups.push({
       key: 'open',
       tabLabel: '开仓',
-      title: '开仓证据',
       desc: '只看买点里的可买和观察，判断第一次出手该优先谁。',
       count: openRows.value.length,
       bestLabel: `当前最强：${summarizeGroupBest(openRows.value, '暂无')}`,
@@ -369,7 +480,6 @@ const evidenceGroups = computed(() => {
     groups.push({
       key: 'add',
       tabLabel: '加仓',
-      title: '加仓证据',
       desc: '只看已有底仓后的扩仓质量，不和开仓信号混排。',
       count: addRows.value.length,
       bestLabel: `当前最强：${summarizeGroupBest(addRows.value, '暂无')}`,
@@ -380,7 +490,6 @@ const evidenceGroups = computed(() => {
     groups.push({
       key: 'pool',
       tabLabel: '三池',
-      title: '三池证据',
       desc: '只看观察池和可参与池，判断缩小范围这一步有没有价值。',
       count: poolRows.value.length,
       bestLabel: `当前最强：${summarizeGroupBest(poolRows.value, '暂无')}`,
@@ -399,79 +508,192 @@ watchEffect(() => {
 
 const bestSignal = computed(() => actionableRows.value[0] || null)
 const weakSignal = computed(() => {
-  const candidates = [...actionableRows.value].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))
-  return candidates[0] || null
+  const candidates = actionableRows.value.filter((row) => row.shortLabel !== bestSignal.value?.shortLabel)
+  if (!candidates.length) return null
+  return [...candidates].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))[0]
 })
-const watchSignal = computed(() => actionableRows.value.find((row) => row.snapshot_type === 'buy_observe' || row.snapshot_type === 'pool_market') || null)
+
+const watchSignal = computed(() => (
+  displayRows.value.find((row) => (
+    row.shortLabel !== bestSignal.value?.shortLabel
+      && row.shortLabel !== weakSignal.value?.shortLabel
+      && (
+        row.snapshot_type === 'buy_available'
+        || row.snapshot_type === 'buy_observe'
+        || String(row.snapshot_type || '').startsWith('pool_')
+      )
+  )) || null
+))
+
+const totalResolved5d = computed(() => (
+  displayRows.value.reduce((sum, row) => sum + Number(row.resolved_5d_count || 0), 0)
+))
+
+const pending5dCount = computed(() => Number(reviewData.value?.pending_5d_count || 0))
+
+const resolvedCoverage = computed(() => {
+  const resolved = totalResolved5d.value
+  const pending = pending5dCount.value
+  const total = resolved + pending
+  return total > 0 ? resolved / total : 1
+})
+
+const resolvedCoverageText = computed(() => `${(resolvedCoverage.value * 100).toFixed(0)}%`)
+
+const confidenceMeta = computed(() => {
+  if (!bestSignal.value) {
+    return {
+      label: '低',
+      tone: 'low',
+      copy: '当前已结算样本偏少，先沿用原有规则，避免把小样本差异当成硬结论。'
+    }
+  }
+  const bestResolved = resolvedCount(bestSignal.value)
+  const qualityGap = actionableRows.value[1]
+    ? Number(bestSignal.value.qualityScore || 0) - Number(actionableRows.value[1].qualityScore || 0)
+    : Number(bestSignal.value.qualityScore || 0)
+
+  if (bestResolved >= 20 && resolvedCoverage.value >= 0.55 && qualityGap >= 0.8) {
+    return {
+      label: '高',
+      tone: 'high',
+      copy: '已结算样本足够厚，优先结构和其他结构已经拉开明显差距，可作为强排序依据。'
+    }
+  }
+  if (bestResolved >= 10 && resolvedCoverage.value >= 0.25) {
+    return {
+      label: '中',
+      tone: 'mid',
+      copy: '当前已有可用差异，但待补收益仍不少，更适合拿来排优先级，不适合下过硬结论。'
+    }
+  }
+  return {
+    label: '低',
+    tone: 'low',
+    copy: '优先结构已经出现，但成熟样本还不够厚，建议只做轻度排序参考。'
+  }
+})
 
 const headlineTitle = computed(() => {
   if (bestSignal.value && weakSignal.value) {
-    return `${bestSignal.value.shortLabel} 优先，${weakSignal.value.shortLabel} 降权`
+    return `优先看：${bestSignal.value.shortLabel}；谨慎做：${weakSignal.value.shortLabel}`
   }
-  if (bestSignal.value) return `当前优先看 ${bestSignal.value.shortLabel}`
-  return '当前样本还在积累，先按原规则执行'
+  if (bestSignal.value) return `优先看：${bestSignal.value.shortLabel}`
+  return '当前样本仍在积累，先按原规则执行'
 })
 
 const headlineDesc = computed(() => {
   if (!actionableRows.value.length) {
-    return '先积累更多已结算样本，再用这页去调结构优先级。'
+    return '这页只在已结算样本足够时帮助排序，当前先继续积累样本，不直接替代盘中判断。'
   }
-  return '这页只回答哪类结构最近更值得信，不直接替代盘中的触发确认。'
+  return '这页只回答明天先看什么结构、谨慎什么结构，不替代盘中的触发确认和失效判断。'
 })
 
 const overviewStats = computed(() => ([
-  { label: '覆盖交易日', value: reviewData.value?.trade_dates?.length || 0 },
-  { label: '快照总数', value: reviewData.value?.snapshot_count || 0 },
+  { label: '观察交易日', value: reviewData.value?.trade_dates?.length || 0 },
+  { label: '候选快照', value: reviewData.value?.snapshot_count || 0 },
   { label: '有效结构', value: actionableRows.value.length },
-  { label: '待补 5 日', value: reviewData.value?.pending_5d_count || 0 }
+  { label: '已结算 / 待补', value: `${totalResolved5d.value} / ${pending5dCount.value}` }
 ]))
+
+const overviewStatsFootnote = computed(() => '说明：待补收益按 1/3/5 日窗口统计，与快照总数不是同一统计口径。')
 
 const bestSignalSummary = computed(() => {
   if (!bestSignal.value) return '当前没有形成足够稳定的优先组。'
-  return '同等条件下先给这类结构更高关注度，再回到触发价和失效位做确认。'
+  return '样本更厚，近期表现更稳，适合作为明日优先消耗注意力的结构。'
 })
 
 const weakSignalSummary = computed(() => {
-  if (!weakSignal.value) return '当前没有形成明确需要降权的结构。'
-  return '这类结构短期性价比偏弱，除非盘中特别强，否则不要主动提优先级。'
+  if (!weakSignal.value) return '当前没有形成明确需要主动降权的结构。'
+  return '收益均值未必差，但适用环境更窄，盘中确认要求更高，不宜主动提优先级。'
 })
 
-const actionItems = computed(() => ([
+const decisionItems = computed(() => ([
   {
     label: '优先看',
-    text: bestSignal.value ? bestSignal.value.shortLabel : '维持原规则'
+    text: bestSignal.value ? bestSignal.value.shortLabel : '维持原规则',
+    note: bestSignal.value
+      ? (bestSignal.value.candidate_bucket_tag === '强势确认'
+        ? '早盘若继续表现强度，再进入重点确认；未到触发位前不抢先手。'
+        : '先给更高关注度，再回到触发价和失效位做确认。')
+      : '当前没有形成稳定优先组。'
   },
   {
-    label: '先观察',
-    text: watchSignal.value ? watchSignal.value.shortLabel : '观察池继续只做候选'
+    label: '继续观察',
+    text: watchSignal.value ? watchSignal.value.shortLabel : '暂无明确观察候选',
+    note: watchSignal.value
+      ? (String(watchSignal.value.snapshot_type || '').startsWith('pool_')
+        ? '更适合缩小候选范围，不直接替代执行判断。'
+        : '先跟踪，不抢先手，等确认条件补齐后再升级。')
+      : '没有额外需要单列观察的结构。'
   },
   {
-    label: '暂少做',
-    text: weakSignal.value ? weakSignal.value.shortLabel : '没有明显全面回避组'
+    label: '谨慎做',
+    text: weakSignal.value ? weakSignal.value.shortLabel : '暂无明确谨慎组',
+    note: weakSignal.value
+      ? (weakSignal.value.candidate_bucket_tag === '趋势回踩'
+        ? '除非盘中走出明显转强，否则不主动提升优先级。'
+        : '短期性价比偏弱，只有在盘中特别强时才考虑升级。')
+      : '当前没有形成必须主动降权的结构。'
   }
 ]))
 
+const integrityTitle = computed(() => `5日窗口已结算 ${totalResolved5d.value} 条，待补 ${pending5dCount.value} 条`)
+
+const integrityDesc = computed(() => confidenceMeta.value.copy)
+
+const integrityItems = computed(() => ([
+  { label: '已结算占比', value: resolvedCoverageText.value },
+  { label: '有效结构数', value: actionableRows.value.length },
+  { label: '候选快照', value: reviewData.value?.snapshot_count || 0 }
+]))
+
+const compareRows = computed(() => {
+  if (actionableRows.value.length) return actionableRows.value
+  return displayRows.value.slice(0, 5)
+})
+
+const rowReason = (row) => {
+  if (bestSignal.value?.shortLabel === row.shortLabel) {
+    return '样本更厚，近期表现更稳，适合作为明日优先消耗注意力的结构。'
+  }
+  if (weakSignal.value?.shortLabel === row.shortLabel) {
+    return '收益均值不差，但适用环境更窄，需等盘中更强确认，不宜主动提优先级。'
+  }
+  if (Number(row.resolved_5d_count || 0) <= 0) {
+    return '5日窗口仍在补数，当前不作为首页主判断依据。'
+  }
+  if (String(row.snapshot_type || '').startsWith('pool_')) {
+    return '更适合缩小候选范围，不直接替代执行判断。'
+  }
+  if (row.snapshot_type === 'buy_observe') {
+    return '结构可跟踪，但确认条件还不够，适合继续观察。'
+  }
+  return '已进入对比池，可结合盘中强弱决定是否升级。'
+}
+
 const rowRecommendation = (row) => {
   if (bestSignal.value?.shortLabel === row.shortLabel) return { label: '优先看', tone: 'do' }
-  if (weakSignal.value?.shortLabel === row.shortLabel) return { label: '少做', tone: 'avoid' }
+  if (weakSignal.value?.shortLabel === row.shortLabel) return { label: '谨慎做', tone: 'avoid' }
+  if (Number(row.resolved_5d_count || 0) <= 0) return { label: '继续观察', tone: 'watch' }
   if (String(row.snapshot_type || '').startsWith('pool_') || row.snapshot_type === 'buy_observe') {
-    return { label: '观察', tone: 'watch' }
+    return { label: '先观察', tone: 'watch' }
   }
-  return { label: '对比', tone: 'neutral' }
+  return { label: '对比看', tone: 'neutral' }
 }
 
 const reviewPendingTip = computed(() => {
   const pending1d = Number(reviewData.value?.pending_1d_count || 0)
   const pending3d = Number(reviewData.value?.pending_3d_count || 0)
-  const pending5d = Number(reviewData.value?.pending_5d_count || 0)
+  const pending5d = pending5dCount.value
   if (!pending1d && !pending3d && !pending5d) return ''
-  return `待补收益：1日 ${pending1d} 条，3日 ${pending3d} 条，5日 ${pending5d} 条。`
+  return `数据完整性：1日待补 ${pending1d} 条，3日待补 ${pending3d} 条，5日待补 ${pending5d} 条，结论仍可能随补数变化。`
 })
 
 const hasPendingOutcomes = computed(() => {
   return Number(reviewData.value?.pending_1d_count || 0) > 0
     || Number(reviewData.value?.pending_3d_count || 0) > 0
-    || Number(reviewData.value?.pending_5d_count || 0) > 0
+    || pending5dCount.value > 0
 })
 
 const loadData = async ({ refresh = false, refreshOutcomes = false, actionLabel = '' } = {}) => {
@@ -583,55 +805,96 @@ onMounted(() => {
   color: var(--color-text-sec);
 }
 
-.overview-panel {
+.hero-panel {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
   gap: 18px;
   margin-bottom: 18px;
 }
 
-.overview-copy {
+.hero-copy,
+.decision-card,
+.compare-panel,
+.shortcut-panel,
+.evidence-panel {
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.04));
+}
+
+.hero-copy {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   padding: 24px;
-  border-radius: 20px;
   background:
     radial-gradient(circle at top right, rgba(255, 208, 107, 0.18), transparent 34%),
     radial-gradient(circle at bottom left, rgba(255, 129, 88, 0.12), transparent 30%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.06));
-  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.overview-kicker {
+.overview-kicker,
+.section-mini,
+.decision-label,
+.signal-label {
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-sec);
 }
 
-.overview-title {
+.hero-title {
   font-size: 30px;
-  line-height: 1.25;
+  line-height: 1.3;
   font-weight: 800;
   color: var(--color-text-pri);
 }
 
-.overview-desc {
+.hero-desc {
+  max-width: 48ch;
   color: var(--color-text-main);
   line-height: 1.65;
-  max-width: 48ch;
 }
 
-.overview-legend {
+.hero-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hero-chip {
   display: inline-flex;
   align-items: center;
-  width: fit-content;
   padding: 8px 12px;
   border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hero-chip-high {
+  background: rgba(84, 210, 164, 0.12);
+  color: #76efc2;
+}
+
+.hero-chip-mid {
+  background: rgba(255, 196, 64, 0.12);
+  color: #ffd277;
+}
+
+.hero-chip-low {
+  background: rgba(255, 120, 120, 0.12);
+  color: #ff9b9b;
+}
+
+.hero-chip-muted {
   background: rgba(17, 24, 39, 0.26);
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--color-text-sec);
-  font-size: 12px;
+  font-weight: 500;
+}
+
+.hero-stats {
+  display: grid;
+  gap: 12px;
 }
 
 .overview-stats {
@@ -660,93 +923,102 @@ onMounted(() => {
   color: var(--color-text-pri);
 }
 
-.focus-grid {
+.stats-footnote {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-sec);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.decision-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
 
-.focus-card {
+.decision-card {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   padding: 18px;
-  border-radius: 16px;
-  border: 1px solid var(--color-border);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.05));
 }
 
-.focus-card-good {
-  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.12);
+.decision-list,
+.signal-stack,
+.integrity-list {
+  display: grid;
+  gap: 12px;
 }
 
-.focus-card-bad {
-  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.12);
+.decision-item,
+.signal-brief,
+.integrity-item {
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.focus-card-playbook {
-  box-shadow: inset 0 0 0 1px rgba(255, 208, 107, 0.16);
-}
-
-.focus-kicker {
-  font-size: 12px;
-  letter-spacing: 0.06em;
-  color: var(--color-text-sec);
-}
-
-.focus-title {
+.decision-text,
+.signal-title,
+.integrity-main {
+  margin-top: 6px;
   font-size: 20px;
   line-height: 1.35;
   font-weight: 800;
   color: var(--color-text-pri);
 }
 
-.focus-copy {
+.decision-note,
+.signal-copy,
+.integrity-copy,
+.summary-copy {
+  margin-top: 6px;
   color: var(--color-text-main);
   line-height: 1.6;
 }
 
-.focus-metrics {
+.signal-brief-good {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.12);
+}
+
+.signal-brief-bad {
+  box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.12);
+}
+
+.signal-metrics {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  margin-top: 10px;
   color: var(--color-text-sec);
   font-size: 12px;
 }
 
-.playbook-list {
-  display: grid;
-  gap: 10px;
+.integrity-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
 }
 
-.playbook-item {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.playbook-label {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.integrity-item span {
   color: var(--color-text-sec);
+  font-size: 13px;
 }
 
-.playbook-text {
+.integrity-item strong,
+.resolved-text {
   color: var(--color-text-pri);
-  line-height: 1.45;
-  font-weight: 700;
+  font-weight: 800;
 }
 
+.compare-panel,
 .shortcut-panel,
 .evidence-panel {
   margin-bottom: 18px;
   padding: 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.04));
 }
 
 .section-head {
@@ -814,26 +1086,29 @@ onMounted(() => {
   line-height: 1.55;
 }
 
-.shortcut-chip-row {
+.shortcut-chip-row,
+.structure-tags,
+.group-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.shortcut-chip {
+.shortcut-chip,
+.structure-tag,
+.group-summary-badge,
+.evidence-tip,
+.stability-badge {
   padding: 5px 9px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--color-text-sec);
   font-size: 11px;
 }
 
+.shortcut-chip,
+.structure-tag,
 .evidence-tip {
-  padding: 8px 12px;
-  border-radius: 999px;
   background: rgba(255, 255, 255, 0.05);
   color: var(--color-text-sec);
-  font-size: 12px;
 }
 
 .evidence-tabs :deep(.el-tabs__header) {
@@ -841,19 +1116,13 @@ onMounted(() => {
 }
 
 .group-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
   align-items: center;
   margin-bottom: 12px;
 }
 
 .group-summary-badge {
-  padding: 6px 10px;
-  border-radius: 999px;
   background: rgba(255, 208, 107, 0.14);
   color: var(--color-text-pri);
-  font-size: 12px;
   font-weight: 700;
 }
 
@@ -893,6 +1162,26 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.stability-badge-high {
+  background: rgba(84, 210, 164, 0.12);
+  color: #76efc2;
+}
+
+.stability-badge-mid {
+  background: rgba(255, 196, 64, 0.12);
+  color: #ffd277;
+}
+
+.stability-badge-low {
+  background: rgba(255, 120, 120, 0.12);
+  color: #ff9b9b;
+}
+
+.stability-badge-pending {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-sec);
+}
+
 .structure-cell {
   display: grid;
   gap: 6px;
@@ -914,20 +1203,6 @@ onMounted(() => {
   color: var(--color-text-sec);
   font-size: 12px;
   line-height: 1.5;
-}
-
-.structure-tags {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.structure-tag {
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--color-text-sec);
-  font-size: 11px;
 }
 
 .sample-cell {
@@ -968,13 +1243,13 @@ onMounted(() => {
 }
 
 @media (max-width: 1280px) {
-  .overview-panel,
-  .focus-grid,
+  .hero-panel,
+  .decision-grid,
   .shortcut-grid {
     grid-template-columns: 1fr;
   }
 
-  .overview-title {
+  .hero-title {
     font-size: 26px;
   }
 }
@@ -992,6 +1267,12 @@ onMounted(() => {
 
   .header-actions {
     width: 100%;
+  }
+
+  .decision-text,
+  .signal-title,
+  .integrity-main {
+    font-size: 18px;
   }
 }
 </style>

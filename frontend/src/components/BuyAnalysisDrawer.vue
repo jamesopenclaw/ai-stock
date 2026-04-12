@@ -44,39 +44,43 @@
               {{ execution?.action || '等' }}
             </div>
             <div class="overview-copy">
-              <div class="overview-title">{{ overviewTitle }}</div>
-              <div class="overview-desc">{{ overviewDesc }}</div>
+              <div class="overview-title">{{ actionHeadline }}</div>
+              <div class="overview-desc">{{ execution?.reason || '-' }}</div>
               <div class="overview-conclusion">
                 {{ positionAdvice?.suggestion || '-' }}：{{ positionAdvice?.reason || '-' }}
               </div>
             </div>
           </div>
 
-          <div class="overview-grid">
-            <div class="summary-card">
-              <span class="summary-label">最新价</span>
-              <strong class="summary-value">{{ displayCurrentPrice }}</strong>
-              <span class="summary-tip" :class="currentChangeClass">{{ displayCurrentChangePct }}</span>
+          <div class="overview-tags">
+            <span class="overview-tag">{{ basic?.buy_signal_tag || '-' }}</span>
+            <span class="overview-tag">{{ basic?.buy_display_type || basic?.buy_point_type || '-' }}</span>
+            <span class="overview-tag">日线 {{ daily?.buy_point_level || '-' }}</span>
+            <span class="overview-tag">分时 {{ intraday?.conclusion || '-' }}</span>
+          </div>
+
+          <div class="mode-banner" :class="{ 'mode-banner-live': isRealtimeQuote, 'mode-banner-fallback': !isRealtimeQuote }">
+            <strong>{{ quoteModeTitle }}</strong>
+            <span>{{ quoteModeCopy }}</span>
+          </div>
+
+          <div class="overview-main-grid">
+            <div class="hero-card hero-card-primary" :class="heroCardToneClass">
+              <span class="hero-label">{{ primaryExecutionLabel }}</span>
+              <strong class="hero-value">{{ primaryExecutionValue }}</strong>
+              <span class="hero-note">{{ primaryExecutionCopy }}</span>
             </div>
-            <div class="summary-card">
-              <span class="summary-label">环境</span>
-              <strong class="summary-value">{{ basic?.market_env_tag || '-' }}</strong>
-              <span class="summary-tip">{{ marketEnvSummary }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">日线级别</span>
-              <strong class="summary-value">{{ daily?.buy_point_level || '-' }}</strong>
-              <span class="summary-tip">{{ daily?.current_stage || '-' }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">分时结论</span>
-              <strong class="summary-value">{{ intraday?.conclusion || '-' }}</strong>
-              <span class="summary-tip">{{ intradayStructureSummary }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">仓位</span>
-              <strong class="summary-value">{{ positionAdvice?.suggestion || '-' }}</strong>
-              <span class="summary-tip">{{ accountContext?.position_status || '-' }}</span>
+
+            <div class="overview-grid">
+              <div
+                v-for="card in summaryCards"
+                :key="card.label"
+                class="summary-card"
+              >
+                <span class="summary-label">{{ card.label }}</span>
+                <strong class="summary-value" :class="card.valueClass || ''">{{ card.value }}</strong>
+                <span class="summary-tip">{{ card.tip }}</span>
+              </div>
             </div>
           </div>
 
@@ -88,10 +92,230 @@
             <span>{{ quoteMeta }}</span>
           </div>
         </div>
+        <section class="analysis-section order-plan-section">
+          <div class="section-header-row">
+            <div class="section-header">{{ planSectionTitle }}</div>
+            <div class="order-plan-summary">{{ orderPlanSummary }}</div>
+          </div>
+          <div class="order-plan-lead" :class="`order-plan-lead-${orderPlanLeadTone}`">
+            <strong>{{ orderPlanLeadTitle }}</strong>
+            <span>{{ orderPlanLeadCopy }}</span>
+          </div>
+          <div v-if="deepRetraceNotice" class="deep-retrace-notice">
+            {{ deepRetraceNotice }}
+          </div>
+          <div class="order-plan-grid">
+            <article
+              v-for="card in primaryOrderPlanCards"
+              :key="card.key"
+              class="order-card"
+              :class="[
+                `order-card-${card.tone}`,
+                { 'order-card-primary': card.primary, 'order-card-inactive': !card.active }
+              ]"
+            >
+              <div class="order-card-top">
+                <div>
+                  <div class="order-card-label">{{ card.label }}</div>
+                  <div class="order-card-scene">{{ card.scene }}</div>
+                </div>
+                <span class="order-card-badge">{{ card.badge }}</span>
+              </div>
+              <div class="order-card-price" :class="{ 'order-card-price-empty': !card.active }">
+                {{ card.value }}
+              </div>
+              <div class="order-card-note">{{ card.note }}</div>
+            </article>
+          </div>
+          <div class="position-advice-strip">
+            <div class="position-advice-main">
+              <span class="position-advice-label">仓位建议</span>
+              <div class="position-advice-head">
+                <strong>{{ positionAdvice?.suggestion || '-' }}</strong>
+                <span class="strategy-pill" :class="actionBadgeClass">{{ formatPlanPct(positionAdvice?.plan_position_pct) }}</span>
+              </div>
+              <div class="position-advice-copy">{{ positionAdvice?.reason || '-' }}</div>
+            </div>
+            <div class="position-advice-side">
+              <div v-if="positionAdviceSizingDisplay" class="position-advice-note">{{ positionAdviceSizingDisplay }}</div>
+              <div class="position-advice-note">失效位：{{ positionAdvice?.invalidation_level || '-' }}</div>
+              <div class="position-advice-note">{{ positionAdvice?.invalidation_action || '-' }}</div>
+            </div>
+          </div>
+          <div v-if="backupOrderPlanCards.length" class="order-plan-backup">
+            <div class="order-flow-title">备用买入方案</div>
+            <div class="backup-card-list">
+              <article
+                v-for="card in backupOrderPlanCards"
+                :key="`backup-${card.key}`"
+                class="backup-card"
+              >
+                <strong>{{ card.label }}：{{ card.value }}</strong>
+                <span>{{ card.note }}</span>
+              </article>
+            </div>
+          </div>
+
+          <details class="execution-details-disclosure">
+            <summary class="execution-details-summary">
+              <div class="execution-details-copy">
+                <strong>展开完整执行说明</strong>
+                <span>{{ executionDetailsSummary }}</span>
+              </div>
+              <span class="execution-details-icon">查看顺序与原始条件</span>
+            </summary>
+
+            <div class="execution-details-body">
+              <div class="order-plan-flow">
+                <div class="order-flow-title">执行顺序</div>
+                <div class="order-flow-list">
+                  <div
+                    v-for="(step, index) in orderExecutionSteps"
+                    :key="step.key"
+                    class="order-flow-item"
+                  >
+                    <span class="order-flow-index">{{ index + 1 }}</span>
+                    <div class="order-flow-copy">
+                      <strong>{{ step.title }}</strong>
+                      <span>{{ step.note }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <details class="order-plan-details order-plan-raw">
+                <summary>展开原始规则文本</summary>
+                <div class="section-note">触发条件：{{ orderPlan?.trigger_condition || '-' }}</div>
+                <div class="section-note">失效条件：{{ orderPlan?.invalid_condition || '-' }}</div>
+                <div class="section-note">高于哪里不追：{{ orderPlan?.above_no_chase || '-' }}</div>
+                <div class="section-note">跌破哪里不买：{{ orderPlan?.below_no_buy || '-' }}</div>
+              </details>
+            </div>
+          </details>
+        </section>
+
+        <details class="analysis-disclosure">
+          <summary class="analysis-disclosure-summary">
+            <div class="analysis-disclosure-copy">
+              <strong>查看更多分析</strong>
+              <span>{{ analysisSummary }}</span>
+            </div>
+            <span class="analysis-disclosure-icon">查看账户 / 日线 / 分时 / 仓位</span>
+          </summary>
+
+          <div class="section-grid">
+            <section class="analysis-section section-account">
+              <div class="section-header">账户语境</div>
+              <div class="data-list">
+                <div class="data-item"><span>当前仓位</span><strong>{{ accountContext?.position_status || '-' }}</strong></div>
+                <div class="data-item"><span>当前用途</span><strong>{{ accountContext?.current_use || '-' }}</strong></div>
+                <div class="data-item"><span>方向锚点</span><strong>{{ directionMatchLabel || '未命中主线方向' }}</strong></div>
+                <div class="data-item"><span>同方向暴露</span><strong>{{ accountContext?.same_direction_exposure || '-' }}</strong></div>
+                <div class="data-item"><span>市场适配度</span><strong>{{ accountContext?.market_suitability || '-' }}</strong></div>
+              </div>
+              <div class="section-emphasis">{{ accountContext?.account_conclusion || '-' }}</div>
+              <div class="section-note">稳定环境：{{ basic?.stable_market_env_tag || '-' }}；实时环境：{{ basic?.realtime_market_env_tag || basic?.market_env_tag || '-' }}</div>
+            </section>
+
+            <section v-if="showAddDecisionSection" class="analysis-section section-add-position">
+              <div class="section-header-row">
+                <div class="section-header">加仓决策</div>
+                <div class="decision-summary">{{ addDecision?.decision || '-' }}</div>
+              </div>
+              <div class="decision-lead" :class="`decision-lead-${addDecisionTone}`">
+                <strong>{{ addDecisionLeadTitle }}</strong>
+                <span>{{ addDecision?.reason || '当前不是加仓语境。' }}</span>
+              </div>
+              <div class="decision-grid">
+                <article v-for="item in addDecisionScoreRows" :key="item.label" class="decision-cell">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                </article>
+              </div>
+              <div class="section-note">触发场景：{{ addDecision?.trigger_scene || '-' }}</div>
+              <div class="section-note">建议推进：当前约 {{ formatPlanPct(positionAdvice?.plan_position_pct) }}，单次加 {{ formatPlanPct(positionAdvice?.increment_position_pct) }}，上限 {{ formatPlanPct(positionAdvice?.max_position_pct) }}</div>
+              <div class="section-note">失败处理：{{ positionAdvice?.risk_control_action || positionAdvice?.invalidation_action || '-' }}</div>
+              <div v-if="addDecisionBlockers.length" class="chip-list">
+                <span v-for="item in addDecisionBlockers" :key="item" class="risk-chip">{{ item }}</span>
+              </div>
+            </section>
+
+            <section class="analysis-section section-daily">
+              <div class="section-header-row">
+                <div class="section-header">日线买点级别</div>
+                <div class="decision-summary">{{ dailyDecisionSummary }}</div>
+              </div>
+              <div class="daily-outcome-band" :class="`daily-outcome-band-${dailyLeadTone}`">
+                <div class="daily-outcome-main">
+                  <span class="daily-outcome-kicker">今天按日线怎么处理</span>
+                  <strong>{{ dailyLeadTitle }}</strong>
+                  <p>{{ dailyLeadCopy }}</p>
+                </div>
+                <div class="daily-outcome-side">
+                  <article class="daily-outcome-chip">
+                    <span>买点级别</span>
+                    <strong>{{ daily?.buy_point_level || '-' }}</strong>
+                  </article>
+                  <article class="daily-outcome-chip">
+                    <span>执行结论</span>
+                    <strong>{{ dailyDecisionSummary }}</strong>
+                  </article>
+                </div>
+              </div>
+              <div class="daily-snapshot-grid">
+                <article v-for="item in dailyHighlights" :key="item.label" class="daily-snapshot-card">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                </article>
+              </div>
+              <div v-if="daily?.risk_items?.length" class="daily-risk-block">
+                <div class="daily-subheader">当前卡住它的点</div>
+                <div class="chip-list">
+                  <span v-for="item in daily?.risk_items || []" :key="item" class="risk-chip">{{ item }}</span>
+                </div>
+              </div>
+              <details class="detail-panel detail-panel-daily" v-if="dailyReferenceRows.length">
+                <summary>参考结构位</summary>
+                <div class="level-list level-list-compact">
+                  <div v-for="item in dailyReferenceRows" :key="item.label" class="level-row">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                </div>
+              </details>
+            </section>
+
+            <section class="analysis-section section-intraday">
+              <div class="section-header-row">
+                <div class="section-header">分时执行判断</div>
+                <div class="decision-summary">{{ intradayDecisionSummary }}</div>
+              </div>
+              <div class="decision-lead" :class="`decision-lead-${intradayLeadTone}`">
+                <strong>{{ intradayLeadTitle }}</strong>
+                <span>{{ intradayLeadCopy }}</span>
+              </div>
+              <div class="decision-grid">
+                <article v-for="item in intradayChecks" :key="item.label" class="decision-cell">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                </article>
+              </div>
+              <div class="section-note">{{ intraday?.note || '-' }}</div>
+            </section>
+
+            <section class="analysis-section section-position">
+              <div class="section-header">仓位建议</div>
+              <div class="strategy-pill" :class="actionBadgeClass">{{ positionAdvice?.suggestion || '-' }}</div>
+              <div class="section-emphasis">{{ positionAdvice?.reason || '-' }}</div>
+              <div v-if="positionAdviceSizingDisplay" class="section-note">{{ positionAdviceSizingDisplay }}</div>
+              <div class="section-note">错了看哪里失效：{{ positionAdvice?.invalidation_level || '-' }}</div>
+              <div class="section-note">{{ positionAdvice?.invalidation_action || '-' }}</div>
+            </section>
+          </div>
+        </details>
 
         <section v-if="llmPanelVisible" class="analysis-section analysis-section-full llm-section">
           <div class="section-header-row">
-            <div class="section-header">LLM 解读</div>
+            <div class="section-header">辅助解读</div>
             <div v-if="llmStatusVisible" class="decision-summary" :class="llmStatusClass">{{ llmStatusText }}</div>
           </div>
           <div v-if="llmSummary?.plain_note" class="llm-note-main">{{ llmSummary.plain_note }}</div>
@@ -107,181 +331,6 @@
           </div>
           <div class="section-note">仅作规则结果的人话解释，不改动买点级别、挂单价和仓位建议。</div>
         </section>
-
-        <div class="section-grid">
-          <section class="analysis-section section-account">
-            <div class="section-header">1）账户语境</div>
-            <div class="data-list">
-              <div class="data-item"><span>当前仓位</span><strong>{{ accountContext?.position_status || '-' }}</strong></div>
-              <div class="data-item"><span>当前用途</span><strong>{{ accountContext?.current_use || '-' }}</strong></div>
-              <div class="data-item"><span>方向锚点</span><strong>{{ directionMatchLabel || '未命中主线方向' }}</strong></div>
-              <div class="data-item"><span>同方向暴露</span><strong>{{ accountContext?.same_direction_exposure || '-' }}</strong></div>
-              <div class="data-item"><span>市场适配度</span><strong>{{ accountContext?.market_suitability || '-' }}</strong></div>
-            </div>
-            <div class="section-emphasis">{{ accountContext?.account_conclusion || '-' }}</div>
-            <div class="section-note">稳定环境：{{ basic?.stable_market_env_tag || '-' }}；实时环境：{{ basic?.realtime_market_env_tag || basic?.market_env_tag || '-' }}</div>
-          </section>
-
-          <section v-if="showAddDecisionSection" class="analysis-section section-add-position">
-            <div class="section-header-row">
-              <div class="section-header">2）加仓决策</div>
-              <div class="decision-summary">{{ addDecision?.decision || '-' }}</div>
-            </div>
-            <div class="decision-lead" :class="`decision-lead-${addDecisionTone}`">
-              <strong>{{ addDecisionLeadTitle }}</strong>
-              <span>{{ addDecision?.reason || '当前不是加仓语境。' }}</span>
-            </div>
-            <div class="decision-grid">
-              <article v-for="item in addDecisionScoreRows" :key="item.label" class="decision-cell">
-                <span>{{ item.label }}</span>
-                <strong>{{ item.value }}</strong>
-              </article>
-            </div>
-            <div class="section-note">触发场景：{{ addDecision?.trigger_scene || '-' }}</div>
-            <div class="section-note">建议推进：当前约 {{ formatPlanPct(positionAdvice?.plan_position_pct) }}，单次加 {{ formatPlanPct(positionAdvice?.increment_position_pct) }}，上限 {{ formatPlanPct(positionAdvice?.max_position_pct) }}</div>
-            <div class="section-note">失败处理：{{ positionAdvice?.risk_control_action || positionAdvice?.invalidation_action || '-' }}</div>
-            <div v-if="addDecisionBlockers.length" class="chip-list">
-              <span v-for="item in addDecisionBlockers" :key="item" class="risk-chip">{{ item }}</span>
-            </div>
-          </section>
-
-          <section class="analysis-section section-daily">
-            <div class="section-header-row">
-              <div class="section-header">{{ showAddDecisionSection ? '3）日线买点级别' : '2）日线买点级别' }}</div>
-              <div class="decision-summary">{{ dailyDecisionSummary }}</div>
-            </div>
-            <div class="decision-lead" :class="`decision-lead-${dailyLeadTone}`">
-              <strong>{{ dailyLeadTitle }}</strong>
-              <span>{{ dailyLeadCopy }}</span>
-            </div>
-            <div class="decision-grid">
-              <article v-for="item in dailyHighlights" :key="item.label" class="decision-cell">
-                <span>{{ item.label }}</span>
-                <strong>{{ item.value }}</strong>
-              </article>
-            </div>
-            <div class="chip-list">
-              <span v-for="item in daily?.risk_items || []" :key="item" class="risk-chip">{{ item }}</span>
-            </div>
-            <details class="detail-panel" v-if="dailyReferenceRows.length">
-              <summary>参考价位</summary>
-              <div class="level-list">
-                <div v-for="item in dailyReferenceRows" :key="item.label" class="level-row">
-                  <span>{{ item.label }}</span>
-                  <strong>{{ item.value }}</strong>
-                </div>
-              </div>
-            </details>
-          </section>
-
-          <section class="analysis-section section-intraday">
-            <div class="section-header-row">
-              <div class="section-header">{{ showAddDecisionSection ? '4）分时执行判断' : '3）分时执行判断' }}</div>
-              <div class="decision-summary">{{ intradayDecisionSummary }}</div>
-            </div>
-            <div class="decision-lead" :class="`decision-lead-${intradayLeadTone}`">
-              <strong>{{ intradayLeadTitle }}</strong>
-              <span>{{ intradayLeadCopy }}</span>
-            </div>
-            <div class="decision-grid">
-              <article v-for="item in intradayChecks" :key="item.label" class="decision-cell">
-                <span>{{ item.label }}</span>
-                <strong>{{ item.value }}</strong>
-              </article>
-            </div>
-            <div class="section-note">{{ intraday?.note || '-' }}</div>
-          </section>
-
-          <section class="analysis-section section-order">
-            <div class="section-header-row">
-              <div class="section-header">{{ showAddDecisionSection ? '5）挂单价格' : '4）挂单价格' }}</div>
-              <div class="order-plan-summary">{{ orderPlanSummary }}</div>
-            </div>
-            <div class="order-plan-lead" :class="`order-plan-lead-${orderPlanLeadTone}`">
-              <strong>{{ orderPlanLeadTitle }}</strong>
-              <span>{{ orderPlanLeadCopy }}</span>
-            </div>
-            <div v-if="deepRetraceNotice" class="deep-retrace-notice">
-              {{ deepRetraceNotice }}
-            </div>
-            <div class="order-plan-grid">
-              <article
-                v-for="card in primaryOrderPlanCards"
-                :key="card.key"
-                class="order-card"
-                :class="[
-                  `order-card-${card.tone}`,
-                  { 'order-card-primary': card.primary, 'order-card-inactive': !card.active }
-                ]"
-              >
-                <div class="order-card-top">
-                  <div>
-                    <div class="order-card-label">{{ card.label }}</div>
-                    <div class="order-card-scene">{{ card.scene }}</div>
-                  </div>
-                  <span class="order-card-badge">{{ card.badge }}</span>
-                </div>
-                <div class="order-card-price" :class="{ 'order-card-price-empty': !card.active }">
-                  {{ card.value }}
-                </div>
-                <div class="order-card-note">{{ card.note }}</div>
-              </article>
-            </div>
-            <div v-if="backupOrderPlanCards.length" class="order-plan-backup">
-              <details class="order-plan-details">
-                <summary>备用买入方案（{{ backupOrderPlanCards.length }} 条，非当前主路径）</summary>
-                <div class="backup-card-list">
-                  <article
-                    v-for="card in backupOrderPlanCards"
-                    :key="`backup-${card.key}`"
-                    class="backup-card"
-                  >
-                    <strong>{{ card.label }}：{{ card.value }}</strong>
-                    <span>{{ card.note }}</span>
-                  </article>
-                </div>
-              </details>
-            </div>
-            <div class="order-plan-flow">
-              <div class="order-flow-title">执行顺序</div>
-              <div class="order-flow-list">
-                <div
-                  v-for="(step, index) in orderExecutionSteps"
-                  :key="step.key"
-                  class="order-flow-item"
-                >
-                  <span class="order-flow-index">{{ index + 1 }}</span>
-                  <div class="order-flow-copy">
-                    <strong>{{ step.title }}</strong>
-                    <span>{{ step.note }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <details class="order-plan-details order-plan-raw">
-              <summary>展开原始规则文本</summary>
-              <div class="section-note">触发条件：{{ orderPlan?.trigger_condition || '-' }}</div>
-              <div class="section-note">失效条件：{{ orderPlan?.invalid_condition || '-' }}</div>
-              <div class="section-note">高于哪里不追：{{ orderPlan?.above_no_chase || '-' }}</div>
-              <div class="section-note">跌破哪里不买：{{ orderPlan?.below_no_buy || '-' }}</div>
-            </details>
-          </section>
-
-          <section class="analysis-section section-position">
-            <div class="section-header">{{ showAddDecisionSection ? '6）仓位建议' : '5）仓位建议' }}</div>
-            <div class="strategy-pill" :class="actionBadgeClass">{{ positionAdvice?.suggestion || '-' }}</div>
-            <div class="section-emphasis">{{ positionAdvice?.reason || '-' }}</div>
-            <div v-if="positionAdviceSizingDisplay" class="section-note">{{ positionAdviceSizingDisplay }}</div>
-            <div class="section-note">错了看哪里失效：{{ positionAdvice?.invalidation_level || '-' }}</div>
-            <div class="section-note">{{ positionAdvice?.invalidation_action || '-' }}</div>
-          </section>
-
-          <section class="analysis-section analysis-section-full section-final">
-            <div class="section-header">{{ showAddDecisionSection ? '7）一句话执行' : '6）一句话执行' }}</div>
-            <div class="final-line">{{ execution?.action || '-' }}</div>
-            <div class="section-note">{{ execution?.reason || '-' }}</div>
-          </section>
-        </div>
         </template>
       </template>
     </div>
@@ -343,12 +392,6 @@ const currentChangeClass = computed(() => {
   if (Number(props.currentChangePct) < 0) return 'text-green'
   return 'text-neutral'
 })
-const marketEnvSummary = computed(() => {
-  const realtimeTag = basic.value?.realtime_market_env_tag || basic.value?.market_env_tag || '-'
-  const stableTag = basic.value?.stable_market_env_tag || '-'
-  const suitability = accountContext.value?.market_suitability || '-'
-  return `实时${realtimeTag} / 稳定${stableTag} · ${suitability}`
-})
 const quoteMeta = computed(() => {
   const source = basic.value?.data_source
   const quoteTime = basic.value?.quote_time
@@ -382,26 +425,6 @@ const actionBadgeClass = computed(() => {
   if (execution.value?.action === '放弃') return 'badge-pass'
   return 'badge-wait'
 })
-const overviewTitle = computed(() => {
-  const signal = basic.value?.buy_signal_tag || '-'
-  const type = basic.value?.buy_display_type || basic.value?.buy_point_type || '-'
-  return `${signal} / ${type}形态`
-})
-const overviewDesc = computed(() => {
-  const structure = intraday.value?.intraday_structure || basic.value?.buy_display_type || basic.value?.buy_point_type || ''
-  if (execution.value?.action === '放弃' && daily.value?.buy_point_level === 'D' && structure) {
-    return `分时形态偏${structure}，但日线级别未通过，今天不给下单资格。`
-  }
-  return execution.value?.reason || '-'
-})
-const intradayStructureSummary = computed(() => {
-  const structure = intraday.value?.intraday_structure || '-'
-  if (structure === '-') return structure
-  if (intraday.value?.conclusion === '放弃') {
-    return `分时形态：${structure}（仅形态，不代表可买）`
-  }
-  return `分时形态：${structure}`
-})
 const showAddDecisionSection = computed(() => (
   accountContext.value?.current_use === '加仓' || Boolean(addDecision.value?.eligible)
 ))
@@ -426,20 +449,33 @@ const addDecisionScoreRows = computed(() => ([
 const addDecisionBlockers = computed(() => addDecision.value?.blockers || [])
 const dailyDecisionSummary = computed(() => {
   const level = daily.value?.buy_point_level || '-'
-  if (level === 'A') return '日线通过，盘中可等确认后执行'
-  if (level === 'B') return '日线可做，但不能跳过分时确认'
-  if (level === 'C') return '日线更多是观察位，不宜急着下单'
-  if (level === 'D') return '日线不合格，今天不做'
+  if (level === 'A') return '日线已通过，等分时确认后可以执行'
+  if (level === 'B') return '日线没坏，但还不能按现价直接下单'
+  if (level === 'C') return '日线还停留在观察阶段，先别急着下单'
+  if (level === 'D') return '日线没通过，今天不给下单资格'
   return '先确认日线，再决定盘中有没有必要盯'
 })
 const dailyLeadTitle = computed(() => {
   const level = daily.value?.buy_point_level || '-'
-  if (level === 'A') return '这只票的日线结构是过关的'
-  if (level === 'B') return '日线能看，但不够舒服'
-  if (level === 'C') return '日线更偏观察，不是直接出手位'
-  return '日线不通过，先别给它下单资格'
+  if (level === 'A') return '日线已经通过，可以继续等分时确认'
+  if (level === 'B') return '日线没坏，但还不到直接下单的位置'
+  if (level === 'C') return '日线还在观察阶段，不是今天直接出手的位置'
+  return '日线没过，今天先不要给它下单资格'
 })
-const dailyLeadCopy = computed(() => daily.value?.reason || '先确认阶段、买点信号和位置，再决定是否值得盘中继续盯。')
+const normalizedDailyReason = computed(() => {
+  const reason = String(daily.value?.reason || '').trim()
+  if (!reason) return ''
+  if (reason === '日线通过，盘中可等确认后执行') return '日线已经通过，但真正下单前仍要等分时确认。'
+  if (reason === '这只票的日线结构是过关的') return '日线已经通过，但真正下单前仍要等分时确认。'
+  if (reason === '日线能看，但不够舒服') return '日线没坏，但位置和节奏还不够直接下单，仍要等分时确认。'
+  if (reason === '日线可做，但不能跳过分时确认') return '日线具备继续跟踪的资格，但执行前仍要等分时确认。'
+  if (reason === '日线更多是观察位，不宜急着下单') return '这更像日线观察位，还不到今天主动下单的阶段。'
+  if (reason === '日线更偏观察，不是直接出手位') return '这更像日线观察位，还不到今天主动下单的阶段。'
+  if (reason === '日线不合格，今天不做') return '日线条件没过，今天不值得给它下单资格。'
+  if (reason === '日线不通过，先别给它下单资格') return '日线条件没过，今天不值得给它下单资格。'
+  return reason
+})
+const dailyLeadCopy = computed(() => normalizedDailyReason.value || '先确认阶段、买点信号和位置，再决定是否值得盘中继续盯。')
 const dailyLeadTone = computed(() => {
   const level = daily.value?.buy_point_level || '-'
   if (level === 'A') return 'success'
@@ -474,6 +510,9 @@ const intradayLeadTitle = computed(() => {
   if (conclusion === '买') return '分时已经给到相对明确的进场信号'
   if (conclusion === '放弃' && daily.value?.buy_point_level === 'D') return '分时形态可以参考，但不能覆盖日线否决'
   if (conclusion === '放弃') return '分时承接不够扎实，别把等待变成硬上'
+  if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price) && isBelowRetraceConfirmZone.value) {
+    return '当前已落到确认区下方，先等重新站回，不把跌进去当成买点'
+  }
   if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price)) return '当前先等回踩确认，不是继续追高'
   if (primaryOrderCardKey.value === 'breakout' && isActionableLevel(orderPlan.value?.breakout_price)) return '当前先等突破站稳，不要提前抢跑'
   if (primaryOrderCardKey.value === 'low_absorb' && isActionableLevel(orderPlan.value?.low_absorb_price)) return '当前先等低吸区出现，不要在中间位硬接'
@@ -487,6 +526,9 @@ const intradayLeadCopy = computed(() => {
     return `当前分时可见${structure}迹象，但日线级别未通过，今天只把这些关键位当观察边界，不当买点。${keyLevel}`
   }
   if (intraday.value?.conclusion === '放弃') return `${structure} 的承接质量还不够扎实，暂时不值得执行。${keyLevel}`
+  if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price) && isBelowRetraceConfirmZone.value) {
+    return `当前价格已经落到回踩确认区 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 下方，这不等于确认成立；要先看能否重新站回该区间并稳住承接，若继续弱于 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 一线则计划失效。`
+  }
   if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price)) {
     return `现在更重要的是等价格回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带，并确认没有跌穿、承接能稳住；不是等它继续往上冲。`
   }
@@ -514,6 +556,78 @@ const currentAction = computed(() => {
   const action = execution.value?.action || '等'
   return action === '加' ? '买' : action
 })
+const isRealtimeQuote = computed(() => String(basic.value?.data_source || '').startsWith('realtime_'))
+const heroCardToneClass = computed(() => {
+  if (currentAction.value === '买') return 'hero-card-buy'
+  if (currentAction.value === '放弃') return 'hero-card-pass'
+  return 'hero-card-wait'
+})
+const actionHeadline = computed(() => {
+  if (currentAction.value === '买') return '条件接近完成，先盯主买入位，不要把追高当执行'
+  if (currentAction.value === '放弃') return '今天先划边界，不给下单资格'
+  return '先等触发确认，没到位前不抢跑'
+})
+const quoteModeTitle = computed(() => (
+  isRealtimeQuote.value ? '当前为盘中实时口径' : '当前为日线回退口径'
+))
+const quoteModeCopy = computed(() => (
+  isRealtimeQuote.value
+    ? '下面的买入触发和失效位可以直接作为盘中执行参考。'
+    : '下面的价位更适合作为计划参考，盘中仍要结合承接、量能和站稳情况确认。'
+))
+const primaryOrderCard = computed(() => (
+  orderPlanCards.value.find((card) => card.key === primaryOrderCardKey.value) || null
+))
+const primaryExecutionLabel = computed(() => {
+  if (currentAction.value === '买') return '现在先看哪买'
+  if (currentAction.value === '放弃') return '今天先避开哪'
+  return '继续观察先盯哪'
+})
+const primaryExecutionValue = computed(() => primaryOrderCard.value?.value || '-')
+const primaryExecutionCopy = computed(() => {
+  if (currentAction.value === '买') {
+    return primaryOrderCard.value?.note || '主买入位出现并稳住后，再按计划下单。'
+  }
+  if (currentAction.value === '放弃') {
+    return `今天重点看边界，不把中间价格误当成机会。跌破 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 不买。`
+  }
+  return `现在更重要的是等 ${waitingTriggerLabel.value}，而不是提前抢进去。`
+})
+const planSectionTitle = computed(() => {
+  if (currentAction.value === '买') return '买入计划'
+  if (currentAction.value === '放弃') return '放弃条件'
+  return '观察计划'
+})
+const executionDetailsSummary = computed(() => {
+  if (currentAction.value === '买') {
+    return '顺序看主买入位、不追线和失效线，避免把观察条件误当即时买点。'
+  }
+  if (currentAction.value === '放弃') {
+    return '顺序看不追线和失效线，今天核心是知道哪里不能做。'
+  }
+  return '顺序看主触发位、不追线和失效线，先等确认，再决定要不要下单。'
+})
+const summaryCards = computed(() => ([
+  {
+    label: '现价 / 涨跌',
+    value: displayCurrentPrice.value,
+    valueClass: currentChangeClass.value,
+    tip: displayCurrentChangePct.value === '-' ? '涨跌幅待确认' : `当前涨跌 ${displayCurrentChangePct.value}`,
+  },
+  {
+    label: '环境 / 日线',
+    value: `${basic.value?.market_env_tag || '-'} / ${daily.value?.buy_point_level || '-'}`,
+    tip: `${daily.value?.current_stage || '-'} · ${accountContext.value?.market_suitability || '-'}`,
+  },
+  {
+    label: '分时 / 仓位',
+    value: `${intraday.value?.conclusion || '-'} / ${positionAdvice.value?.suggestion || '-'}`,
+    tip: intraday.value?.intraday_structure || '分时待确认',
+  },
+]))
+const analysisSummary = computed(() => (
+  `账户 ${accountContext.value?.current_use || '-'} · 日线 ${daily.value?.buy_point_level || '-'} · 分时 ${intraday.value?.conclusion || '-'} · 仓位 ${positionAdvice.value?.suggestion || '-'}`
+))
 const formatPlanPct = (value) => {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
   return `${(Number(value) * 100).toFixed(0)}%`
@@ -551,11 +665,32 @@ const parseZoneCenter = (value) => {
   const single = Number(text)
   return Number.isNaN(single) ? null : single
 }
+const parseZoneBounds = (value) => {
+  const text = String(value || '').trim()
+  if (!text || text === '-' || text.includes('需确认')) return null
+  const parts = text.split('-').map((item) => Number(item))
+  if (parts.length === 2 && parts.every((item) => !Number.isNaN(item))) {
+    return {
+      low: Math.min(parts[0], parts[1]),
+      high: Math.max(parts[0], parts[1]),
+    }
+  }
+  const single = Number(text)
+  if (Number.isNaN(single)) return null
+  return { low: single, high: single }
+}
 const referenceCurrentPrice = computed(() => {
   if (props.currentPrice !== null && props.currentPrice !== undefined && !Number.isNaN(Number(props.currentPrice))) {
     return Number(props.currentPrice)
   }
   return parseZoneCenter(orderPlan.value?.breakout_price)
+})
+const retraceZoneBounds = computed(() => parseZoneBounds(orderPlan.value?.retrace_confirm_price))
+const isBelowRetraceConfirmZone = computed(() => {
+  const current = referenceCurrentPrice.value
+  const bounds = retraceZoneBounds.value
+  if (current === null || !bounds) return false
+  return current < bounds.low
 })
 const isDeepRetraceReference = computed(() => {
   const current = referenceCurrentPrice.value
@@ -569,6 +704,9 @@ const deepRetraceNotice = computed(() => {
 })
 const waitingTriggerLabel = computed(() => {
   if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price)) {
+    if (isBelowRetraceConfirmZone.value) {
+      return `重新站回 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住`
+    }
     return `回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住`
   }
   if (primaryOrderCardKey.value === 'breakout' && isActionableLevel(orderPlan.value?.breakout_price)) {
@@ -584,6 +722,9 @@ const waitingTriggerLabel = computed(() => {
     return `放量站稳 ${normalizeLevelValue(orderPlan.value?.breakout_price)} 附近`
   }
   if (isActionableLevel(orderPlan.value?.retrace_confirm_price)) {
+    if (isBelowRetraceConfirmZone.value) {
+      return `重新站回 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住`
+    }
     return `回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住`
   }
   return '主触发位出现并稳住'
@@ -627,6 +768,9 @@ const orderPlanSummary = computed(() => {
     return `高于 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 不追`
   }
   if (primaryOrderCardKey.value === 'retrace') {
+    if (isBelowRetraceConfirmZone.value) {
+      return `先看能否重新站回确认区 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)}`
+    }
     return `先等确认区 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)}`
   }
   if (primaryOrderCardKey.value === 'breakout') {
@@ -640,6 +784,7 @@ const orderPlanSummary = computed(() => {
 const orderPlanLeadTitle = computed(() => {
   if (currentAction.value === '买') return '进场条件基本到位，按主买入位执行'
   if (currentAction.value === '放弃') return '今天只给边界，不给机会'
+  if (isActionableLevel(orderPlan.value?.retrace_confirm_price) && isBelowRetraceConfirmZone.value) return '当前先等重新站回确认区，不把跌破确认区当成买点'
   if (isActionableLevel(orderPlan.value?.retrace_confirm_price)) return '当前先等回踩确认，不要把观察页当成下单页'
   if (isActionableLevel(orderPlan.value?.breakout_price)) return '当前先等突破站稳，不要把观察页当成下单页'
   if (isActionableLevel(orderPlan.value?.low_absorb_price)) return '当前先等低吸区出现，不要把观察页当成下单页'
@@ -657,6 +802,9 @@ const orderPlanLeadCopy = computed(() => {
   }
   if (currentAction.value === '放弃') {
     return `上方 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 是放弃追价线，下方 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 是失效不买线；这些价格现在只负责告诉你哪里不能做，不代表中间就能做。`
+  }
+  if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price) && isBelowRetraceConfirmZone.value) {
+    return `当前价格已经低于回踩确认区 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)}，这代表承接确认还没成立；先看能否重新站回该区间并稳住，若继续弱于 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 则不买。`
   }
   if (primaryOrderCardKey.value === 'retrace' && isActionableLevel(orderPlan.value?.retrace_confirm_price)) {
     return `当前更重要的是等价格回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住承接；不是等它继续往上冲。高于 ${normalizeLevelValue(orderPlan.value?.above_no_chase)} 不追，跌破 ${normalizeLevelValue(orderPlan.value?.below_no_buy)} 不买。`
@@ -706,10 +854,14 @@ const orderPlanCards = computed(() => {
     {
       key: 'retrace',
       label: isDeepRetraceReference.value ? '深回踩参考位' : '回踩确认区',
-      scene: isDeepRetraceReference.value ? '深回踩后二次确认' : '确认承接后再进',
+      scene: isDeepRetraceReference.value ? '深回踩后二次确认' : (isBelowRetraceConfirmZone.value ? '重新站回并稳住后再进' : '确认承接后再进'),
       value: normalizeLevelValue(orderPlan.value?.retrace_confirm_price),
       note: primaryKey === 'retrace'
-        ? `只有回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带后重新稳住，才按确认买点处理；没回到这里前，不把它当现价附近的执行位。`
+        ? (
+          isBelowRetraceConfirmZone.value
+            ? `当前价格已在确认区下方，不能把“跌进去”直接当成确认成立；要先看能否重新站回 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带并稳住。`
+            : `只有回踩到 ${normalizeLevelValue(orderPlan.value?.retrace_confirm_price)} 一带后重新稳住，才按确认买点处理；没回到这里前，不把它当现价附近的执行位。`
+        )
         : (
           isDeepRetraceReference.value
             ? '这条离现价较远，更像深回踩理想位，先作为二次回撤参考，不作为当前主路径。'
@@ -1034,14 +1186,108 @@ const refreshLlm = async () => {
   border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+.overview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.overview-tag {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.mode-banner {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mode-banner strong {
+  font-size: 13px;
+}
+
+.mode-banner span {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.mode-banner-live {
+  background: rgba(46, 207, 154, 0.08);
+  border-color: rgba(46, 207, 154, 0.2);
+}
+
+.mode-banner-fallback {
+  background: rgba(122, 215, 255, 0.08);
+  border-color: rgba(122, 215, 255, 0.2);
+}
+
+.overview-main-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.1fr) minmax(0, 2fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.hero-card {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.06));
+}
+
+.hero-card-primary {
+  border-color: rgba(255, 196, 64, 0.3);
+  box-shadow: 0 0 0 1px rgba(255, 196, 64, 0.12) inset;
+}
+
+.hero-card-buy .hero-value {
+  color: #58d7a2;
+}
+
+.hero-card-wait .hero-value {
+  color: #7ad7ff;
+}
+
+.hero-card-pass .hero-value {
+  color: #ff7a7f;
+}
+
+.hero-label {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hero-value {
+  font-size: 2.2rem;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  color: #ffd166;
+}
+
+.hero-note {
+  color: var(--color-text-sec);
+  line-height: 1.7;
+}
+
 .overview-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
-.summary-card,
-.metric-card {
+.summary-card {
   display: grid;
   gap: 6px;
   padding: 14px;
@@ -1081,14 +1327,55 @@ const refreshLlm = async () => {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.analysis-disclosure {
+  display: grid;
+  gap: 16px;
+}
+
+.analysis-disclosure-summary {
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.analysis-disclosure-summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-disclosure-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.analysis-disclosure-copy strong {
+  font-size: 14px;
+}
+
+.analysis-disclosure-copy span {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.analysis-disclosure-icon {
+  flex-shrink: 0;
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.analysis-disclosure[open] .analysis-disclosure-icon {
+  color: var(--color-text-main);
+}
+
 .section-grid {
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(360px, 1.05fr);
-  grid-template-areas:
-    "account daily"
-    "intraday order"
-    "position order"
-    "final final";
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
   align-items: start;
 }
@@ -1108,31 +1395,8 @@ const refreshLlm = async () => {
   grid-column: 1 / -1;
 }
 
-.section-account {
-  grid-area: account;
-}
-
-.section-daily {
-  grid-area: daily;
-}
-
-.section-intraday {
-  grid-area: intraday;
-}
-
-.section-order {
-  grid-area: order;
-  position: sticky;
-  top: 10px;
-  align-self: start;
-}
-
-.section-position {
-  grid-area: position;
-}
-
-.section-final {
-  grid-area: final;
+.order-plan-section {
+  position: static;
 }
 
 .section-header-row {
@@ -1183,6 +1447,78 @@ const refreshLlm = async () => {
 .decision-lead-danger {
   background: rgba(255, 122, 127, 0.08);
   border-color: rgba(255, 122, 127, 0.24);
+}
+
+.daily-outcome-band {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(220px, 0.9fr);
+  gap: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.daily-outcome-band-success {
+  background:
+    linear-gradient(135deg, rgba(47, 207, 154, 0.12), rgba(47, 207, 154, 0.04));
+  border-color: rgba(47, 207, 154, 0.22);
+}
+
+.daily-outcome-band-info {
+  background:
+    linear-gradient(135deg, rgba(122, 215, 255, 0.12), rgba(122, 215, 255, 0.04));
+  border-color: rgba(122, 215, 255, 0.22);
+}
+
+.daily-outcome-band-danger {
+  background:
+    linear-gradient(135deg, rgba(255, 122, 127, 0.12), rgba(255, 122, 127, 0.04));
+  border-color: rgba(255, 122, 127, 0.24);
+}
+
+.daily-outcome-main {
+  display: grid;
+  gap: 8px;
+}
+
+.daily-outcome-kicker {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.daily-outcome-main strong {
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.daily-outcome-main p {
+  margin: 0;
+  color: var(--color-text-sec);
+  line-height: 1.75;
+}
+
+.daily-outcome-side {
+  display: grid;
+  gap: 10px;
+}
+
+.daily-outcome-chip {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.daily-outcome-chip span {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.daily-outcome-chip strong {
+  line-height: 1.6;
 }
 
 .order-plan-summary {
@@ -1236,6 +1572,41 @@ const refreshLlm = async () => {
 .data-list {
   display: grid;
   gap: 8px;
+}
+
+.daily-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.daily-snapshot-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.daily-snapshot-card span {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.daily-snapshot-card strong {
+  line-height: 1.6;
+}
+
+.daily-risk-block {
+  display: grid;
+  gap: 10px;
+}
+
+.daily-subheader {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .decision-grid {
@@ -1317,6 +1688,15 @@ const refreshLlm = async () => {
   cursor: pointer;
   color: var(--color-text-sec);
   font-size: 13px;
+}
+
+.detail-panel-daily {
+  gap: 12px;
+}
+
+.level-list-compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
 }
 
 .level-row {
@@ -1432,6 +1812,98 @@ const refreshLlm = async () => {
   gap: 10px;
 }
 
+.position-advice-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 1fr);
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.position-advice-main,
+.position-advice-side {
+  display: grid;
+  gap: 8px;
+}
+
+.position-advice-label {
+  color: var(--color-text-sec);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.position-advice-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.position-advice-head strong {
+  font-size: 1.05rem;
+  line-height: 1.4;
+}
+
+.position-advice-copy,
+.position-advice-note {
+  color: var(--color-text-sec);
+  line-height: 1.7;
+}
+
+.execution-details-disclosure {
+  display: grid;
+  gap: 12px;
+}
+
+.execution-details-summary {
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.execution-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.execution-details-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.execution-details-copy strong {
+  font-size: 14px;
+}
+
+.execution-details-copy span,
+.execution-details-icon {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.execution-details-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.execution-details-disclosure[open] .execution-details-icon {
+  color: var(--color-text-main);
+}
+
+.execution-details-body {
+  display: grid;
+  gap: 12px;
+}
+
 .order-plan-details {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.025);
@@ -1515,8 +1987,7 @@ const refreshLlm = async () => {
 }
 
 .strategy-pill,
-.section-emphasis,
-.final-line {
+.section-emphasis {
   font-weight: 700;
   line-height: 1.7;
 }
@@ -1530,15 +2001,20 @@ const refreshLlm = async () => {
 }
 
 @media (max-width: 1500px) {
-  .overview-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .section-grid {
     grid-template-columns: minmax(0, 1fr) minmax(320px, 0.95fr);
   }
 
   .decision-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .daily-outcome-band {
+    grid-template-columns: 1fr;
+  }
+
+  .daily-snapshot-grid,
+  .level-list-compact {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1550,26 +2026,17 @@ const refreshLlm = async () => {
     align-items: flex-start;
   }
 
-  .section-order {
-    position: static;
-  }
-
+  .overview-main-grid,
   .decision-grid,
+  .daily-snapshot-grid,
   .overview-grid,
   .section-grid,
+  .position-advice-strip,
   .price-grid,
-  .order-plan-grid {
+  .order-plan-grid,
+  .level-list-compact,
+  .daily-outcome-band {
     grid-template-columns: 1fr;
-  }
-
-  .section-grid {
-    grid-template-areas:
-      "account"
-      "daily"
-      "intraday"
-      "order"
-      "position"
-      "final";
   }
 
   .data-item {

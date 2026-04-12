@@ -634,8 +634,8 @@ describe('关键页面联调', () => {
     decisionApi.reviewStats.mockResolvedValue(
       makeResponse({
         bucket_stats: [
-          { snapshot_type: 'buy_point', candidate_bucket_tag: '强趋势延续', avg_return_3d: 5.1, count: 6 },
-          { snapshot_type: 'buy_point', candidate_bucket_tag: '高位博弈', avg_return_3d: -2.0, count: 4 },
+          { snapshot_type: 'buy_available', candidate_bucket_tag: '强趋势延续', avg_return_3d: 5.1, win_rate_3d: 83.3, avg_return_5d: 6.4, win_rate_5d: 100, resolved_3d_count: 6, resolved_5d_count: 6, count: 6 },
+          { snapshot_type: 'buy_available', candidate_bucket_tag: '高位博弈', avg_return_3d: -2.0, win_rate_3d: 25, avg_return_5d: -1.2, win_rate_5d: 25, resolved_3d_count: 4, resolved_5d_count: 4, count: 4 },
         ],
       })
     )
@@ -658,8 +658,143 @@ describe('关键页面联调', () => {
     expect(wrapper.text()).toContain('标准')
     expect(wrapper.text()).toContain('标准执行 / 先手仓约 20%')
     expect(wrapper.text()).toContain('进攻试错 / 先手仓约 15%')
+    expect(wrapper.text()).toContain('结构标签筛选')
+    expect(wrapper.text()).toContain('可买先于观察，观察先于放弃')
+    expect(wrapper.text()).toContain('执行阶段不被复盘改写')
     expect(wrapper.text()).toContain('建议先买 900 股')
     expect(wrapper.text()).toContain('19,215.00 元')
+  })
+
+  it('BuyPoint 页面支持按结构标签筛选，并保留复盘来源定位', async () => {
+    routeQuery = { review_source: 'buy_available', review_bucket: '强势确认' }
+    decisionApi.buyPoint.mockResolvedValue(
+      makeResponse({
+        market_env_tag: '进攻',
+        available_buy_points: [
+          {
+            ts_code: '300024.SZ',
+            stock_name: '强势确认票',
+            sector_name: '机器人',
+            stock_pool_tag: '账户可参与池',
+            account_entry_mode: 'standard',
+            candidate_bucket_tag: '强势确认',
+            candidate_source_tag: '机器人',
+            buy_point_type: '回踩承接',
+            buy_risk_level: '中',
+            buy_account_fit: '适合',
+            buy_trigger_cond: '回踩 5 日线',
+            buy_confirm_cond: '量比放大；承接稳定',
+            buy_invalid_cond: '跌破前低',
+            buy_comment: '分时回踩后可考虑试单',
+            buy_current_price: 21.35,
+            buy_current_change_pct: 2.8,
+            buy_trigger_gap_pct: -0.6,
+            buy_invalid_gap_pct: -3.1,
+            buy_trigger_price: 21.1,
+            buy_invalid_price: 20.2,
+            buy_required_volume_ratio: 1.5,
+          },
+          {
+            ts_code: '688001.SH',
+            stock_name: '趋势回踩票',
+            sector_name: '机器人',
+            stock_pool_tag: '账户可参与池',
+            account_entry_mode: 'aggressive_trial',
+            candidate_bucket_tag: '趋势回踩',
+            candidate_source_tag: '机器人',
+            buy_point_type: '突破',
+            buy_risk_level: '中',
+            buy_account_fit: '适合',
+            buy_trigger_cond: '放量突破 33.50',
+            buy_confirm_cond: '量比放大；突破后不回落',
+            buy_invalid_cond: '跌回 32.40 下方',
+            buy_comment: '强势突破后可跟随',
+            buy_current_price: 33.2,
+            buy_current_change_pct: 5.6,
+            buy_trigger_gap_pct: 0.9,
+            buy_invalid_gap_pct: -2.4,
+            buy_trigger_price: 33.5,
+            buy_invalid_price: 32.4,
+            buy_required_volume_ratio: 1.2,
+          },
+        ],
+        observe_buy_points: [
+          {
+            ts_code: '002796.SZ',
+            stock_name: '观察确认票',
+            sector_name: '机器人',
+            stock_pool_tag: '市场最强观察池',
+            candidate_bucket_tag: '强势确认',
+            candidate_source_tag: '涨停入选',
+            buy_point_type: '回踩承接',
+            buy_risk_level: '高',
+            buy_account_fit: '一般',
+            buy_trigger_cond: '回踩 5 日线',
+            buy_confirm_cond: '量比放大；承接稳定',
+            buy_invalid_cond: '跌破前低',
+            buy_comment: '先观察',
+            buy_current_price: 19.8,
+            buy_current_change_pct: 1.2,
+            buy_trigger_gap_pct: -2.4,
+            buy_invalid_gap_pct: -4.1,
+            buy_trigger_price: 19.3,
+            buy_invalid_price: 18.7,
+            buy_required_volume_ratio: 1.1,
+          },
+        ],
+        not_buy_points: [],
+      })
+    )
+    decisionApi.reviewStats.mockResolvedValue(
+      makeResponse({
+        bucket_stats: [
+          {
+            snapshot_type: 'buy_available',
+            candidate_bucket_tag: '强势确认',
+            count: 12,
+            avg_return_3d: 4.5,
+            win_rate_3d: 83.3,
+            avg_return_5d: 6.1,
+            win_rate_5d: 91.7,
+            resolved_3d_count: 12,
+            resolved_5d_count: 12,
+          },
+          {
+            snapshot_type: 'buy_available',
+            candidate_bucket_tag: '趋势回踩',
+            count: 8,
+            avg_return_3d: 1.2,
+            win_rate_3d: 50,
+            avg_return_5d: 0.8,
+            win_rate_5d: 37.5,
+            resolved_3d_count: 8,
+            resolved_5d_count: 8,
+          },
+        ],
+      })
+    )
+
+    const { default: BuyPointView } = await import('../src/views/BuyPoint.vue')
+    const wrapper = await mountView(BuyPointView)
+    await new Promise((resolve) => window.setTimeout(resolve, 220))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前从复盘统计跳转而来')
+    expect(wrapper.text()).toContain('执行时仍先按 可买 / 观察 阶段')
+    expect(wrapper.text()).toContain('强势确认票')
+    expect(wrapper.text()).not.toContain('趋势回踩票')
+
+    const trendButton = wrapper.findAll('button').find((node) => node.text().includes('趋势回踩 1'))
+    expect(trendButton).toBeTruthy()
+    await trendButton.trigger('click')
+
+    expect(routerReplace).toHaveBeenCalledWith({
+      query: {
+        review_source: 'buy_available',
+        review_bucket: '强势确认',
+        bucket: '趋势回踩',
+      },
+    })
   })
 
   it('BuyPoint 页面会把过远的回踩承接触发位降级为深回踩参考', async () => {
@@ -1031,6 +1166,8 @@ describe('关键页面联调', () => {
     await flushPromises()
     await flushPromises()
 
+    expect(wrapper.text()).toContain('等确认 / 突破后回踩形态')
+    expect(wrapper.text()).not.toContain('可买 / 突破后回踩形态')
     expect(stockApi.buyAnalysis).toHaveBeenCalledWith(
       '600166.SH',
       '2026-04-11',
@@ -1054,6 +1191,104 @@ describe('关键页面联调', () => {
     )
     expect(wrapper.text()).toContain('刷新后的解读会继续围绕规则结果')
     expect(wrapper.text()).toContain('LLM 解释增强已生效')
+  })
+
+  it('BuyAnalysisDrawer 在价格已落到回踩确认区下方时，会提示先重新站回确认区', async () => {
+    stockApi.buyAnalysis.mockResolvedValue({
+      data: {
+        code: 200,
+        data: {
+          trade_date: '2026-04-12',
+          resolved_trade_date: '2026-04-10',
+          stock_found_in_candidates: true,
+          basic_info: {
+            ts_code: '600166.SH',
+            stock_name: '福田汽车',
+            sector_name: '汽车整车',
+            market_env_tag: '进攻',
+            stable_market_env_tag: '进攻',
+            realtime_market_env_tag: '进攻',
+            buy_signal_tag: '可买',
+            buy_point_type: '回踩承接',
+            buy_display_type: '突破后回踩',
+            buy_execution_context: '突破确认',
+            candidate_bucket_tag: '强势确认',
+            quote_time: null,
+            data_source: 'daily_fallback',
+          },
+          account_context: {
+            position_status: '中仓（仓位 21%）',
+            same_direction_exposure: '暂无明显同方向重复暴露。',
+            current_use: '新开仓',
+            market_suitability: '市场允许主动试错，但仍要先等分时确认。',
+            account_conclusion: '轻仓新开仓，可试错',
+          },
+          daily_judgement: {
+            current_stage: '加速',
+            buy_signal: '突破后回踩，可买',
+            buy_point_level: 'B',
+            reason: '日线能看，但不够舒服',
+            risk_items: [],
+            reference_levels: [],
+          },
+          intraday_judgement: {
+            price_vs_avg_line: '均价线关系 [需确认]',
+            intraday_structure: '分时结构 [需确认]',
+            volume_quality: '放量跟随（量比 4.3）',
+            key_level_status: '已到突破关键位 3.14 一带。',
+            conclusion: '等确认',
+            note: '当前不是实时分时口径，盘中是否真正转强需要开盘后再确认。',
+          },
+          order_plan: {
+            low_absorb_price: '3.12-3.18',
+            breakout_price: '3.49',
+            retrace_confirm_price: '3.39-3.42',
+            give_up_price: '3.49',
+            trigger_condition: '先到执行位 3.40 附近再开始盯盘',
+            invalid_condition: '跌破 3.06 且无法快速收回，就视为买点失效。',
+            above_no_chase: '3.49',
+            below_no_buy: '3.06',
+          },
+          position_advice: {
+            suggestion: '轻仓试错',
+            reason: '买点还需要盘中确认或账户已有约束，只适合试错仓位。',
+          },
+          execution: {
+            action: '等',
+            reason: '日线可以继续看，但分时确认还没到位，先按计划等触发。',
+          },
+          llm_status: {
+            enabled: false,
+            success: false,
+            status: 'disabled',
+            message: 'LLM 未启用或配置不完整',
+          },
+        },
+      },
+    })
+
+    const { default: BuyAnalysisDrawer } = await import('../src/components/BuyAnalysisDrawer.vue')
+    const wrapper = mount(BuyAnalysisDrawer, {
+      props: {
+        modelValue: false,
+        tsCode: '600166.SH',
+        stockName: '福田汽车',
+        tradeDate: '2026-04-12',
+        currentPrice: 3.34,
+      },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('先看能否重新站回确认区 3.39-3.42')
+    expect(wrapper.text()).toContain('当前先等重新站回确认区，不把跌破确认区当成买点')
+    expect(wrapper.text()).toContain('当前价格已经低于回踩确认区 3.39-3.42')
+    expect(wrapper.text()).toContain('当前价格已在确认区下方，不能把“跌进去”直接当成确认成立')
+    expect(wrapper.text()).toContain('日线没坏，但还不能按现价直接下单')
+    expect(wrapper.text()).toContain('日线没坏，但还不到直接下单的位置')
+    expect(wrapper.text()).not.toContain('当前更重要的是等价格回踩到 3.39-3.42 一带并稳住承接')
+    expect(wrapper.text()).not.toContain('日线能看，但不够舒服')
   })
 
   it('SellAnalysisDrawer 会在加载失败时显示真实错误，不再只显示空态', async () => {
@@ -1383,6 +1618,12 @@ describe('关键页面联调', () => {
     await flushPromises()
     await flushPromises()
 
+    expect(wrapper.text()).toContain('今天按日线怎么处理')
+    expect(wrapper.text()).toContain('执行结论')
+    expect(wrapper.text()).toContain('参考结构位')
+    expect(wrapper.text()).toContain('日线还停留在观察阶段，先别急着下单')
+    expect(wrapper.text()).toContain('日线还在观察阶段，不是今天直接出手的位置')
+    expect(wrapper.text()).not.toContain('日线更多是观察位，不宜急着下单')
     expect(wrapper.text()).toContain('当前先等回踩确认，不是继续追高')
     expect(wrapper.text()).not.toContain('深回踩参考位')
     expect(wrapper.text()).not.toContain('当前先不把它当执行位')
@@ -1996,6 +2237,10 @@ describe('关键页面联调', () => {
     const { default: ReviewStatsView } = await import('../src/views/ReviewStats.vue')
     const wrapper = await mountView(ReviewStatsView)
 
+    expect(wrapper.text()).toContain('明日复盘决策')
+    expect(wrapper.text()).toContain('结论置信度')
+    expect(wrapper.text()).toContain('为什么是这个结论')
+    expect(wrapper.text()).toContain('已结算 / 待补')
     expect(wrapper.text()).toContain('开仓 · 1')
     expect(wrapper.text()).toContain('加仓 · 1')
     expect(wrapper.text()).toContain('当前最强：买点-可买 / 强趋势延续')

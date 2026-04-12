@@ -21,11 +21,15 @@
           :note="buyFreshnessNote"
         />
         <div v-if="buyData.market_env_tag" class="decision-overview">
-          <div v-if="reviewBucketFilter" class="focus-context focus-context-review">
+          <div v-if="reviewSourceFilter || reviewBucketFilter" class="focus-context focus-context-review">
             <div class="focus-context-copy">
-              当前从复盘统计跳转而来，已自动切到 <strong>{{ reviewSourceLabel }}</strong>，并只展示 <strong>{{ reviewBucketFilter }}</strong> 结构。
+              当前从复盘统计跳转而来，
+              <template v-if="reviewSourceFilter">默认定位到 <strong>{{ reviewSourceLabel }}</strong>；</template>
+              <template v-if="activeBucketFilter">当前优先查看 <strong>{{ activeBucketFilter }}</strong> 结构。</template>
+              执行时仍先按 <strong>可买 / 观察</strong> 阶段，再在同阶段内按结构排序。
             </div>
             <div class="focus-context-actions">
+              <el-button v-if="activeBucketFilter" link type="primary" size="small" @click="clearBucketFilter">看全部结构</el-button>
               <el-button link type="primary" size="small" @click="clearReviewFilter">清除筛选</el-button>
             </div>
           </div>
@@ -98,6 +102,34 @@
                 <div class="review-bridge-card-action">{{ card.action }}</div>
                 <div class="review-bridge-card-note">{{ card.note }}</div>
               </div>
+            </div>
+          </div>
+
+          <div v-if="structureBucketOptions.length" class="bucket-filter">
+            <div class="bucket-filter-head">
+              <div>
+                <div class="bucket-filter-title">结构标签筛选</div>
+                <div class="bucket-filter-desc">先按执行阶段看，再在当前阶段里切结构标签；复盘不会把观察票直接抬到可买票前面。</div>
+              </div>
+              <div class="bucket-filter-summary">当前：{{ activeBucketFilter || '全部结构' }}</div>
+            </div>
+            <div class="bucket-filter-chip-row">
+              <button
+                type="button"
+                :class="['bucket-filter-chip', { 'bucket-filter-chip-active': !activeBucketFilter }]"
+                @click="clearBucketFilter"
+              >
+                全部结构 {{ structureFilterBaseCount }}
+              </button>
+              <button
+                v-for="item in structureBucketOptions"
+                :key="item.label"
+                type="button"
+                :class="['bucket-filter-chip', { 'bucket-filter-chip-active': activeBucketFilter === item.label }]"
+                @click="setBucketFilter(item.label)"
+              >
+                {{ item.label }} {{ item.count }}
+              </button>
             </div>
           </div>
         </div>
@@ -676,11 +708,13 @@ const router = useRouter()
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const focusSectorSourceType = computed(() => String(route.query.focus_sector_source_type || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
+const manualBucketFilter = computed(() => String(route.query.bucket || '').trim())
 const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
 const notificationAction = computed(() => String(route.query.notification_action || '').trim())
 const notificationTsCode = computed(() => String(route.query.ts_code || '').trim())
 const notificationStockName = computed(() => String(route.query.stock_name || '').trim())
 const focusOnly = ref(false)
+const activeBucketFilter = computed(() => manualBucketFilter.value || reviewBucketFilter.value)
 const normalizeSourceType = (value) => {
   const source = String(value || '').trim()
   if (source === 'limitup_industry') return 'industry'
@@ -742,9 +776,9 @@ const sortByFocusSector = (points = []) => {
   return sorted
 }
 
-const matchesReviewBucket = (point) => {
-  if (!reviewBucketFilter.value) return true
-  return String(point.candidate_bucket_tag || '').trim() === reviewBucketFilter.value
+const matchesActiveBucket = (point) => {
+  if (!activeBucketFilter.value) return true
+  return String(point.candidate_bucket_tag || '').trim() === activeBucketFilter.value
 }
 
 const matchesReviewSource = (sourceType) => {
@@ -752,16 +786,24 @@ const matchesReviewSource = (sourceType) => {
   return reviewSourceFilter.value === sourceType
 }
 
-const matchesReviewFocus = (point, sourceType) => matchesReviewSource(sourceType) && matchesReviewBucket(point)
+const matchesReviewFocus = (point, sourceType) => matchesReviewSource(sourceType) && matchesActiveBucket(point)
 
-const applyPageFilters = (points = [], sourceType = '') => {
+const applySourceAndFocusFilters = (points = [], sourceType = '') => {
   if (!matchesReviewSource(sourceType)) return []
-  return sortByFocusSector(points).filter(matchesReviewBucket)
+  return sortByFocusSector(points)
 }
+
+const applyPageFilters = (points = [], sourceType = '') => applySourceAndFocusFilters(points, sourceType).filter(matchesActiveBucket)
 
 const availablePoints = computed(() => applyPageFilters(buyData.value.available_buy_points || [], 'buy_available'))
 const observePoints = computed(() => applyPageFilters(buyData.value.observe_buy_points || [], 'buy_observe'))
 const notBuyPoints = computed(() => applyPageFilters(buyData.value.not_buy_points || [], 'buy_not'))
+const structureFilterBasePoints = computed(() => ([
+  ...applySourceAndFocusFilters(buyData.value.available_buy_points || [], 'buy_available'),
+  ...applySourceAndFocusFilters(buyData.value.observe_buy_points || [], 'buy_observe'),
+  ...applySourceAndFocusFilters(buyData.value.not_buy_points || [], 'buy_not'),
+]))
+const structureFilterBaseCount = computed(() => structureFilterBasePoints.value.length)
 
 const displayBuyPointType = (point) => String(point?.buy_display_type || point?.buy_point_type || '').trim()
 const normalizeBuyPointType = (value) => String(value || '').trim() || '其他'
@@ -871,25 +913,84 @@ const resolveDefaultTab = (payload) => {
   return 'skip'
 }
 
-const reviewRowLabel = (row) => `${reviewSnapshotTypeLabel(row.snapshot_type)} / ${row.candidate_bucket_tag || '未分层'}`
+const resolveVisibleTab = () => {
+  if (reviewSourceFilter.value === 'buy_available') {
+    return availablePoints.value.length ? 'available' : observePoints.value.length ? 'observe' : 'skip'
+  }
+  if (reviewSourceFilter.value === 'buy_observe') {
+    return observePoints.value.length ? 'observe' : availablePoints.value.length ? 'available' : 'skip'
+  }
+  if (availablePoints.value.length) return 'available'
+  if (observePoints.value.length) return 'observe'
+  return 'skip'
+}
 
-const reviewActionableRows = computed(() => (
-  (reviewStatsData.value?.bucket_stats || [])
-    .filter((row) => row.snapshot_type !== 'buy_add')
+const buildReviewQualityScore = (row) => (
+  Number(row.avg_return_5d || 0) * 0.6 +
+  Number(row.win_rate_5d || 0) * 0.04 +
+  Number(row.avg_return_3d || 0) * 0.25 +
+  Number(row.win_rate_3d || 0) * 0.015 +
+  Number(row.count || 0) * 0.03
+)
+
+const reviewBucketStats = computed(() => {
+  const grouped = new Map()
+  for (const row of (reviewStatsData.value?.bucket_stats || []).filter((item) => item.snapshot_type !== 'buy_add')) {
+    const bucket = String(row.candidate_bucket_tag || '未分层').trim() || '未分层'
+    if (!grouped.has(bucket)) {
+      grouped.set(bucket, {
+        bucket,
+        count: 0,
+        resolved_1d_count: 0,
+        resolved_3d_count: 0,
+        resolved_5d_count: 0,
+        weighted_return_1d: 0,
+        weighted_return_3d: 0,
+        weighted_return_5d: 0,
+        weighted_win_1d: 0,
+        weighted_win_3d: 0,
+        weighted_win_5d: 0,
+      })
+    }
+    const current = grouped.get(bucket)
+    const count = Number(row.count || 0)
+    const resolved1d = Number(row.resolved_1d_count || 0)
+    const resolved3d = Number(row.resolved_3d_count || 0)
+    const resolved5d = Number(row.resolved_5d_count || 0)
+    current.count += count
+    current.resolved_1d_count += resolved1d
+    current.resolved_3d_count += resolved3d
+    current.resolved_5d_count += resolved5d
+    current.weighted_return_1d += Number(row.avg_return_1d || 0) * resolved1d
+    current.weighted_return_3d += Number(row.avg_return_3d || 0) * resolved3d
+    current.weighted_return_5d += Number(row.avg_return_5d || 0) * resolved5d
+    current.weighted_win_1d += Number(row.win_rate_1d || 0) * resolved1d
+    current.weighted_win_3d += Number(row.win_rate_3d || 0) * resolved3d
+    current.weighted_win_5d += Number(row.win_rate_5d || 0) * resolved5d
+  }
+
+  return [...grouped.values()]
+    .map((row) => ({
+      candidate_bucket_tag: row.bucket,
+      count: row.count,
+      resolved_1d_count: row.resolved_1d_count,
+      resolved_3d_count: row.resolved_3d_count,
+      resolved_5d_count: row.resolved_5d_count,
+      avg_return_1d: row.resolved_1d_count ? row.weighted_return_1d / row.resolved_1d_count : 0,
+      avg_return_3d: row.resolved_3d_count ? row.weighted_return_3d / row.resolved_3d_count : 0,
+      avg_return_5d: row.resolved_5d_count ? row.weighted_return_5d / row.resolved_5d_count : 0,
+      win_rate_1d: row.resolved_1d_count ? row.weighted_win_1d / row.resolved_1d_count : 0,
+      win_rate_3d: row.resolved_3d_count ? row.weighted_win_3d / row.resolved_3d_count : 0,
+      win_rate_5d: row.resolved_5d_count ? row.weighted_win_5d / row.resolved_5d_count : 0,
+    }))
     .map((row) => ({
       ...row,
-      shortLabel: reviewRowLabel(row),
       resolvedWeight: Number(row.resolved_5d_count || row.resolved_3d_count || row.resolved_1d_count || 0),
-      qualityScore:
-        Number(row.avg_return_5d || 0) * 0.6 +
-        Number(row.win_rate_5d || 0) * 0.04 +
-        Number(row.avg_return_3d || 0) * 0.25 +
-        Number(row.win_rate_3d || 0) * 0.015 +
-        Number(row.count || 0) * 0.03
+      qualityScore: buildReviewQualityScore(row),
     }))
     .filter((row) => row.resolvedWeight > 0 && Number(row.count || 0) >= 2)
     .sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0))
-))
+})
 
 const resolveReviewWindow = (row) => {
   if (!row) return { days: 0, count: 0, avg: 0, winRate: 0 }
@@ -926,51 +1027,65 @@ const formatReviewMetric = (row) => {
   return `${metric.days}日均值 ${metric.avg.toFixed(1)}% · 胜率 ${metric.winRate.toFixed(0)}% · ${metric.count}条`
 }
 
+const structureBucketOptions = computed(() => {
+  const rankMap = new Map(reviewBucketStats.value.map((item, index) => [item.candidate_bucket_tag, index]))
+  const grouped = new Map()
+  for (const point of structureFilterBasePoints.value) {
+    const bucket = String(point.candidate_bucket_tag || '未分层').trim() || '未分层'
+    if (!grouped.has(bucket)) {
+      grouped.set(bucket, { label: bucket, count: 0, rank: rankMap.has(bucket) ? rankMap.get(bucket) : Number.POSITIVE_INFINITY })
+    }
+    grouped.get(bucket).count += 1
+  }
+  return [...grouped.values()].sort((a, b) => {
+    if (a.rank !== b.rank) return a.rank - b.rank
+    if (a.count !== b.count) return b.count - a.count
+    return a.label.localeCompare(b.label, 'zh-CN')
+  })
+})
+
 const reviewInsight = computed(() => {
-  const best = reviewActionableRows.value[0]
-  const weakest = [...reviewActionableRows.value].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))[0]
-  const watch = reviewActionableRows.value.find((row) => row.snapshot_type === 'buy_observe' || row.snapshot_type === 'pool_market')
-  if (!best && !weakest && !watch) return null
+  const best = reviewBucketStats.value[0]
+  const weakest = reviewBucketStats.value.length > 1
+    ? [...reviewBucketStats.value].sort((a, b) => Number(a.qualityScore || 0) - Number(b.qualityScore || 0))[0]
+    : null
+  if (!best && !weakest) return null
 
   return {
     summary: best
-      ? '先按复盘给出的优先级排序，再回到触发价、确认条件和失效位做执行判断。'
+      ? '先按执行阶段看可买/观察/放弃，再在同一阶段里按复盘结构排序。'
       : '当前没有形成稳定样本，复盘只做辅助提醒，今天仍按买点条件本身执行。',
     cards: [
       {
-        label: '优先看',
+        label: '先定阶段',
+        cardClass: 'review-bridge-card-neutral',
+        title: '可买先于观察，观察先于放弃',
+        metric: '执行阶段不被复盘改写',
+        action: '复盘只会调整同阶段里的先后顺序，不会把观察票直接抬到可买票前面，也不会把可买票自动打成不可买。',
+        note: '先回到卡片里的触发、确认和失效位，再决定是否执行。'
+      },
+      {
+        label: '同阶段优先',
         cardClass: 'review-bridge-card-do',
-        title: best ? best.shortLabel : '暂无稳定加分类型',
+        title: best ? best.candidate_bucket_tag : '暂无稳定加分结构',
         metric: formatReviewMetric(best),
         action: best
-          ? '遇到同类结构时，先往前排，再决定是否纳入主执行名单。'
-          : '先按当日强弱和确认条件排序，不额外放大任何类型。',
+          ? `在同一执行阶段里，先看 ${best.candidate_bucket_tag}；可买池里先排这类，可观察池里也先跟这类。`
+          : '先按当日强弱和确认条件排序，不额外放大任何结构。',
         note: best
-          ? '这类结构最近更稳，但仍要先等触发价和确认条件到位。'
+          ? '它是结构优先级更高，不是执行阶段更高。'
           : '复盘还没形成稳定偏好，不建议提前下注。'
       },
       {
-        label: '先观察',
-        cardClass: 'review-bridge-card-watch',
-        title: watch ? watch.shortLabel : '观察类信号',
-        metric: formatReviewMetric(watch),
-        action: watch
-          ? '先放进观察名单，确认条件不到齐，不要直接当成成立买点。'
-          : '观察票继续只负责提醒，不替代正式执行条件。',
-        note: watch
-          ? '适合先跟踪，不适合抢先手。'
-          : '没有额外的复盘观察倾向，维持当前规则。'
-      },
-      {
-        label: '暂时少做',
+        label: '同阶段谨慎',
         cardClass: 'review-bridge-card-avoid',
-        title: weakest ? weakest.shortLabel : '暂无明确弱项',
+        title: weakest ? weakest.candidate_bucket_tag : '暂无明确弱项',
         metric: formatReviewMetric(weakest),
         action: weakest
-          ? '即使盘中触发，也要更看重量能、承接和失效位，不主动放大仓位。'
+          ? `即使它进了可买池，也要更重视量能、承接和失效位，不主动放大仓位。`
           : '暂时没有需要整体回避的结构，继续按规则筛选。',
         note: weakest
-          ? '这类结构最近兑现度偏弱，优先级应下调。'
+          ? '这是同阶段里的谨慎项，不是直接否掉整类机会。'
           : '没有明显拖后腿的一类结构。'
       }
     ]
@@ -1509,6 +1624,23 @@ const clearFocusSector = () => {
   router.replace({ query })
 }
 
+const setBucketFilter = (bucket) => {
+  const nextBucket = String(bucket || '').trim()
+  if (!nextBucket) {
+    clearBucketFilter()
+    return
+  }
+  const query = { ...route.query, bucket: nextBucket }
+  router.replace({ query })
+}
+
+const clearBucketFilter = () => {
+  const query = { ...route.query }
+  delete query.bucket
+  delete query.review_bucket
+  router.replace({ query })
+}
+
 const goToPoolsPage = () => {
   const query = {}
   if (focusSector.value) query.focus_sector = focusSector.value
@@ -1522,6 +1654,7 @@ const goToPoolsPage = () => {
 
 const clearReviewFilter = () => {
   const query = { ...route.query }
+  delete query.bucket
   delete query.review_bucket
   delete query.review_source
   router.replace({ query })
@@ -1568,9 +1701,27 @@ onMounted(() => {
   scheduleReviewInsightLoad()
 })
 
-watch(reviewSourceFilter, () => {
-  activeTab.value = resolveDefaultTab(buyData.value)
-})
+watch(
+  () => [
+    reviewSourceFilter.value,
+    activeBucketFilter.value,
+    availablePoints.value.length,
+    observePoints.value.length,
+    notBuyPoints.value.length,
+  ],
+  () => {
+    const visibleTab = resolveVisibleTab()
+    if (activeTab.value === visibleTab) return
+    const activeHasItems = (
+      (activeTab.value === 'available' && availablePoints.value.length)
+      || (activeTab.value === 'observe' && observePoints.value.length)
+      || (activeTab.value === 'skip' && notBuyPoints.value.length)
+    )
+    if (!activeHasItems || reviewSourceFilter.value || activeBucketFilter.value) {
+      activeTab.value = visibleTab
+    }
+  }
+)
 
 watch(
   () => [notificationAction.value, notificationTsCode.value, loading.value],
@@ -1807,6 +1958,10 @@ watch(
   box-shadow: inset 0 0 0 1px rgba(255, 120, 120, 0.08);
 }
 
+.review-bridge-card-neutral {
+  box-shadow: inset 0 0 0 1px rgba(92, 122, 255, 0.10);
+}
+
 .review-bridge-card-head {
   display: flex;
   justify-content: space-between;
@@ -1845,6 +2000,75 @@ watch(
   font-size: 13px;
   line-height: 1.6;
   color: var(--color-text-sec);
+}
+
+.bucket-filter {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.bucket-filter-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.bucket-filter-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.bucket-filter-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-sec);
+}
+
+.bucket-filter-summary {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #9ec2ff;
+  background: rgba(92, 122, 255, 0.10);
+  border: 1px solid rgba(92, 122, 255, 0.18);
+}
+
+.bucket-filter-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.bucket-filter-chip {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-sec);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.bucket-filter-chip:hover {
+  color: var(--color-text-main);
+  border-color: rgba(255, 196, 64, 0.22);
+}
+
+.bucket-filter-chip-active {
+  color: #ffd06a;
+  background: rgba(255, 196, 64, 0.10);
+  border-color: rgba(255, 196, 64, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.10);
 }
 
 .rule-chip {

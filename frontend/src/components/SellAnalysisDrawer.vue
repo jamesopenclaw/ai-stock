@@ -42,9 +42,7 @@
               {{ execution?.action || '拿' }}
             </div>
             <div class="overview-copy">
-              <div class="overview-title">
-                {{ basic?.sell_signal_tag || '-' }} / {{ basic?.sell_point_type || '-' }}
-              </div>
+              <div class="overview-title">{{ actionHeadline }}</div>
               <div class="overview-desc">{{ execution?.reason || '-' }}</div>
               <div class="overview-conclusion">
                 {{ execution?.partial_plan || '-' }}
@@ -52,148 +50,173 @@
             </div>
           </div>
 
-          <div class="overview-grid">
-            <div class="summary-card">
-              <span class="summary-label">最新价</span>
-              <strong class="summary-value">{{ displayCurrentPrice }}</strong>
-              <span class="summary-tip" :class="currentPnlClass">当前浮盈 {{ displayCurrentPnlPct }}</span>
+          <div class="overview-tags">
+            <span class="overview-tag">{{ basic?.sell_signal_tag || '-' }}</span>
+            <span class="overview-tag">{{ basic?.sell_point_type || '-' }}</span>
+            <span class="overview-tag">日线 {{ daily?.sell_point_level || '-' }}</span>
+            <span class="overview-tag">分时 {{ sanitizePendingText(intraday?.conclusion) }}</span>
+          </div>
+
+          <div class="mode-banner" :class="{ 'mode-banner-live': isRealtimeQuote, 'mode-banner-fallback': !isRealtimeQuote }">
+            <strong>{{ quoteModeTitle }}</strong>
+            <span>{{ quoteModeCopy }}</span>
+          </div>
+
+          <div class="overview-main-grid">
+            <div class="hero-card hero-card-primary" :class="heroCardToneClass">
+              <span class="hero-label">{{ primaryExecutionLabel }}</span>
+              <strong class="hero-value">{{ execution?.key_level || '-' }}</strong>
+              <span class="hero-note">{{ primaryExecutionCopy }}</span>
             </div>
-            <div class="summary-card">
-              <span class="summary-label">环境</span>
-              <strong class="summary-value">{{ basic?.market_env_tag || '-' }}</strong>
-              <span class="summary-tip">{{ marketEnvSummary }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">日线级别</span>
-              <strong class="summary-value">{{ daily?.sell_point_level || '-' }}</strong>
-              <span class="summary-tip">{{ daily?.current_stage || '-' }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">分时结论</span>
-              <strong class="summary-value">{{ sanitizePendingText(intraday?.conclusion) }}</strong>
-              <span class="summary-tip">{{ sanitizePendingText(intraday?.intraday_structure, '当前待盘中确认') }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">重点位</span>
-              <strong class="summary-value">{{ execution?.key_level || '-' }}</strong>
-              <span class="summary-tip">{{ accountContext?.priority || '-' }}</span>
+
+            <div class="overview-grid">
+              <div
+                v-for="card in summaryCards"
+                :key="card.label"
+                class="summary-card"
+              >
+                <span class="summary-label">{{ card.label }}</span>
+                <strong class="summary-value" :class="card.valueClass || ''">{{ card.value }}</strong>
+                <span class="summary-tip">{{ card.tip }}</span>
+              </div>
             </div>
           </div>
 
           <div class="quote-strip">
             <span>{{ quoteMeta }}</span>
+            <span>{{ accountContext?.context_summary || '-' }}</span>
           </div>
         </div>
 
-        <div class="section-grid">
-          <section class="analysis-section">
-            <div class="section-header">1）账户语境</div>
-            <div class="data-list">
-              <div class="data-item"><span>仓位</span><strong>{{ accountContext?.position_status || '-' }}</strong></div>
-              <div class="data-item"><span>浮盈亏</span><strong>{{ accountContext?.pnl_status || '-' }}</strong></div>
-              <div class="data-item"><span>角色</span><strong>{{ accountContext?.role || '-' }}</strong></div>
-              <div class="data-item"><span>优先级</span><strong>{{ accountContext?.priority || '-' }}</strong></div>
-            </div>
-            <div class="section-emphasis">{{ accountContext?.context_summary || '-' }}</div>
-            <div class="section-note">稳定环境：{{ basic?.stable_market_env_tag || '-' }}；实时环境：{{ basic?.realtime_market_env_tag || basic?.market_env_tag || '-' }}</div>
-          </section>
-
-          <section class="analysis-section">
-            <div class="section-header">2）日线卖点级别</div>
-            <div class="data-list">
-              <div class="data-item"><span>当前阶段</span><strong>{{ daily?.current_stage || '-' }}</strong></div>
-              <div class="data-item"><span>卖点信号</span><strong>{{ daily?.sell_signal || '-' }}</strong></div>
-              <div class="data-item"><span>卖点级别</span><strong>{{ daily?.sell_point_level || '-' }}</strong></div>
-            </div>
-            <div class="section-note">{{ daily?.reason || '-' }}</div>
-          </section>
-
-          <section class="analysis-section">
-            <div class="section-header">3）分时执行判断</div>
-            <div class="data-list">
-              <div class="data-item"><span>均价线关系</span><strong>{{ sanitizePendingText(intraday?.price_vs_avg_line, '当前待盘中确认') }}</strong></div>
-              <div class="data-item"><span>分时结构</span><strong>{{ sanitizePendingText(intraday?.intraday_structure, '当前待盘中确认') }}</strong></div>
-              <div class="data-item"><span>量能性质</span><strong>{{ sanitizePendingText(intraday?.volume_quality) }}</strong></div>
-              <div class="data-item"><span>当前结论</span><strong>{{ sanitizePendingText(intraday?.conclusion) }}</strong></div>
-            </div>
-            <div class="section-note">{{ sanitizePendingText(intraday?.note, '当前不是实时分时口径，具体卖法要结合盘中承接再确认。') }}</div>
-          </section>
-
-          <section class="analysis-section order-plan-section">
-            <div class="section-header-row">
-              <div class="section-header">4）挂单价格</div>
-              <div class="order-plan-summary">{{ orderPlanSummary }}</div>
-            </div>
-            <div class="order-plan-lead" :class="`order-plan-lead-${orderPlanLeadTone}`">
-              <strong>{{ orderPlanLeadTitle }}</strong>
-              <span>{{ orderPlanLeadCopy }}</span>
-            </div>
-            <div class="order-plan-grid">
+        <section class="analysis-section order-plan-section">
+          <div class="section-header-row">
+            <div class="section-header">{{ planSectionTitle }}</div>
+            <div class="order-plan-summary">{{ orderPlanSummary }}</div>
+          </div>
+          <div class="order-plan-lead" :class="`order-plan-lead-${orderPlanLeadTone}`">
+            <strong>{{ orderPlanLeadTitle }}</strong>
+            <span>{{ orderPlanLeadCopy }}</span>
+          </div>
+          <div class="order-plan-grid">
+            <article
+              v-for="card in primaryOrderPlanCards"
+              :key="card.key"
+              class="order-card"
+              :class="[
+                `order-card-${card.tone}`,
+                { 'order-card-primary': card.primary, 'order-card-inactive': !card.active }
+              ]"
+            >
+              <div class="order-card-top">
+                <div>
+                  <div class="order-card-label">{{ card.label }}</div>
+                  <div class="order-card-scene">{{ card.scene }}</div>
+                </div>
+                <span class="order-card-badge">{{ card.badge }}</span>
+              </div>
+              <div class="order-card-price" :class="{ 'order-card-price-empty': !card.active }">
+                {{ card.value }}
+              </div>
+              <div class="order-card-note">{{ card.note }}</div>
+            </article>
+          </div>
+          <div v-if="backupOrderPlanCards.length" class="order-plan-backup">
+            <div class="order-flow-title">备用退出方案</div>
+            <div class="backup-card-list">
               <article
-                v-for="card in primaryOrderPlanCards"
-                :key="card.key"
-                class="order-card"
-                :class="[
-                  `order-card-${card.tone}`,
-                  { 'order-card-primary': card.primary, 'order-card-inactive': !card.active }
-                ]"
+                v-for="card in backupOrderPlanCards"
+                :key="`backup-${card.key}`"
+                class="backup-card"
               >
-                <div class="order-card-top">
-                  <div>
-                    <div class="order-card-label">{{ card.label }}</div>
-                    <div class="order-card-scene">{{ card.scene }}</div>
-                  </div>
-                  <span class="order-card-badge">{{ card.badge }}</span>
-                </div>
-                <div class="order-card-price" :class="{ 'order-card-price-empty': !card.active }">
-                  {{ card.value }}
-                </div>
-                <div class="order-card-note">{{ card.note }}</div>
+                <strong>{{ card.label }}：{{ card.value }}</strong>
+                <span>{{ card.note }}</span>
               </article>
             </div>
-            <div v-if="backupOrderPlanCards.length" class="order-plan-backup">
-              <div class="order-flow-title">备用退出方案</div>
-              <div class="backup-card-list">
-                <article
-                  v-for="card in backupOrderPlanCards"
-                  :key="`backup-${card.key}`"
-                  class="backup-card"
-                >
-                  <strong>{{ card.label }}：{{ card.value }}</strong>
-                  <span>{{ card.note }}</span>
-                </article>
+          </div>
+
+          <details class="execution-details-disclosure">
+            <summary class="execution-details-summary">
+              <div class="execution-details-copy">
+                <strong>展开完整执行说明</strong>
+                <span>{{ executionDetailsSummary }}</span>
               </div>
-            </div>
-            <div class="order-plan-flow">
-              <div class="order-flow-title">执行顺序</div>
-              <div class="order-flow-list">
-                <div
-                  v-for="(step, index) in orderExecutionSteps"
-                  :key="step.key"
-                  class="order-flow-item"
-                >
-                  <span class="order-flow-index">{{ index + 1 }}</span>
-                  <div class="order-flow-copy">
-                    <strong>{{ step.title }}</strong>
-                    <span>{{ step.note }}</span>
+              <span class="execution-details-icon">查看顺序与条件</span>
+            </summary>
+
+            <div class="execution-details-body">
+              <div class="order-plan-flow">
+                <div class="order-flow-title">执行顺序</div>
+                <div class="order-flow-list">
+                  <div
+                    v-for="(step, index) in orderExecutionSteps"
+                    :key="step.key"
+                    class="order-flow-item"
+                  >
+                    <span class="order-flow-index">{{ index + 1 }}</span>
+                    <div class="order-flow-copy">
+                      <strong>{{ step.title }}</strong>
+                      <span>{{ step.note }}</span>
+                    </div>
                   </div>
                 </div>
               </div>
+              <div class="plan-notes-grid">
+                <div class="section-note">{{ takeProfitNoteLabel }}：{{ orderPlan?.take_profit_condition || '-' }}</div>
+                <div class="section-note">{{ reboundNoteLabel }}：{{ orderPlan?.rebound_condition || '-' }}</div>
+                <div class="section-note">{{ stopNoteLabel }}：{{ orderPlan?.stop_condition || '-' }}</div>
+                <div class="section-note">{{ holdNoteLabel }}：{{ orderPlan?.hold_condition || '-' }}</div>
+              </div>
             </div>
-            <div class="section-note">{{ takeProfitNoteLabel }}：{{ orderPlan?.take_profit_condition || '-' }}</div>
-            <div class="section-note">{{ reboundNoteLabel }}：{{ orderPlan?.rebound_condition || '-' }}</div>
-            <div class="section-note">{{ stopNoteLabel }}：{{ orderPlan?.stop_condition || '-' }}</div>
-            <div class="section-note">{{ holdNoteLabel }}：{{ orderPlan?.hold_condition || '-' }}</div>
-          </section>
+          </details>
+        </section>
 
-          <section class="analysis-section analysis-section-full">
-            <div class="section-header">5）一句话执行</div>
-            <div class="final-line">{{ execution?.action || '-' }}</div>
-            <div class="section-note">是否分批：{{ execution?.partial_plan || '-' }}</div>
-            <div class="section-note">重点盯哪个位：{{ execution?.key_level || '-' }}</div>
-            <div class="section-emphasis">{{ execution?.reason || '-' }}</div>
-          </section>
-        </div>
+        <details class="analysis-disclosure">
+          <summary class="analysis-disclosure-summary">
+            <div class="analysis-disclosure-copy">
+              <strong>查看更多分析</strong>
+              <span>{{ analysisSummary }}</span>
+            </div>
+            <span class="analysis-disclosure-icon">查看账户 / 日线 / 分时</span>
+          </summary>
+
+          <div class="section-grid">
+            <section class="analysis-section">
+              <div class="section-header">账户语境</div>
+              <div class="data-list">
+                <div class="data-item"><span>仓位</span><strong>{{ accountContext?.position_status || '-' }}</strong></div>
+                <div class="data-item"><span>浮盈亏</span><strong>{{ accountContext?.pnl_status || '-' }}</strong></div>
+                <div class="data-item"><span>角色</span><strong>{{ accountContext?.role || '-' }}</strong></div>
+                <div class="data-item"><span>优先级</span><strong>{{ accountContext?.priority || '-' }}</strong></div>
+              </div>
+              <div class="section-emphasis">{{ accountContext?.context_summary || '-' }}</div>
+              <div class="section-note">稳定环境：{{ basic?.stable_market_env_tag || '-' }}；实时环境：{{ basic?.realtime_market_env_tag || basic?.market_env_tag || '-' }}</div>
+            </section>
+
+            <section class="analysis-section">
+              <div class="section-header">日线卖点级别</div>
+              <div class="data-list">
+                <div class="data-item"><span>当前阶段</span><strong>{{ daily?.current_stage || '-' }}</strong></div>
+                <div class="data-item"><span>卖点信号</span><strong>{{ daily?.sell_signal || '-' }}</strong></div>
+                <div class="data-item"><span>卖点级别</span><strong>{{ daily?.sell_point_level || '-' }}</strong></div>
+              </div>
+              <div class="section-note">{{ daily?.reason || '-' }}</div>
+            </section>
+
+            <section class="analysis-section analysis-section-wide analysis-section-intraday">
+              <div class="section-header">分时执行判断</div>
+              <div class="intraday-headline">
+                <strong>{{ intradayHeadline }}</strong>
+                <span>{{ sanitizePendingText(intraday?.note, '当前不是实时分时口径，具体卖法要结合盘中承接再确认。') }}</span>
+              </div>
+              <div class="data-list">
+                <div class="data-item"><span>均价线关系</span><strong>{{ sanitizePendingText(intraday?.price_vs_avg_line, '当前待盘中确认') }}</strong></div>
+                <div class="data-item"><span>分时结构</span><strong>{{ sanitizePendingText(intraday?.intraday_structure, '当前待盘中确认') }}</strong></div>
+                <div class="data-item"><span>量能性质</span><strong>{{ sanitizePendingText(intraday?.volume_quality) }}</strong></div>
+                <div class="data-item"><span>当前结论</span><strong>{{ sanitizePendingText(intraday?.conclusion) }}</strong></div>
+              </div>
+            </section>
+          </div>
+        </details>
         </template>
       </template>
     </div>
@@ -244,12 +267,6 @@ const currentPnlClass = computed(() => {
   if (Number(props.currentPnlPct) < 0) return 'text-green'
   return 'text-neutral'
 })
-const marketEnvSummary = computed(() => {
-  const realtimeTag = basic.value?.realtime_market_env_tag || basic.value?.market_env_tag || '-'
-  const stableTag = basic.value?.stable_market_env_tag || '-'
-  const contextSummary = accountContext.value?.context_summary || '-'
-  return `实时${realtimeTag} / 稳定${stableTag} · ${contextSummary}`
-})
 const quoteMeta = computed(() => {
   const source = basic.value?.data_source
   const quoteTime = basic.value?.quote_time
@@ -258,6 +275,78 @@ const quoteMeta = computed(() => {
   return `${sourceLabel} ${displayTradeDate.value}`
 })
 const currentAction = computed(() => execution.value?.action || '拿')
+const isRealtimeQuote = computed(() => String(basic.value?.data_source || '').startsWith('realtime_'))
+const heroCardToneClass = computed(() => {
+  if (currentAction.value === '清') return 'hero-card-clear'
+  if (currentAction.value === '减') return 'hero-card-reduce'
+  return 'hero-card-hold'
+})
+const actionHeadline = computed(() => {
+  if (currentAction.value === '清') return '优先退出，先看前面的处理区，不要等到底线'
+  if (currentAction.value === '减') return '先减仓防守，给结构修复留余地'
+  return '先守关键位，承接没坏前不急着动'
+})
+const quoteModeTitle = computed(() => (
+  isRealtimeQuote.value ? '当前为盘中实时口径' : '当前为日线回退口径'
+))
+const quoteModeCopy = computed(() => (
+  isRealtimeQuote.value
+    ? '下面的分时和价位可以直接作为执行参考。'
+    : '下面的价位更适合作为计划参考，盘中仍要结合承接和回流确认。'
+))
+const primaryExecutionLabel = computed(() => {
+  if (currentAction.value === '清') return '现在先卖哪'
+  if (currentAction.value === '减') return '现在先减哪'
+  return '继续拿先守哪'
+})
+const primaryExecutionCopy = computed(() => {
+  if (currentAction.value === '清') return '能在更前面的处理区走，就不要把最后失效线当成第一卖点。'
+  if (currentAction.value === '减') return '先把最舒服的减仓位看清，再决定后面要不要继续收缩。'
+  return '守住这个位才值得继续拿；一旦失守，就切到退出线处理。'
+})
+const planSectionTitle = computed(() => {
+  if (currentAction.value === '清') return '退出计划'
+  if (currentAction.value === '减') return '减仓计划'
+  return '继续持有计划'
+})
+const executionDetailsSummary = computed(() => {
+  if (currentAction.value === '清') {
+    return `顺序看先卖区、反抽区和最后底线，避免把底线当第一卖点。`
+  }
+  if (currentAction.value === '减') {
+    return `顺序看主动减仓位、反抽位和保护位，不用一开始就把所有方案都摊开。`
+  }
+  return `顺序看守位、失守位和备用处理区，先确认还能不能继续拿。`
+})
+const summaryCards = computed(() => ([
+  {
+    label: '现价 / 浮盈',
+    value: displayCurrentPrice.value,
+    valueClass: currentPnlClass.value,
+    tip: displayCurrentPnlPct.value === '-'
+      ? '浮盈亏待确认'
+      : `${Number(props.currentPnlPct ?? 0) >= 0 ? '当前浮盈' : '当前浮亏'} ${displayCurrentPnlPct.value}`,
+  },
+  {
+    label: '环境 / 日线',
+    value: `${basic.value?.market_env_tag || '-'} / ${daily.value?.sell_point_level || '-'}`,
+    tip: `${daily.value?.current_stage || '-'} · ${basic.value?.stable_market_env_tag || basic.value?.market_env_tag || '-'}`,
+  },
+  {
+    label: '分时 / 优先级',
+    value: `${sanitizePendingText(intraday.value?.conclusion)} / ${accountContext.value?.priority || '-'}`,
+    tip: sanitizePendingText(intraday.value?.intraday_structure, '当前待盘中确认'),
+  },
+]))
+const intradayHeadline = computed(() => {
+  const structure = sanitizePendingText(intraday.value?.intraday_structure, '当前待盘中确认')
+  const conclusion = sanitizePendingText(intraday.value?.conclusion, '拿')
+  const volume = sanitizePendingText(intraday.value?.volume_quality, '量能待确认')
+  return `${conclusion}，当前分时看 ${structure}，量能侧重点是 ${volume}。`
+})
+const analysisSummary = computed(() => (
+  `账户语境 ${accountContext.value?.context_summary || '-'} · 日线 ${daily.value?.sell_point_level || '-'} · 分时 ${sanitizePendingText(intraday.value?.conclusion)}`
+))
 const isActionableLevel = (value) => {
   const text = String(value || '').trim()
   if (!text || text === '-') return false
@@ -585,6 +674,20 @@ const loadData = async () => {
   gap: 8px;
 }
 
+.overview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.overview-tag {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
 .overview-title {
   font-size: 1.05rem;
   font-weight: 700;
@@ -602,14 +705,94 @@ const loadData = async () => {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.mode-banner {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mode-banner strong {
+  font-size: 13px;
+}
+
+.mode-banner span {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.mode-banner-live {
+  background: rgba(46, 207, 154, 0.08);
+  border-color: rgba(46, 207, 154, 0.2);
+}
+
+.mode-banner-fallback {
+  background: rgba(122, 215, 255, 0.08);
+  border-color: rgba(122, 215, 255, 0.2);
+}
+
+.overview-main-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.1fr) minmax(0, 2fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.hero-card {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.06));
+}
+
+.hero-card-primary {
+  border-color: rgba(255, 196, 64, 0.3);
+  box-shadow: 0 0 0 1px rgba(255, 196, 64, 0.12) inset;
+}
+
+.hero-card-hold .hero-value {
+  color: #7ad7ff;
+}
+
+.hero-card-reduce .hero-value {
+  color: #ffb454;
+}
+
+.hero-card-clear .hero-value {
+  color: #ff7a7f;
+}
+
+.hero-label {
+  font-size: 12px;
+  color: var(--color-text-sec);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hero-value {
+  font-size: 2.2rem;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  color: #ffd166;
+}
+
+.hero-note {
+  color: var(--color-text-sec);
+  line-height: 1.7;
+}
+
 .overview-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
-.summary-card,
-.metric-card {
+.summary-card {
   display: grid;
   gap: 6px;
   padding: 14px;
@@ -661,6 +844,52 @@ const loadData = async () => {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.analysis-disclosure {
+  display: grid;
+  gap: 16px;
+}
+
+.analysis-disclosure-summary {
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.analysis-disclosure-summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-disclosure-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.analysis-disclosure-copy strong {
+  font-size: 14px;
+}
+
+.analysis-disclosure-copy span {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.analysis-disclosure-icon {
+  flex-shrink: 0;
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.analysis-disclosure[open] .analysis-disclosure-icon {
+  color: var(--color-text-main);
+}
+
 .section-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -676,7 +905,7 @@ const loadData = async () => {
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.analysis-section-full {
+.analysis-section-wide {
   grid-column: 1 / -1;
 }
 
@@ -735,6 +964,24 @@ const loadData = async () => {
   gap: 8px;
 }
 
+.intraday-headline {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.intraday-headline strong {
+  font-size: 14px;
+}
+
+.intraday-headline span {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
 .data-item {
   display: flex;
   justify-content: space-between;
@@ -761,7 +1008,7 @@ const loadData = async () => {
 
 .order-plan-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -881,6 +1128,57 @@ const loadData = async () => {
   line-height: 1.6;
 }
 
+.execution-details-disclosure {
+  display: grid;
+  gap: 12px;
+}
+
+.execution-details-summary {
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.execution-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.execution-details-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.execution-details-copy strong {
+  font-size: 14px;
+}
+
+.execution-details-copy span,
+.execution-details-icon {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+}
+
+.execution-details-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.execution-details-disclosure[open] .execution-details-icon {
+  color: var(--color-text-main);
+}
+
+.execution-details-body {
+  display: grid;
+  gap: 12px;
+}
+
 .order-flow-title {
   font-size: 13px;
   font-weight: 700;
@@ -925,8 +1223,13 @@ const loadData = async () => {
   line-height: 1.6;
 }
 
-.section-emphasis,
-.final-line {
+.plan-notes-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.section-emphasis {
   font-weight: 700;
   line-height: 1.7;
 }
@@ -938,10 +1241,12 @@ const loadData = async () => {
     align-items: flex-start;
   }
 
+  .overview-main-grid,
   .overview-grid,
   .section-grid,
   .price-grid,
-  .order-plan-grid {
+  .order-plan-grid,
+  .plan-notes-grid {
     grid-template-columns: 1fr;
   }
 
