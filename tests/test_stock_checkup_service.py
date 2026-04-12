@@ -171,6 +171,37 @@ def test_build_fund_quality_uses_moneyflow_rows():
     assert "moneyflow" in fund_quality.note
 
 
+def test_checkup_key_levels_keep_previous_day_anchor_during_intraday_reopen():
+    history_rows = [
+        {"trade_date": "20260320", "close": 25.0, "high": 25.5, "low": 24.8},
+        {"trade_date": "20260321", "close": 26.0, "high": 26.3, "low": 25.7},
+        {"trade_date": "20260322", "close": 27.2, "high": 27.6, "low": 26.8},
+        {"trade_date": "20260323", "close": 28.5, "high": 29.1, "low": 27.4},
+    ] * 20
+
+    morning_levels = stock_checkup_service._build_key_levels(
+        SimpleNamespace(
+            high=30.2,
+            low=28.6,
+            data_source="realtime_sina",
+        ),
+        history_rows,
+    )
+    reopened_levels = stock_checkup_service._build_key_levels(
+        SimpleNamespace(
+            high=31.1,
+            low=27.9,
+            data_source="realtime_sina",
+        ),
+        history_rows,
+    )
+
+    assert morning_levels.pressure_levels == reopened_levels.pressure_levels == [29.1]
+    assert morning_levels.support_levels == reopened_levels.support_levels == [26.91, 26.68, 24.8, 27.4]
+    assert morning_levels.defense_level == reopened_levels.defense_level == 27.4
+    assert "上一交易日结构" in morning_levels.note
+
+
 @pytest.mark.asyncio
 async def test_checkup_builds_trading_response(monkeypatch):
     market_env = MarketEnvOutput(

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -684,23 +685,41 @@ class StockCheckupService:
         closes = [float(row.get("close") or 0) for row in history_rows if float(row.get("close") or 0) > 0]
         ma10 = self._calc_ma(closes, 10)
         ma20 = self._calc_ma(closes, 20)
+        key_level_input = self._stable_key_level_input(target_input, history_rows)
         pressure = self._unique_prices([
             max(highs[-20:]) if len(highs) >= 20 else None,
             max(highs[-60:]) if len(highs) >= 60 else None,
-            target_input.high if float(target_input.high or 0) > 0 else None,
+            key_level_input.high if float(key_level_input.high or 0) > 0 else None,
         ])
         support = self._unique_prices([
             ma10,
             ma20,
             min(lows[-20:]) if len(lows) >= 20 else None,
-            target_input.low if float(target_input.low or 0) > 0 else None,
+            key_level_input.low if float(key_level_input.low or 0) > 0 else None,
         ])
         defense_level = support[-1] if support else None
         return StockCheckupKeyLevels(
             pressure_levels=pressure,
             support_levels=support,
             defense_level=defense_level,
-            note="压力位优先看前高与区间高点，支撑位优先看均线与前低；实时盘中位请结合盘口确认。",
+            note="压力位优先看前高与区间高点，支撑位优先看均线与前低；盘中默认锚定上一交易日结构，实时强弱请结合盘口确认。",
+        )
+
+    def _stable_key_level_input(self, target_input, history_rows: List[Dict]):
+        """关键位默认锚定到上一已完成交易日，避免盘中高低点导致防守线漂移。"""
+        if not self._is_realtime_quote(target_input) or not history_rows:
+            return target_input
+        anchor_row = history_rows[-1] or {}
+        anchor_high = self._safe_float(anchor_row.get("high"))
+        anchor_low = self._safe_float(anchor_row.get("low"))
+        if anchor_high is None and anchor_low is None:
+            return target_input
+        return SimpleNamespace(
+            **{
+                **getattr(target_input, "__dict__", {}),
+                "high": anchor_high if anchor_high is not None else getattr(target_input, "high", None),
+                "low": anchor_low if anchor_low is not None else getattr(target_input, "low", None),
+            }
         )
 
     def _build_strategy(
@@ -847,6 +866,9 @@ class StockCheckupService:
             return float(value)
         except Exception:
             return None
+
+    def _is_realtime_quote(self, target_input) -> bool:
+        return str(getattr(target_input, "data_source", "") or "").startswith("realtime_")
 
     def _unique_prices(self, values: List[Optional[float]]) -> List[float]:
         result: List[float] = []
