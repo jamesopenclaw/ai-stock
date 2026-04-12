@@ -239,6 +239,44 @@ async def test_get_stock_pools_radar_mode_returns_realtime_payload(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_stock_pools_radar_mode_passes_strategy_style(monkeypatch):
+    pools = StockPoolsOutput(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_scan_trade_date="2026-03-24",
+        sector_scan_resolved_trade_date="2026-03-24",
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
+        market_watch_pool=[],
+        account_executable_pool=[],
+        holding_process_pool=[],
+        total_count=0,
+    )
+
+    compute_calls = []
+
+    async def fake_compute(*args, **kwargs):
+        compute_calls.append((args, kwargs))
+        return pools
+
+    monkeypatch.setattr(stock, "_compute_radar_stock_pools_result", fake_compute)
+
+    response = await stock.get_stock_pools(
+        trade_date="2026-03-24",
+        limit=50,
+        refresh=False,
+        mode="radar",
+        strategy_style="right",
+        force_llm_refresh=False,
+    )
+
+    assert response.code == 200
+    assert response.data["mode"] == "radar"
+    assert response.data["strategy_style"] == "right"
+    assert len(compute_calls) == 1
+    assert compute_calls[0][1]["strategy_style"] == "right"
+
+
+@pytest.mark.asyncio
 async def test_compute_radar_stock_pools_result_prefers_today_sources(monkeypatch):
     account_context = type(
         "AccountContext",
@@ -433,6 +471,52 @@ async def test_get_stock_pools_returns_snapshot_market_env_and_mainline(monkeypa
     assert response.data["industry_leaders"][0]["sector_source_type"] == "industry"
     assert response.data["mainline_sectors"][0]["sector_name"] == "草甘膦"
     assert response.data["mainline_sectors"][0]["sector_rotation_tag"] == "强化中"
+
+
+@pytest.mark.asyncio
+async def test_get_stock_pools_non_default_style_bypasses_snapshot(monkeypatch):
+    pools = StockPoolsOutput(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_scan_trade_date="2026-03-24",
+        sector_scan_resolved_trade_date="2026-03-24",
+        snapshot_version=stock.STOCK_POOLS_SNAPSHOT_VERSION,
+        market_watch_pool=[],
+        account_executable_pool=[],
+        holding_process_pool=[],
+        total_count=0,
+    )
+
+    compute_calls = []
+
+    async def fake_compute(*args, **kwargs):
+        compute_calls.append((args, kwargs))
+        return pools
+
+    async def should_not_read_snapshot(*args, **kwargs):
+        raise AssertionError("non-default style should bypass stable snapshots")
+
+    monkeypatch.setattr(stock, "_compute_stock_pools_result", fake_compute)
+    monkeypatch.setattr(
+        stock.review_snapshot_service,
+        "get_stock_pools_page_snapshot",
+        should_not_read_snapshot,
+    )
+
+    response = await stock.get_stock_pools(
+        trade_date="2026-03-24",
+        limit=50,
+        refresh=False,
+        strategy_style="left",
+        force_llm_refresh=False,
+    )
+
+    assert response.code == 200
+    assert response.data["mode"] == "stable"
+    assert response.data["strategy_style"] == "left"
+    assert response.data["snapshot_status_message"] == "当前使用非默认候选风格，已按实时规则直接计算，不读写稳定快照。"
+    assert len(compute_calls) == 1
+    assert compute_calls[0][1]["strategy_style"] == "left"
 
 
 @pytest.mark.asyncio

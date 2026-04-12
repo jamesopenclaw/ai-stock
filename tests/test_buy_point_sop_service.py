@@ -219,11 +219,11 @@ async def test_buy_point_sop_service_returns_structured_buy_plan(monkeypatch):
     assert "站均价线上" in result.intraday_judgement.price_vs_avg_line
     assert result.intraday_judgement.volume_quality == "实时放量跟随（相对放量 2.4）"
     assert result.intraday_judgement.conclusion == "买"
-    assert result.order_plan.low_absorb_price == "27.45-27.66"
-    assert result.order_plan.breakout_price == "28.31-28.45"
-    assert result.order_plan.retrace_confirm_price == "28.06-28.28"
-    assert result.order_plan.give_up_price == "28.88"
-    assert "放量过 28.31-28.45 并站稳再考虑" in result.order_plan.trigger_condition
+    assert result.order_plan.low_absorb_price == "26.92-27.08"
+    assert result.order_plan.breakout_price == "27.61-27.75"
+    assert result.order_plan.retrace_confirm_price == "27.36-27.58"
+    assert result.order_plan.give_up_price == "28.16"
+    assert "放量过 27.61-27.75 并站稳再考虑" in result.order_plan.trigger_condition
     assert result.order_plan.invalid_condition.startswith("跌破 27.20 且无法快速收回")
     assert result.position_advice.suggestion == "中仓参与"
     assert result.position_advice.recommended_position_pct == 0.3
@@ -857,6 +857,7 @@ def test_buy_point_sop_breakout_price_stays_above_low_absorb():
         SimpleNamespace(buy_point_level="B"),
         SimpleNamespace(intraday_structure="回踩承接"),
         levels,
+        history_rows=[],
     )
 
     assert _zone_low(plan.breakout_price) > _zone_low(plan.low_absorb_price)
@@ -901,6 +902,7 @@ def test_buy_point_sop_retrace_confirm_ref_does_not_use_far_below_spot_anchor():
             range_high_20d=104.5,
             range_low_20d=86.2,
         ),
+        history_rows=[],
     )
 
     assert _zone_low(plan.low_absorb_price) > 120
@@ -977,11 +979,107 @@ def test_buy_point_sop_retrace_confirm_zone_stays_above_invalid_line():
             range_high_20d=17.05,
             range_low_20d=16.12,
         ),
+        history_rows=[],
     )
 
     assert _zone_low(plan.low_absorb_price) > float(plan.below_no_buy)
     assert _zone_low(plan.retrace_confirm_price) > float(plan.below_no_buy)
     assert _zone_low(plan.retrace_confirm_price) > 17.70
+
+
+def test_buy_point_sop_order_plan_keeps_entry_levels_stable_during_intraday_reopen():
+    levels = SimpleNamespace(
+        ma5=27.02,
+        ma10=26.74,
+        ma20=25.96,
+        prev_high=27.59,
+        prev_low=26.63,
+        range_high_20d=27.59,
+        range_low_20d=24.86,
+    )
+    history_rows = [
+        {
+            "trade_date": "20260326",
+            "open": 26.58,
+            "high": 27.41,
+            "low": 26.31,
+            "close": 26.96,
+        },
+        {
+            "trade_date": "20260327",
+            "open": 27.08,
+            "high": 27.59,
+            "low": 26.97,
+            "close": 27.32,
+        },
+    ]
+    stock = _sample_scored_stock()
+    stock.close = 27.32
+    stock.open = 27.08
+    stock.high = 27.59
+    stock.low = 26.97
+    stock.change_pct = 1.34
+
+    common_buy_point = SimpleNamespace(
+        buy_point_type=BuyPointType.RETRACE_SUPPORT,
+        buy_trigger_cond="回踩承接再看",
+        buy_invalid_cond="跌破支撑放弃",
+        buy_invalid_price=26.72,
+    )
+    market_env = SimpleNamespace(market_env_tag=MarketEnvTag.NEUTRAL)
+    account_context = SimpleNamespace(
+        position_status="轻仓（仓位 18%）",
+        same_direction_exposure="暂无明显同方向重复暴露。",
+        current_use="新开仓",
+        account_conclusion="轻仓新开仓，可试错",
+    )
+    daily_judgement = SimpleNamespace(buy_point_level="B")
+    intraday_judgement = SimpleNamespace(intraday_structure="回踩承接")
+
+    morning_plan = buy_point_sop_service._build_order_plan(
+        SimpleNamespace(
+            ts_code="002463.SZ",
+            close=28.10,
+            open=27.62,
+            high=28.34,
+            low=27.48,
+            vol_ratio=1.8,
+            data_source="realtime_sina",
+        ),
+        stock,
+        common_buy_point,
+        market_env,
+        account_context,
+        daily_judgement,
+        intraday_judgement,
+        levels,
+        history_rows=history_rows,
+    )
+    reopened_plan = buy_point_sop_service._build_order_plan(
+        SimpleNamespace(
+            ts_code="002463.SZ",
+            close=29.04,
+            open=28.52,
+            high=29.16,
+            low=28.34,
+            vol_ratio=2.5,
+            data_source="realtime_sina",
+        ),
+        stock.model_copy(update={"close": 29.04, "high": 29.16, "low": 28.34}),
+        common_buy_point,
+        market_env,
+        account_context,
+        daily_judgement,
+        intraday_judgement,
+        levels,
+        history_rows=history_rows,
+    )
+
+    assert morning_plan.low_absorb_price == "26.97-27.13"
+    assert reopened_plan.low_absorb_price == morning_plan.low_absorb_price
+    assert reopened_plan.breakout_price == morning_plan.breakout_price == "27.64-27.80"
+    assert reopened_plan.retrace_confirm_price == morning_plan.retrace_confirm_price == "27.45-27.67"
+    assert reopened_plan.give_up_price == morning_plan.give_up_price == "28.00"
 
 
 @pytest.mark.asyncio

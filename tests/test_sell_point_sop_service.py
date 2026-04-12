@@ -446,7 +446,7 @@ def test_sell_point_sop_price_vs_avg_line_uses_realtime_avg():
     assert "压均价线下" in relation
 
 
-def test_sell_point_sop_order_plan_uses_live_holding_price_for_profitable_reduce():
+def test_sell_point_sop_order_plan_keeps_live_take_profit_for_profitable_reduce():
     holding = _sample_holding(
         ts_code="603906.SH",
         stock_name="龙蟠科技",
@@ -467,11 +467,12 @@ def test_sell_point_sop_order_plan_uses_live_holding_price_for_profitable_reduce
     target_input = SimpleNamespace(
         ts_code="603906.SH",
         stock_name="龙蟠科技",
-        close=20.44,
-        open=20.31,
-        high=20.56,
-        low=20.18,
+        close=22.41,
+        open=22.06,
+        high=22.58,
+        low=21.98,
         vol_ratio=1.6,
+        data_source="realtime_sina",
     )
     sell_point = SellPointOutput(
         ts_code="603906.SH",
@@ -513,11 +514,140 @@ def test_sell_point_sop_order_plan_uses_live_holding_price_for_profitable_reduce
         daily_judgement,
         intraday_judgement,
         levels,
+        history_rows=[
+            {
+                "trade_date": "20260327",
+                "open": 19.95,
+                "high": 20.12,
+                "low": 19.8,
+                "close": 19.98,
+            },
+            {
+                "trade_date": "20260328",
+                "open": 20.31,
+                "high": 20.56,
+                "low": 20.18,
+                "close": 20.44,
+            },
+        ],
     )
 
     assert result.proactive_take_profit_price == "22.43-22.57"
-    assert result.rebound_sell_price == "20.32-20.56"
+    assert result.rebound_sell_price == "20.36-20.52"
+    assert result.break_stop_price == "20.32"
     assert "锁利润" in result.take_profit_condition
+
+
+def test_sell_point_sop_order_plan_keeps_guard_levels_stable_during_intraday_reopen():
+    holding = _sample_holding(
+        ts_code="603906.SH",
+        stock_name="龙蟠科技",
+        cost_price=20.51,
+        market_price=22.41,
+        pnl_pct=3.2,
+        holding_reason="修复仓，等确认",
+    )
+    scored = _sample_scored_stock()
+    scored.ts_code = "603906.SH"
+    scored.stock_name = "龙蟠科技"
+    scored.close = 20.44
+    scored.open = 20.31
+    scored.high = 20.56
+    scored.low = 20.18
+    scored.structure_state_tag = StructureStateTag.DIVERGENCE
+
+    sell_point = SellPointOutput(
+        ts_code="603906.SH",
+        stock_name="龙蟠科技",
+        market_price=22.41,
+        cost_price=20.51,
+        pnl_pct=3.2,
+        holding_qty=500,
+        holding_days=4,
+        can_sell_today=True,
+        quote_time="2026-03-29 10:32:00",
+        data_source="realtime_sina",
+        sell_signal_tag=SellSignalTag.REDUCE,
+        sell_point_type=SellPointType.REDUCE_POSITION,
+        sell_trigger_cond="先看守位",
+        sell_reason="先观察承接",
+        sell_priority=SellPriority.MEDIUM,
+        sell_comment="先盯结构",
+    )
+    account_context = SimpleNamespace(role="修复仓", pnl_status="微利")
+    daily_judgement = SimpleNamespace(current_stage="松动", sell_point_level="B")
+    intraday_judgement = SimpleNamespace(conclusion="拿")
+    levels = SimpleNamespace(
+        ma5=20.44,
+        ma10=20.28,
+        ma20=19.82,
+        prev_high=20.12,
+        prev_low=19.8,
+        range_high_20d=20.56,
+        range_low_20d=18.96,
+    )
+    history_rows = [
+        {
+            "trade_date": "20260327",
+            "open": 19.95,
+            "high": 20.12,
+            "low": 19.8,
+            "close": 19.98,
+        },
+        {
+            "trade_date": "20260328",
+            "open": 20.31,
+            "high": 20.56,
+            "low": 20.18,
+            "close": 20.44,
+        },
+    ]
+
+    morning_plan = sell_point_sop_service._build_order_plan(
+        SimpleNamespace(
+            ts_code="603906.SH",
+            stock_name="龙蟠科技",
+            close=22.41,
+            open=22.06,
+            high=22.58,
+            low=21.98,
+            vol_ratio=1.6,
+            data_source="realtime_sina",
+        ),
+        holding,
+        scored,
+        sell_point,
+        account_context,
+        daily_judgement,
+        intraday_judgement,
+        levels,
+        history_rows=history_rows,
+    )
+    reopened_plan = sell_point_sop_service._build_order_plan(
+        SimpleNamespace(
+            ts_code="603906.SH",
+            stock_name="龙蟠科技",
+            close=23.11,
+            open=22.82,
+            high=23.28,
+            low=22.65,
+            vol_ratio=2.1,
+            data_source="realtime_sina",
+        ),
+        holding.model_copy(update={"market_price": 23.11, "pnl_pct": 12.68}),
+        scored,
+        sell_point.model_copy(update={"market_price": 23.11, "pnl_pct": 12.68}),
+        account_context,
+        daily_judgement,
+        intraday_judgement,
+        levels,
+        history_rows=history_rows,
+    )
+
+    assert morning_plan.rebound_sell_price == "20.36-20.52"
+    assert reopened_plan.rebound_sell_price == morning_plan.rebound_sell_price
+    assert reopened_plan.break_stop_price == morning_plan.break_stop_price == "20.32"
+    assert reopened_plan.observe_level == morning_plan.observe_level == "20.44"
 
 
 @pytest.mark.asyncio

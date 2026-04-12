@@ -74,6 +74,12 @@ class PrimaryExecutionPlanSummary:
     proximity_note: Optional[str]
 
 
+@dataclass
+class BuyPlanAnchor:
+    price: float
+    target_input: object
+
+
 class BuyPointSopService:
     """生成符合交易 SOP 的单股买点分析结果。"""
 
@@ -281,6 +287,7 @@ class BuyPointSopService:
             daily_judgement,
             intraday_judgement,
             levels,
+            history_rows,
         )
         position_advice = self._build_position_advice(
             context.account,
@@ -989,10 +996,13 @@ class BuyPointSopService:
         daily_judgement: BuyPointSopDailyJudgement,
         intraday_judgement: BuyPointSopIntradayJudgement,
         levels: DailyLevelSnapshot,
+        history_rows: List[Dict],
     ) -> BuyPointSopOrderPlan:
-        price = float(target_input.close or 0)
+        plan_anchor = self._build_plan_anchor(target_input, history_rows)
+        anchor_input = plan_anchor.target_input
+        price = plan_anchor.price
         structure_type = self._resolve_buy_structure_type(
-            target_input,
+            anchor_input,
             buy_point,
             daily_judgement,
             intraday_judgement,
@@ -1005,27 +1015,27 @@ class BuyPointSopService:
         account_tight = self._is_account_tight(account_context)
         low_absorb_ref = self._select_low_absorb_ref(
             price,
-            target_input,
+            anchor_input,
             levels,
             structure_type,
             market_state,
         )
         breakout_ref = self._select_breakout_ref(
             price,
-            target_input,
+            anchor_input,
             levels,
             structure_type,
         )
         retrace_confirm_ref = self._select_retrace_confirm_ref(
             price,
-            target_input,
+            anchor_input,
             levels,
             structure_type,
             breakout_ref,
         )
         retrace_confirm_ref = self._normalize_retrace_confirm_ref(
             price,
-            getattr(target_input, "ts_code", ""),
+            getattr(anchor_input, "ts_code", ""),
             structure_type,
             retrace_confirm_ref,
             low_absorb_ref,
@@ -1034,14 +1044,14 @@ class BuyPointSopService:
         if invalid_price is None:
             invalid_price = self._select_invalid_ref(
                 price,
-                target_input,
+                anchor_input,
                 levels,
                 structure_type,
                 retrace_confirm_ref,
             )
         retrace_confirm_ref = self._normalize_retrace_confirm_ref_vs_invalid(
             price,
-            target_input,
+            anchor_input,
             structure_type,
             market_state,
             account_tight,
@@ -1062,15 +1072,15 @@ class BuyPointSopService:
 
         low_absorb_zone = self._format_support_zone(
             low_absorb_ref,
-            *self._low_absorb_buffer_pct(structure_type, market_state, target_input, account_tight),
+            *self._low_absorb_buffer_pct(structure_type, market_state, anchor_input, account_tight),
         )
         breakout_zone = self._format_above_zone(
             breakout_ref,
-            *self._breakout_buffer_pct(structure_type, market_state, target_input, account_tight),
+            *self._breakout_buffer_pct(structure_type, market_state, anchor_input, account_tight),
         )
         retrace_confirm_zone = self._format_support_zone(
             retrace_confirm_ref,
-            *self._retrace_buffer_pct(structure_type, market_state, target_input, account_tight),
+            *self._retrace_buffer_pct(structure_type, market_state, anchor_input, account_tight),
         )
         give_up_price = self._display_price(give_up_ref)
         structure_trigger = self._resolve_trigger_condition(
@@ -1096,6 +1106,46 @@ class BuyPointSopService:
             above_no_chase=give_up_price,
             below_no_buy=self._display_price(invalid_price),
         )
+
+    def _build_plan_anchor(
+        self,
+        target_input,
+        history_rows: List[Dict],
+    ) -> BuyPlanAnchor:
+        """盘中买点计划位默认锚定到上一已完成交易日，避免随实时价漂移。"""
+        fallback_price = self._round_price(getattr(target_input, "close", None)) or 0.0
+        if not self._is_realtime_quote(target_input) or not history_rows:
+            return BuyPlanAnchor(price=float(fallback_price), target_input=target_input)
+
+        anchor_row = history_rows[-1] or {}
+        anchor_close = self._round_price(anchor_row.get("close")) or fallback_price
+        anchor_open = self._round_price(anchor_row.get("open")) or anchor_close
+        anchor_high = self._round_price(anchor_row.get("high")) or anchor_close
+        anchor_low = self._round_price(anchor_row.get("low")) or anchor_close
+        anchor_pre_close = (
+            self._round_price(history_rows[-2].get("close"))
+            if len(history_rows) >= 2
+            else self._round_price(getattr(target_input, "pre_close", None))
+        ) or anchor_close
+        anchor_input = SimpleNamespace(
+            ts_code=getattr(target_input, "ts_code", None),
+            stock_name=getattr(target_input, "stock_name", None),
+            sector_name=getattr(target_input, "sector_name", None),
+            close=anchor_close,
+            open=anchor_open,
+            high=anchor_high,
+            low=anchor_low,
+            pre_close=anchor_pre_close,
+            change_pct=0.0,
+            turnover_rate=getattr(target_input, "turnover_rate", 0.0),
+            amount=0.0,
+            avg_price=anchor_close,
+            intraday_volume_ratio=None,
+            vol_ratio=0.0,
+            quote_time=None,
+            data_source="previous_daily_plan_anchor",
+        )
+        return BuyPlanAnchor(price=float(anchor_close), target_input=anchor_input)
 
     def _build_add_position_decision(
         self,
@@ -1727,6 +1777,9 @@ class BuyPointSopService:
         if not candidates:
             return None
         return self._round_price(min(candidates, key=lambda item: item[0])[1])
+
+    def _is_realtime_quote(self, target_input) -> bool:
+        return str(getattr(target_input, "data_source", "") or "").startswith("realtime_")
 
     def _resolve_buy_structure_type(
         self,

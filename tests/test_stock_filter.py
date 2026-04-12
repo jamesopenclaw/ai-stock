@@ -265,8 +265,66 @@ class TestStockFilter:
         stock = sample_stocks[0]  # 平安银行
         
         scored = service._score_stock(stock, mock_market_env_attack, {})
-        
+
         assert scored.stock_strength_tag == StockStrengthTag.STRONG
+
+    def test_mainline_pullback_source_maps_to_pullback_bucket(self, service, mock_market_env_attack):
+        stock = StockInput(
+            ts_code="002463.SZ",
+            stock_name="沪电股份",
+            sector_name="高速铜缆",
+            close=30.5,
+            change_pct=1.8,
+            turnover_rate=5.5,
+            amount=180000,
+            vol_ratio=1.6,
+            high=30.9,
+            low=30.0,
+            open=30.4,
+            pre_close=29.96,
+            candidate_source_tag="主线回踩补充",
+        )
+        sector = SectorOutput(
+            sector_name="高速铜缆",
+            sector_change_pct=3.2,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+        )
+
+        scored = service._score_stock(stock, mock_market_env_attack, {"高速铜缆": sector})
+
+        assert scored.candidate_bucket_tag == "趋势回踩"
+
+    def test_mainline_low_suck_source_maps_to_prepare_bucket(self, service, mock_market_env_attack):
+        stock = StockInput(
+            ts_code="300603.SZ",
+            stock_name="立昂技术",
+            sector_name="算力",
+            close=12.3,
+            change_pct=0.6,
+            turnover_rate=4.8,
+            amount=98000,
+            vol_ratio=1.4,
+            high=12.5,
+            low=12.0,
+            open=12.1,
+            pre_close=12.23,
+            candidate_source_tag="主线低吸补充",
+        )
+        sector = SectorOutput(
+            sector_name="算力",
+            sector_change_pct=2.7,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+        )
+
+        scored = service._score_stock(stock, mock_market_env_attack, {"算力": sector})
+
+        assert scored.candidate_bucket_tag == "异动预备"
 
     def test_mainline_leader_with_poor_entry_stays_in_market_watch_only(self, service, mock_market_env_attack):
         """

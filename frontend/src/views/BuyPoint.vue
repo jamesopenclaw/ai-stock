@@ -7,7 +7,17 @@
             <span>买点分析</span>
             <span v-if="displayDate" class="header-date">{{ displayDate }}</span>
           </div>
-          <el-button @click="loadData" :loading="loading">刷新</el-button>
+          <div class="header-actions">
+            <div class="style-switch-wrap">
+              <span class="style-switch-label">候选风格</span>
+              <el-radio-group v-model="strategyStyle" size="small" class="style-switch">
+                <el-radio-button label="balanced">均衡</el-radio-button>
+                <el-radio-button label="left">偏左侧</el-radio-button>
+                <el-radio-button label="right">偏右侧</el-radio-button>
+              </el-radio-group>
+            </div>
+            <el-button @click="loadData" :loading="loading">刷新</el-button>
+          </div>
         </div>
       </template>
 
@@ -705,6 +715,13 @@ const BUY_POINT_TIMEOUT = 90000
 const loadError = ref('')
 const route = useRoute()
 const router = useRouter()
+const normalizeStrategyStyle = (value) => {
+  const normalized = String(value || 'balanced').trim().toLowerCase()
+  if (normalized === 'left' || normalized === 'right') return normalized
+  return 'balanced'
+}
+
+const strategyStyle = ref(normalizeStrategyStyle(route.query.strategy_style))
 const focusSector = computed(() => String(route.query.focus_sector || '').trim())
 const focusSectorSourceType = computed(() => String(route.query.focus_sector_source_type || '').trim())
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
@@ -731,6 +748,12 @@ const directionSourceLabel = (sourceType) => {
 const focusSectorLabel = computed(() => (
   focusSectorSourceType.value ? `${directionSourceLabel(focusSectorSourceType.value)} ` : ''
 ))
+const strategyStyleLabel = computed(() => {
+  const style = normalizeStrategyStyle(buyData.value.strategy_style || strategyStyle.value)
+  if (style === 'left') return '偏左侧'
+  if (style === 'right') return '偏右侧'
+  return '均衡'
+})
 
 const BUY_POINT_GROUP_ORDER = ['突破', '突破后回踩', '回踩承接', '低吸', '修复转强']
 const BUY_POINT_GROUP_META = {
@@ -1283,6 +1306,11 @@ const buyFreshnessSummary = computed(() => {
 const buyFreshnessItems = computed(() => [
   { label: '分析日', value: displayDate.value || '-', tone: 'strong' },
   {
+    label: '候选风格',
+    value: strategyStyleLabel.value,
+    tone: strategyStyle.value === 'balanced' ? 'strong' : 'warn',
+  },
+  {
     label: '价格口径',
     value: buyFreshnessSummary.value,
     tone: buyRealtimeCount.value ? 'strong' : 'warn',
@@ -1294,6 +1322,9 @@ const buyFreshnessItems = computed(() => [
   },
 ])
 const buyFreshnessNote = computed(() => {
+  if (strategyStyle.value !== 'balanced') {
+    return `当前按${strategyStyleLabel.value}候选口径分析，先和三池页保持同一风格，再判断是否执行。`
+  }
   if (!availablePoints.value.length && !observePoints.value.length) {
     return '今天不建议开新仓，优先回三池和卖点页处理旧仓。'
   }
@@ -1645,6 +1676,7 @@ const goToPoolsPage = () => {
   const query = {}
   if (focusSector.value) query.focus_sector = focusSector.value
   if (focusSectorSourceType.value) query.focus_sector_source_type = focusSectorSourceType.value
+  if (strategyStyle.value !== 'balanced') query.strategy_style = strategyStyle.value
   if (Object.keys(query).length) {
     router.push({ path: '/pools', query })
     return
@@ -1668,7 +1700,11 @@ const loadData = async ({ silent = false } = {}) => {
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
-    const res = await decisionApi.buyPoint(tradeDate, 30, { refresh: true, timeout: BUY_POINT_TIMEOUT })
+    const res = await decisionApi.buyPoint(tradeDate, 30, {
+      refresh: true,
+      strategyStyle: strategyStyle.value,
+      timeout: BUY_POINT_TIMEOUT,
+    })
     const payload = res.data || {}
     const responseCode = payload.code ?? 200
     if (responseCode !== 200 || !payload.data) {
@@ -1701,6 +1737,17 @@ onMounted(() => {
   scheduleReviewInsightLoad()
 })
 
+watch(strategyStyle, async (nextStyle) => {
+  const query = { ...route.query }
+  if (nextStyle === 'balanced') {
+    delete query.strategy_style
+  } else {
+    query.strategy_style = nextStyle
+  }
+  await router.replace({ query })
+  loadData()
+})
+
 watch(
   () => [
     reviewSourceFilter.value,
@@ -1730,6 +1777,16 @@ watch(
     handleNotificationQuery()
   }
 )
+
+watch(
+  () => route.query.strategy_style,
+  (value) => {
+    const normalized = normalizeStrategyStyle(value)
+    if (strategyStyle.value !== normalized) {
+      strategyStyle.value = normalized
+    }
+  }
+)
 </script>
 
 <style scoped>
@@ -1743,6 +1800,12 @@ watch(
   gap: 12px;
   flex-wrap: wrap;
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .card-header-title {
   display: flex;
   align-items: baseline;
@@ -1754,6 +1817,23 @@ watch(
   color: var(--color-text-sec);
   letter-spacing: 0.02em;
   font-weight: 400;
+}
+
+.style-switch-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.style-switch-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-sec);
+}
+
+.style-switch {
+  flex-shrink: 0;
 }
 
 .load-error {

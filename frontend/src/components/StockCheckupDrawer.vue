@@ -1,228 +1,290 @@
 <template>
   <el-drawer
     :model-value="modelValue"
-    size="62%"
+    size="68%"
     :destroy-on-close="false"
     class="stock-checkup-drawer"
     @close="handleClose"
   >
     <template #header>
       <div class="drawer-header">
-        <div class="header-main">
-          <div class="header-title">{{ headerTitle }}</div>
-          <div class="header-meta">
-            <span>{{ tsCode || '-' }}</span>
-            <span v-if="displayTradeDate">体检日 {{ displayTradeDate }}</span>
-            <span v-if="data?.resolved_trade_date && data.resolved_trade_date !== displayTradeDate">
-              实际行情日 {{ data.resolved_trade_date }}
-            </span>
+        <div class="header-shell">
+          <div class="header-main">
+            <div class="header-title-row">
+              <div class="header-title">{{ headerTitle }}</div>
+              <span v-if="rule?.strategy?.current_strategy" class="header-strategy-chip" :class="strategyBadgeClass">
+                {{ rule.strategy.current_strategy }}
+              </span>
+            </div>
+            <div class="header-subtitle">{{ headerSubtitle }}</div>
+            <div class="header-meta">
+              <span v-for="item in headerMetaItems" :key="item.label" class="header-meta-pill">
+                <span class="header-meta-label">{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </span>
+            </div>
           </div>
-        </div>
-        <div class="header-actions">
-          <el-radio-group v-model="activeTarget" size="small">
-            <el-radio-button label="观察型" />
-            <el-radio-button label="持仓型" />
-            <el-radio-button label="交易型" />
-          </el-radio-group>
-          <el-button @click="loadData()" :loading="loading">刷新</el-button>
-          <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
+
+          <div class="header-actions">
+            <div class="header-target-group">
+              <span class="header-group-label">体检目标</span>
+              <el-radio-group v-model="activeTarget" size="small" @change="loadData">
+                <el-radio-button label="观察型" />
+                <el-radio-button label="持仓型" />
+                <el-radio-button label="交易型" />
+              </el-radio-group>
+            </div>
+            <div class="header-button-row">
+              <el-button @click="loadData()" :loading="loading">刷新</el-button>
+              <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
+            </div>
+          </div>
         </div>
       </div>
     </template>
 
     <div class="drawer-body">
       <el-empty v-if="!tsCode" description="请选择一只股票后再查看体检" />
-      <el-skeleton v-else-if="loading" :rows="16" animated />
+      <el-skeleton v-else-if="loading && !data" :rows="16" animated />
       <el-empty v-else-if="!data" description="暂无体检结果" />
       <template v-else>
-        <div class="overview-card">
-          <div class="overview-top">
-            <div class="overview-badge" :class="strategyBadgeClass">
-              {{ rule?.strategy?.current_strategy || '观察' }}
-            </div>
-            <div class="overview-copy">
-              <div class="overview-title">
-                {{ rule?.strategy?.current_characterization || '-' }} / {{ rule?.strategy?.current_role || '-' }}
-              </div>
-              <div class="overview-desc">
-                {{ llm?.overall_summary || rule?.strategy?.strategy_reason || '-' }}
-              </div>
-              <div class="overview-conclusion">
-                {{ llm?.one_line_conclusion || rule?.final_conclusion?.one_line_conclusion || '-' }}
-              </div>
+        <div v-if="refreshStateVisible" class="refresh-banner" :class="`refresh-banner-${activeRefreshMode}`">
+          <div class="refresh-banner-main">
+            <span class="refresh-banner-spinner" />
+            <div class="refresh-banner-copy">
+              <strong>{{ refreshBannerTitle }}</strong>
+              <span>{{ refreshBannerText }}</span>
             </div>
           </div>
-
-          <div class="overview-grid">
-            <div class="summary-card">
-              <span class="summary-label">市场</span>
-              <strong class="summary-value">{{ rule?.market_context?.market_env_tag || '-' }}</strong>
-              <span class="summary-tip">{{ rule?.market_context?.stock_market_alignment || '-' }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">地位</span>
-              <strong class="summary-value">{{ rule?.direction_position?.stock_role || '-' }}</strong>
-              <span class="summary-tip">{{ rule?.direction_position?.sector_level || '-' }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">结构</span>
-              <strong class="summary-value">{{ rule?.daily_structure?.stage_position || '-' }}</strong>
-              <span class="summary-tip">{{ rule?.daily_structure?.structure_conclusion || '-' }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="summary-label">风险</span>
-              <strong class="summary-value">{{ (llm?.key_risks?.length || rule?.strategy?.risk_points?.length || 0) }}</strong>
-              <span class="summary-tip">{{ riskPreview }}</span>
-            </div>
-          </div>
-
-          <div v-if="llmStatusVisible" class="llm-status" :class="llmStatusClass">
-            <span class="llm-status-label">LLM 状态</span>
-            <span class="llm-status-text">{{ llmStatusText }}</span>
-          </div>
+          <span class="refresh-banner-tag">{{ refreshBannerTag }}</span>
         </div>
 
-        <div class="section-grid">
-          <section class="checkup-section">
-            <div class="section-header">1）基本信息</div>
-            <div class="data-list">
-              <div class="data-item"><span>名称 / 代码</span><strong>{{ rule?.basic_info?.stock_name || '-' }} / {{ rule?.basic_info?.ts_code || '-' }}</strong></div>
-              <div class="data-item"><span>行业 / 板块</span><strong>{{ rule?.basic_info?.sector_name || '-' }}</strong></div>
-              <div class="data-item"><span>板块属性</span><strong>{{ rule?.basic_info?.board || '-' }}</strong></div>
-              <div class="data-item"><span>特殊属性</span><strong>{{ joinList(rule?.basic_info?.special_tags) }}</strong></div>
-            </div>
-            <div class="llm-copy">{{ reportContent('basic_info') }}</div>
-          </section>
+        <div class="content-shell" :class="{ 'content-shell-refreshing': refreshStateVisible }">
+          <section class="hero-stage">
+            <div class="hero-orb hero-orb-a" />
+            <div class="hero-orb hero-orb-b" />
 
-          <section class="checkup-section">
-            <div class="section-header">2）市场环境</div>
-            <div class="data-list">
-              <div class="data-item"><span>当前市场状态</span><strong>{{ rule?.market_context?.market_phase || '-' }}</strong></div>
-              <div class="data-item"><span>顺势 / 逆势</span><strong>{{ rule?.market_context?.stock_market_alignment || '-' }}</strong></div>
-              <div class="data-item"><span>容错率</span><strong>{{ rule?.market_context?.tolerance_comment || '-' }}</strong></div>
-            </div>
-            <div class="section-note">{{ rule?.market_context?.market_comment || '-' }}</div>
-            <div class="llm-copy">{{ reportContent('market_context') }}</div>
-          </section>
-
-          <section class="checkup-section">
-            <div class="section-header">3）方向地位</div>
-            <div class="data-list">
-              <div class="data-item"><span>所属方向</span><strong>{{ rule?.direction_position?.direction_name || '-' }}</strong></div>
-              <div class="data-item"><span>板块级别</span><strong>{{ rule?.direction_position?.sector_level || '-' }}</strong></div>
-              <div class="data-item"><span>板块状态</span><strong>{{ rule?.direction_position?.sector_trend || '-' }}</strong></div>
-              <div class="data-item"><span>个股地位</span><strong>{{ rule?.direction_position?.stock_role || '-' }}</strong></div>
-            </div>
-            <div class="section-note">{{ rule?.direction_position?.relative_strength || '-' }}</div>
-            <div class="llm-copy">{{ reportContent('direction_position') }}</div>
-          </section>
-
-          <section class="checkup-section">
-            <div class="section-header">4）日线结构</div>
-            <div class="data-list">
-              <div class="data-item"><span>均线位置</span><strong>{{ rule?.daily_structure?.ma_position_summary || '-' }}</strong></div>
-              <div class="data-item"><span>阶段位置</span><strong>{{ rule?.daily_structure?.stage_position || '-' }}</strong></div>
-              <div class="data-item"><span>20日区间</span><strong>{{ rule?.daily_structure?.range_position_20d || '-' }}</strong></div>
-              <div class="data-item"><span>60日区间</span><strong>{{ rule?.daily_structure?.range_position_60d || '-' }}</strong></div>
-            </div>
-            <div class="section-note">{{ rule?.daily_structure?.pattern_integrity || '-' }}</div>
-            <div class="section-emphasis">{{ rule?.daily_structure?.structure_conclusion || '-' }}</div>
-            <div class="llm-copy">{{ reportContent('daily_structure') }}</div>
-          </section>
-
-          <section class="checkup-section">
-            <div class="section-header">5）短线强度</div>
-            <div class="metric-grid">
-              <div class="metric-card"><span>涨跌幅</span><strong :class="pctClass(rule?.intraday_strength?.change_pct)">{{ formatSignedPct(rule?.intraday_strength?.change_pct) }}</strong></div>
-              <div class="metric-card"><span>换手率</span><strong>{{ formatPct(rule?.intraday_strength?.turnover_rate) }}</strong></div>
-              <div class="metric-card"><span>量比</span><strong>{{ formatNumber(rule?.intraday_strength?.vol_ratio) }}</strong></div>
-              <div class="metric-card"><span>强度结论</span><strong>{{ rule?.intraday_strength?.strength_level || '-' }}</strong></div>
-            </div>
-            <div class="section-note">{{ rule?.intraday_strength?.candle_label || '-' }} / {{ rule?.intraday_strength?.close_position || '-' }} / {{ rule?.intraday_strength?.volume_state || '-' }}</div>
-            <div class="llm-copy">{{ reportContent('intraday_strength') }}</div>
-          </section>
-
-          <section class="checkup-section">
-            <div class="section-header">6）资金质量</div>
-            <div class="data-list">
-              <div class="data-item"><span>最近资金变化</span><strong>{{ rule?.fund_quality?.recent_fund_flow || '-' }}</strong></div>
-              <div class="data-item"><span>今日资金性质</span><strong>{{ rule?.fund_quality?.cash_flow_quality || '-' }}</strong></div>
-              <div class="data-item"><span>大单参与</span><strong>{{ rule?.fund_quality?.big_order_status || '-' }}</strong></div>
-              <div class="data-item"><span>放量特征</span><strong>{{ rule?.fund_quality?.volume_behavior || '-' }}</strong></div>
-            </div>
-            <div class="llm-copy">{{ reportContent('fund_quality') }}</div>
-          </section>
-
-          <section class="checkup-section">
-            <div class="section-header">7）同类对比</div>
-            <div class="peer-summary">
-              {{ rule?.peer_comparison?.relative_strength || '-' }} / {{ rule?.peer_comparison?.recognizability || '-' }}
-            </div>
-            <div v-if="rule?.peer_comparison?.peers?.length" class="peer-list">
-              <div v-for="peer in rule.peer_comparison.peers" :key="peer.ts_code" class="peer-row">
-                <div class="peer-main">
-                  <strong>{{ peer.stock_name }}</strong>
-                  <span>{{ peer.ts_code }}</span>
+            <div class="hero-layout">
+              <section class="hero-panel">
+                <div class="hero-top">
+                  <div class="hero-badge-stack">
+                    <div class="hero-badge" :class="strategyBadgeClass">
+                      {{ rule?.strategy?.current_strategy || '观察' }}
+                    </div>
+                    <span class="hero-badge-caption">当前策略</span>
+                  </div>
+                  <div class="hero-copy">
+                    <div class="hero-kicker">结论先行</div>
+                    <div class="hero-title">
+                      {{ rule?.strategy?.current_characterization || '-' }} / {{ rule?.strategy?.current_role || '-' }}
+                    </div>
+                    <div class="hero-desc">
+                      {{ llm?.overall_summary || rule?.strategy?.strategy_reason || '-' }}
+                    </div>
+                  </div>
                 </div>
-                <div class="peer-side">
-                  <span :class="pctClass(peer.change_pct)">{{ formatSignedPct(peer.change_pct) }}</span>
-                  <span>{{ peer.role_hint || '-' }}</span>
+
+                <div class="hero-conclusion-card">
+                  <span class="hero-conclusion-label">一句话结论</span>
+                  <div class="hero-conclusion">
+                    {{ llm?.one_line_conclusion || rule?.final_conclusion?.one_line_conclusion || '-' }}
+                  </div>
+                  <div class="hero-conclusion-note">
+                    {{ actionSubline }}
+                  </div>
                 </div>
+
+                <div class="hero-bottom">
+                  <div class="hero-tags">
+                    <span v-for="tag in heroTags" :key="tag" class="hero-tag">{{ tag }}</span>
+                  </div>
+
+                  <div v-if="llmStatusVisible" class="status-strip" :class="llmStatusClass">
+                    <span class="status-label">LLM 解读</span>
+                    <span>{{ llmStatusText }}</span>
+                  </div>
+                </div>
+              </section>
+
+              <aside class="action-panel">
+                <div class="action-panel-head">
+                  <div class="panel-head">
+                    <span class="panel-kicker">怎么做</span>
+                    <strong class="panel-title">{{ actionHeadline }}</strong>
+                  </div>
+                  <div class="panel-copy">{{ actionCopy }}</div>
+                </div>
+
+                <div class="execution-grid">
+                  <article
+                    v-for="(item, index) in executionCards"
+                    :key="item.label"
+                    class="execution-card"
+                    :class="[
+                      `execution-card-${item.tone || 'neutral'}`,
+                      { 'execution-card-primary': index === 1 }
+                    ]"
+                  >
+                    <span class="execution-step">{{ item.step }}</span>
+                    <div class="execution-copy">
+                      <span class="execution-label">{{ item.label }}</span>
+                      <strong class="execution-value">{{ item.value }}</strong>
+                      <span class="execution-note">{{ item.note }}</span>
+                    </div>
+                  </article>
+                </div>
+              </aside>
+            </div>
+
+            <div class="snapshot-grid">
+              <article
+                v-for="card in snapshotCards"
+                :key="card.label"
+                class="snapshot-card"
+                :class="`snapshot-card-${card.tone || 'neutral'}`"
+              >
+                <div class="snapshot-top">
+                  <span class="snapshot-label">{{ card.label }}</span>
+                  <span class="snapshot-dot" />
+                </div>
+                <strong class="snapshot-value" :class="card.valueClass || ''">{{ card.value }}</strong>
+                <span class="snapshot-tip">{{ card.tip }}</span>
+              </article>
+            </div>
+          </section>
+
+          <div class="decision-grid">
+            <section class="decision-card decision-card-risk">
+              <div class="decision-head">
+                <span class="decision-kicker">风险与前提</span>
+                <strong>先确认这些条件</strong>
               </div>
+              <div v-if="riskItems.length" class="decision-chip-row">
+                <span v-for="risk in riskItems" :key="risk" class="risk-chip">{{ risk }}</span>
+              </div>
+              <div v-else class="decision-note decision-note-muted">当前没有额外风险标签，仍需结合关键位与市场环境判断。</div>
+              <div class="decision-footnote">{{ invalidationSummary }}</div>
+            </section>
+
+            <section class="decision-card decision-card-context">
+              <div class="decision-head">
+                <span class="decision-kicker">数据上下文</span>
+                <strong>知道结论来自哪里</strong>
+              </div>
+              <div class="context-pill-grid">
+                <article v-for="item in contextItems" :key="item.label" class="context-pill">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                </article>
+              </div>
+            </section>
+          </div>
+
+          <section class="evidence-section">
+            <div class="section-heading">
+              <span class="section-kicker">为什么是这个结论</span>
+              <h3>核心证据</h3>
+              <p class="section-heading-copy">先看每组证据的核心判断，需要时再展开完整说明。</p>
             </div>
-            <div v-else class="section-note">暂无足够同类样本。</div>
-            <div class="section-note">{{ rule?.peer_comparison?.note || '-' }}</div>
-            <div class="llm-copy">{{ reportContent('peer_comparison') }}</div>
+
+            <div class="evidence-grid">
+              <article v-for="block in evidenceBlocks" :key="block.id" class="evidence-card">
+                <div class="evidence-head">
+                  <div>
+                    <div class="evidence-kicker">{{ block.kicker }}</div>
+                    <div class="evidence-title">{{ block.title }}</div>
+                  </div>
+                  <div class="evidence-summary">{{ block.summary }}</div>
+                </div>
+
+                <div v-if="block.highlight" class="evidence-highlight">
+                  {{ block.highlight }}
+                </div>
+
+                <div class="evidence-fact-grid">
+                  <div v-for="item in block.items" :key="item.label" class="data-item">
+                    <span>{{ item.label }}</span>
+                    <strong :class="item.valueClass || ''">{{ item.value }}</strong>
+                  </div>
+                </div>
+
+                <details v-if="block.note || block.copy" class="evidence-details">
+                  <summary class="evidence-details-summary">
+                    <span>展开说明</span>
+                    <span class="evidence-details-action">查看解读</span>
+                  </summary>
+                  <div v-if="block.note" class="section-note evidence-note">{{ block.note }}</div>
+                  <div v-if="block.copy" class="llm-copy evidence-copy">{{ block.copy }}</div>
+                </details>
+              </article>
+            </div>
           </section>
 
-          <section class="checkup-section">
-            <div class="section-header">8）估值与属性</div>
-            <div class="metric-grid">
-              <div class="metric-card"><span>PE</span><strong>{{ formatNumber(rule?.valuation_profile?.pe) }}</strong></div>
-              <div class="metric-card"><span>PB</span><strong>{{ formatNumber(rule?.valuation_profile?.pb) }}</strong></div>
-              <div class="metric-card"><span>PS</span><strong>{{ formatNumber(rule?.valuation_profile?.ps) }}</strong></div>
-              <div class="metric-card"><span>市值(亿)</span><strong>{{ formatNumber(rule?.valuation_profile?.market_value) }}</strong></div>
-            </div>
-            <div class="section-note">{{ rule?.valuation_profile?.valuation_level || '-' }} / {{ rule?.valuation_profile?.drive_type || '-' }}</div>
-            <div class="llm-copy">{{ reportContent('valuation_profile') }}</div>
-          </section>
+          <details class="details-disclosure">
+            <summary class="details-summary">
+              <div class="details-summary-copy">
+                <span class="details-kicker">深度核对</span>
+                <strong>查看完整体检明细</strong>
+                <span>保留原始字段与逐项解读，方便回看和核对。</span>
+              </div>
+              <div class="details-summary-side">
+                <span class="details-summary-pill">规则快照 + LLM 解读</span>
+                <span class="details-summary-action">展开全部</span>
+              </div>
+            </summary>
 
-          <section class="checkup-section">
-            <div class="section-header">9）关键位</div>
-            <div class="data-list">
-              <div class="data-item"><span>压力位</span><strong>{{ joinPrices(rule?.key_levels?.pressure_levels) }}</strong></div>
-              <div class="data-item"><span>支撑位</span><strong>{{ joinPrices(rule?.key_levels?.support_levels) }}</strong></div>
-              <div class="data-item"><span>防守位</span><strong>{{ formatPrice(rule?.key_levels?.defense_level) }}</strong></div>
-            </div>
-            <div class="section-note">{{ rule?.key_levels?.note || '-' }}</div>
-            <div class="llm-copy">{{ reportContent('key_levels') }}</div>
-          </section>
+            <div class="details-grid">
+              <section class="detail-card">
+                <div class="detail-card-head">
+                  <span class="detail-card-kicker">原始快照</span>
+                  <div class="detail-card-title">基础信息</div>
+                </div>
+                <div class="data-list">
+                  <div class="data-item"><span>名称 / 代码</span><strong>{{ rule?.basic_info?.stock_name || '-' }} / {{ rule?.basic_info?.ts_code || '-' }}</strong></div>
+                  <div class="data-item"><span>行业 / 板块</span><strong>{{ rule?.basic_info?.sector_name || '-' }}</strong></div>
+                  <div class="data-item"><span>板块属性</span><strong>{{ rule?.basic_info?.board || '-' }}</strong></div>
+                  <div class="data-item"><span>特殊属性</span><strong>{{ joinList(rule?.basic_info?.special_tags) }}</strong></div>
+                </div>
+                <div class="detail-note-band">{{ rule?.final_conclusion?.summary_note || '-' }}</div>
+              </section>
 
-          <section class="checkup-section">
-            <div class="section-header">10）策略结论</div>
-            <div class="strategy-pill" :class="strategyBadgeClass">{{ rule?.strategy?.current_strategy || '-' }}</div>
-            <div class="section-emphasis">{{ rule?.strategy?.strategy_reason || '-' }}</div>
-            <div v-if="rule?.buy_view" class="sub-panel">
-              <div class="sub-title">交易视角</div>
-              <div class="sub-copy">{{ rule.buy_view.buy_signal_tag || '-' }} / {{ rule.buy_view.buy_point_type || '-' }}</div>
-              <div class="sub-copy">{{ rule.buy_view.buy_trigger_cond || '-' }}</div>
-            </div>
-            <div v-if="rule?.sell_view" class="sub-panel">
-              <div class="sub-title">持仓视角</div>
-              <div class="sub-copy">{{ rule.sell_view.sell_signal_tag || '-' }} / {{ rule.sell_view.sell_point_type || '-' }}</div>
-              <div class="sub-copy">{{ rule.sell_view.sell_reason || '-' }}</div>
-            </div>
-            <div class="risk-list">
-              <span v-for="risk in rule?.strategy?.risk_points || []" :key="risk" class="risk-chip">{{ risk }}</span>
-            </div>
-            <div class="llm-copy">{{ reportContent('strategy') }}</div>
-          </section>
+              <section class="detail-card">
+                <div class="detail-card-head">
+                  <span class="detail-card-kicker">执行语境</span>
+                  <div class="detail-card-title">策略视角</div>
+                </div>
+                <div class="strategy-pill" :class="strategyBadgeClass">{{ rule?.strategy?.current_strategy || '-' }}</div>
+                <div class="section-emphasis">{{ rule?.strategy?.strategy_reason || '-' }}</div>
+                <div v-if="rule?.buy_view" class="sub-panel">
+                  <div class="sub-title">交易视角</div>
+                  <div class="sub-copy">{{ rule.buy_view.buy_signal_tag || '-' }} / {{ rule.buy_view.buy_point_type || '-' }}</div>
+                  <div class="sub-copy">{{ rule.buy_view.buy_comment || rule.buy_view.buy_trigger_cond || '-' }}</div>
+                </div>
+                <div v-if="rule?.sell_view" class="sub-panel">
+                  <div class="sub-title">持仓视角</div>
+                  <div class="sub-copy">{{ rule.sell_view.sell_signal_tag || '-' }} / {{ rule.sell_view.sell_point_type || '-' }}</div>
+                  <div class="sub-copy">{{ rule.sell_view.sell_comment || rule.sell_view.sell_reason || '-' }}</div>
+                </div>
+              </section>
 
-          <section class="checkup-section checkup-section-full">
-            <div class="section-header">11）一句话结论</div>
-            <div class="final-line">{{ llm?.one_line_conclusion || rule?.final_conclusion?.one_line_conclusion || '-' }}</div>
-            <div class="llm-copy">{{ reportContent('final_conclusion') }}</div>
-          </section>
+              <section class="detail-card detail-card-full">
+                <div class="detail-card-head">
+                  <span class="detail-card-kicker">章节解读</span>
+                  <div class="detail-card-title">逐项解读</div>
+                </div>
+                <div v-if="visibleReportSections.length" class="report-grid">
+                  <article v-for="(section, index) in visibleReportSections" :key="section.key" class="report-card">
+                    <div class="report-card-top">
+                      <span class="report-index">{{ String(index + 1).padStart(2, '0') }}</span>
+                      <div class="report-title">{{ section.title }}</div>
+                    </div>
+                    <div class="report-copy">{{ section.content }}</div>
+                  </article>
+                </div>
+                <div v-else class="section-note">暂无逐项 LLM 解读，当前以规则快照为准。</div>
+              </section>
+            </div>
+          </details>
         </div>
       </template>
     </div>
@@ -233,6 +295,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { stockApi } from '../api'
+import { formatLocalDateTime } from '../utils/datetime'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -252,14 +315,50 @@ const CHECKUP_TIMEOUT = 120000
 
 const rule = computed(() => data.value?.rule_snapshot || null)
 const llm = computed(() => data.value?.llm_report || null)
+const reportSections = computed(() => llm.value?.llm_report_sections || [])
 const displayTradeDate = computed(() => props.tradeDate || getLocalDate())
 const headerTitle = computed(() => `${props.stockName || '个股'}全面体检`)
+const headerSubtitle = computed(() => (
+  llm.value?.overall_summary
+  || rule.value?.strategy?.strategy_reason
+  || '围绕结论、执行与证据，快速判断这只票当前值不值得看。'
+))
+const headerMetaItems = computed(() => {
+  const items = [
+    { label: '代码', value: props.tsCode || '-' },
+    { label: '体检日', value: displayTradeDate.value || '-' },
+  ]
+  if (data.value?.resolved_trade_date && data.value.resolved_trade_date !== displayTradeDate.value) {
+    items.push({ label: '实际行情日', value: data.value.resolved_trade_date })
+  }
+  if (rule.value?.basic_info?.quote_time) {
+    items.push({ label: '报价时间', value: formatQuoteTime(rule.value.basic_info.quote_time) })
+  }
+  return items
+})
+const activeRefreshMode = computed(() => {
+  if (loading.value && data.value) return 'data'
+  if (llmRefreshing.value && data.value) return 'llm'
+  return ''
+})
+const refreshStateVisible = computed(() => Boolean(activeRefreshMode.value))
+const refreshBannerTitle = computed(() => (
+  activeRefreshMode.value === 'llm' ? '正在刷新最新解读' : '正在刷新最新体检'
+))
+const refreshBannerText = computed(() => (
+  activeRefreshMode.value === 'llm'
+    ? '当前规则快照仍可阅读，但页面里的解读文案不是最新结果。'
+    : '当前页面仍展示上一版体检结果，请等待刷新完成后再做判断。'
+))
+const refreshBannerTag = computed(() => (
+  activeRefreshMode.value === 'llm' ? '旧解读展示中' : '旧结果展示中'
+))
 const llmStatus = computed(() => data.value?.llm_status || null)
 const llmStatusVisible = computed(() => Boolean(llmStatus.value))
 const llmStatusClass = computed(() => {
-  if (llmStatus.value?.success) return 'llm-status-success'
-  if (llmStatus.value?.enabled) return 'llm-status-warning'
-  return 'llm-status-muted'
+  if (llmStatus.value?.success) return 'status-success'
+  if (llmStatus.value?.enabled) return 'status-warning'
+  return 'status-muted'
 })
 const llmStatusText = computed(() => {
   if (!llmStatus.value) return ''
@@ -272,10 +371,263 @@ const strategyBadgeClass = computed(() => {
   if (strategy === '放弃') return 'badge-pass'
   return 'badge-watch'
 })
-const riskPreview = computed(() => {
-  const risks = llm.value?.key_risks?.length ? llm.value.key_risks : (rule.value?.strategy?.risk_points || [])
-  return risks.slice(0, 2).join(' / ') || '-'
+const riskItems = computed(() => (
+  llm.value?.key_risks?.length ? llm.value.key_risks : (rule.value?.strategy?.risk_points || [])
+))
+const heroTags = computed(() => {
+  const tags = [
+    `体检目标 ${activeTarget.value}`,
+    rule.value?.market_context?.market_env_tag,
+    rule.value?.direction_position?.direction_name,
+    rule.value?.direction_position?.stock_role,
+    rule.value?.daily_structure?.stage_position,
+    rule.value?.basic_info?.sector_name,
+  ].filter(Boolean)
+  return Array.from(new Set(tags))
 })
+const actionHeadline = computed(() => {
+  if (rule.value?.buy_view?.buy_signal_tag) {
+    return `${rule.value.buy_view.buy_signal_tag} / ${rule.value.buy_view.buy_point_type || '等待触发'}`
+  }
+  if (rule.value?.sell_view?.sell_signal_tag) {
+    return `${rule.value.sell_view.sell_signal_tag} / ${rule.value.sell_view.sell_point_type || '先按计划处理'}`
+  }
+  return rule.value?.strategy?.current_strategy || '-'
+})
+const actionCopy = computed(() => (
+  rule.value?.buy_view?.buy_comment
+  || rule.value?.buy_view?.buy_trigger_cond
+  || rule.value?.sell_view?.sell_comment
+  || rule.value?.sell_view?.sell_reason
+  || rule.value?.strategy?.strategy_reason
+  || '-'
+))
+const actionSubline = computed(() => {
+  if (rule.value?.buy_view) return '按“盯触发 -> 看确认 -> 守失效”顺序处理，不抢第一下。'
+  if (rule.value?.sell_view) return '按“等触发 -> 做处理 -> 守退出”顺序执行，先纪律后观点。'
+  return '先看结构位置，再等触发信号，不提前预判。'
+})
+const executionCards = computed(() => {
+  const cards = [
+    {
+      step: '00',
+      label: '当前打法',
+      value: rule.value?.strategy?.current_strategy || '-',
+      note: rule.value?.strategy?.current_characterization || '-',
+      tone: 'neutral',
+    },
+  ]
+
+  if (rule.value?.buy_view) {
+    cards.push(
+      {
+        step: '01',
+        label: '触发条件',
+        value: rule.value.buy_view.buy_trigger_cond || '-',
+        note: rule.value.buy_view.buy_signal_tag || '等待主触发',
+        tone: 'watch',
+      },
+      {
+        step: '02',
+        label: '确认点',
+        value: rule.value.buy_view.buy_confirm_cond || '-',
+        note: rule.value.buy_view.buy_point_type || '确认后再执行',
+        tone: 'focus',
+      },
+      {
+        step: '03',
+        label: '失效条件',
+        value: rule.value.buy_view.buy_invalid_cond || '-',
+        note: '触发失败就撤退，不做硬扛',
+        tone: 'risk',
+      },
+    )
+  } else if (rule.value?.sell_view) {
+    cards.push(
+      {
+        step: '01',
+        label: '触发条件',
+        value: rule.value.sell_view.sell_trigger_cond || '-',
+        note: rule.value.sell_view.sell_signal_tag || '先盯执行触发',
+        tone: 'watch',
+      },
+      {
+        step: '02',
+        label: '处理原因',
+        value: rule.value.sell_view.sell_reason || '-',
+        note: rule.value.sell_view.sell_point_type || '按持仓视角处理',
+        tone: 'focus',
+      },
+      {
+        step: '03',
+        label: '今日能否执行',
+        value: formatBoolean(rule.value.sell_view.can_sell_today),
+        note: '结合盘中承接与仓位管理',
+        tone: 'risk',
+      },
+    )
+  } else {
+    cards.push(
+      {
+        step: '01',
+        label: '结构结论',
+        value: rule.value?.daily_structure?.structure_conclusion || '-',
+        note: rule.value?.daily_structure?.pattern_integrity || '-',
+        tone: 'watch',
+      },
+      {
+        step: '02',
+        label: '关键防守',
+        value: formatPrice(rule.value?.key_levels?.defense_level),
+        note: '跌破后重新评估',
+        tone: 'risk',
+      },
+    )
+  }
+
+  return cards
+})
+const snapshotCards = computed(() => ([
+  {
+    label: '市场环境',
+    value: rule.value?.market_context?.market_env_tag || '-',
+    tip: rule.value?.market_context?.stock_market_alignment || '-',
+    tone: 'market',
+  },
+  {
+    label: '个股地位',
+    value: rule.value?.direction_position?.stock_role || '-',
+    tip: rule.value?.direction_position?.sector_level || '-',
+    tone: 'role',
+  },
+  {
+    label: '日线阶段',
+    value: rule.value?.daily_structure?.stage_position || '-',
+    tip: rule.value?.daily_structure?.structure_conclusion || '-',
+    tone: 'structure',
+  },
+  {
+    label: '关键防守',
+    value: formatPrice(rule.value?.key_levels?.defense_level),
+    tip: defenseLevelsText.value,
+    tone: 'defense',
+  },
+]))
+const defenseLevelsText = computed(() => {
+  const prices = joinPrices(rule.value?.key_levels?.support_levels)
+  return prices === '-' ? '支撑位待确认' : `支撑 ${prices}`
+})
+const invalidationSummary = computed(() => {
+  if (rule.value?.buy_view?.buy_invalid_cond) {
+    return `失效条件：${rule.value.buy_view.buy_invalid_cond}`
+  }
+  if (rule.value?.sell_view?.sell_trigger_cond || rule.value?.sell_view?.sell_reason) {
+    return `持仓处理：${rule.value.sell_view.sell_trigger_cond || rule.value.sell_view.sell_reason}`
+  }
+  if (rule.value?.key_levels?.defense_level !== null && rule.value?.key_levels?.defense_level !== undefined) {
+    return `防守位 ${formatPrice(rule.value.key_levels.defense_level)}，跌破后要重新评估结构。`
+  }
+  return '当前没有明确失效条件字段，建议结合关键位和量价关系判断。'
+})
+const contextItems = computed(() => ([
+  { label: '请求交易日', value: displayTradeDate.value || '-' },
+  { label: '实际行情日', value: data.value?.resolved_trade_date || displayTradeDate.value || '-' },
+  { label: '报价时间', value: formatQuoteTime(rule.value?.basic_info?.quote_time) },
+  { label: '数据来源', value: rule.value?.basic_info?.data_source || '规则快照' },
+]))
+const evidenceBlocks = computed(() => ([
+  {
+    id: 'market-position',
+    kicker: '环境与角色',
+    title: '市场与方向地位',
+    summary: `${rule.value?.market_context?.market_env_tag || '-'} · ${rule.value?.direction_position?.stock_role || '-'}`,
+    items: [
+      { label: '当前市场状态', value: rule.value?.market_context?.market_phase || '-' },
+      { label: '顺势 / 逆势', value: rule.value?.market_context?.stock_market_alignment || '-' },
+      { label: '所属方向', value: rule.value?.direction_position?.direction_name || '-' },
+      { label: '板块级别', value: rule.value?.direction_position?.sector_level || '-' },
+      { label: '板块状态', value: rule.value?.direction_position?.sector_trend || '-' },
+      { label: '相对强弱', value: rule.value?.direction_position?.relative_strength || '-' },
+    ],
+    note: rule.value?.market_context?.market_comment || '',
+    highlight: rule.value?.market_context?.tolerance_comment || '',
+    copy: mergeReportContent(['market_context', 'direction_position']),
+  },
+  {
+    id: 'structure-strength',
+    kicker: '结构与节奏',
+    title: '日线结构与短线强度',
+    summary: `${rule.value?.daily_structure?.stage_position || '-'} · ${rule.value?.intraday_strength?.strength_level || '-'}`,
+    items: [
+      { label: '均线位置', value: rule.value?.daily_structure?.ma_position_summary || '-' },
+      { label: '20日区间', value: rule.value?.daily_structure?.range_position_20d || '-' },
+      { label: '60日区间', value: rule.value?.daily_structure?.range_position_60d || '-' },
+      { label: '涨跌幅', value: formatSignedPct(rule.value?.intraday_strength?.change_pct), valueClass: pctClass(rule.value?.intraday_strength?.change_pct) },
+      { label: '换手率', value: formatPct(rule.value?.intraday_strength?.turnover_rate) },
+      { label: '量比', value: formatNumber(rule.value?.intraday_strength?.vol_ratio) },
+    ],
+    note: joinSegments([
+      rule.value?.intraday_strength?.candle_label,
+      rule.value?.intraday_strength?.close_position,
+      rule.value?.intraday_strength?.volume_state,
+    ]),
+    highlight: rule.value?.daily_structure?.structure_conclusion || '',
+    copy: mergeReportContent(['daily_structure', 'intraday_strength']),
+  },
+  {
+    id: 'fund-peer',
+    kicker: '筹码与同类',
+    title: '资金质量与横向对比',
+    summary: `${rule.value?.fund_quality?.cash_flow_quality || '-'} · ${rule.value?.peer_comparison?.relative_strength || '-'}`,
+    items: [
+      { label: '最近资金变化', value: rule.value?.fund_quality?.recent_fund_flow || '-' },
+      { label: '大单参与', value: rule.value?.fund_quality?.big_order_status || '-' },
+      { label: '放量特征', value: rule.value?.fund_quality?.volume_behavior || '-' },
+      { label: '同类强弱', value: rule.value?.peer_comparison?.relative_strength || '-' },
+      { label: '辨识度', value: rule.value?.peer_comparison?.recognizability || '-' },
+      { label: '领涨样本', value: peerPreview.value },
+    ],
+    note: rule.value?.peer_comparison?.note || rule.value?.fund_quality?.note || '',
+    highlight: peerLeadingMove.value,
+    copy: mergeReportContent(['fund_quality', 'peer_comparison']),
+  },
+  {
+    id: 'valuation-key-levels',
+    kicker: '约束与边界',
+    title: '估值属性与关键位',
+    summary: `${rule.value?.valuation_profile?.drive_type || '-'} · 防守 ${formatPrice(rule.value?.key_levels?.defense_level)}`,
+    items: [
+      { label: 'PE', value: formatNumber(rule.value?.valuation_profile?.pe) },
+      { label: 'PB', value: formatNumber(rule.value?.valuation_profile?.pb) },
+      { label: 'PS', value: formatNumber(rule.value?.valuation_profile?.ps) },
+      { label: '市值(亿)', value: formatNumber(rule.value?.valuation_profile?.market_value) },
+      { label: '压力位', value: joinPrices(rule.value?.key_levels?.pressure_levels) },
+      { label: '支撑位', value: joinPrices(rule.value?.key_levels?.support_levels) },
+    ],
+    note: rule.value?.key_levels?.note || rule.value?.valuation_profile?.note || '',
+    highlight: joinSegments([
+      rule.value?.valuation_profile?.valuation_level,
+      rule.value?.valuation_profile?.drive_type,
+    ]),
+    copy: mergeReportContent(['valuation_profile', 'key_levels']),
+  },
+]))
+const peerPreview = computed(() => {
+  const firstPeer = rule.value?.peer_comparison?.peers?.[0]
+  if (!firstPeer) return '暂无足够样本'
+  return `${firstPeer.stock_name} ${formatSignedPct(firstPeer.change_pct)}`
+})
+const peerLeadingMove = computed(() => {
+  const peers = rule.value?.peer_comparison?.peers || []
+  if (!peers.length) return '暂无足够同类样本。'
+  return peers
+    .slice(0, 3)
+    .map((peer) => `${peer.stock_name} ${formatSignedPct(peer.change_pct)} ${peer.role_hint || ''}`.trim())
+    .join(' / ')
+})
+const visibleReportSections = computed(() => (
+  reportSections.value.filter((section) => section?.content && section.content !== '-')
+))
 
 watch(
   () => [props.modelValue, props.tsCode, props.defaultTarget],
@@ -301,6 +653,7 @@ const getLocalDate = () => {
 const loadData = async (options = {}) => {
   if (!props.tsCode) return
   const forceLlmRefresh = Boolean(options.forceLlmRefresh)
+  const hadData = Boolean(data.value)
   if (forceLlmRefresh) llmRefreshing.value = true
   else loading.value = true
   try {
@@ -316,9 +669,10 @@ const loadData = async (options = {}) => {
     }
     data.value = payload.data || null
   } catch (error) {
-    data.value = null
+    if (!hadData) data.value = null
     const isTimeout = error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')
-    ElMessage.error(isTimeout ? '个股体检超时，请稍后重试' : (error?.message || '加载个股体检失败'))
+    const fallbackMessage = isTimeout ? '个股体检超时，请稍后重试' : (error?.message || '加载个股体检失败')
+    ElMessage.error(hadData ? `刷新失败，当前仍显示上一版结果。${fallbackMessage}` : fallbackMessage)
   } finally {
     loading.value = false
     llmRefreshing.value = false
@@ -330,8 +684,22 @@ const refreshLlm = async () => {
 }
 
 const reportContent = (key) => {
-  const section = llm.value?.llm_report_sections?.find((item) => item.key === key)
-  return section?.content || '-'
+  const section = reportSections.value.find((item) => item.key === key)
+  return section?.content || ''
+}
+
+const mergeReportContent = (keys) => {
+  const parts = keys
+    .map((key) => reportContent(key))
+    .filter(Boolean)
+  return parts.join('\n\n')
+}
+
+const joinSegments = (items) => items.filter(Boolean).join(' / ')
+
+const formatQuoteTime = (value) => {
+  if (!value) return '-'
+  return formatLocalDateTime(value) || '-'
 }
 
 const joinList = (items) => (items?.length ? items.join(' / ') : '-')
@@ -358,6 +726,12 @@ const formatSignedPct = (value) => {
   return `${num > 0 ? '+' : ''}${num.toFixed(2)}%`
 }
 
+const formatBoolean = (value) => {
+  if (value === true) return '可执行'
+  if (value === false) return '暂不执行'
+  return '-'
+}
+
 const pctClass = (value) => {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return ''
   if (Number(value) > 0) return 'text-red'
@@ -368,32 +742,102 @@ const pctClass = (value) => {
 
 <style scoped>
 .drawer-header {
+  width: 100%;
+}
+
+.header-shell {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 18px;
   align-items: flex-start;
   width: 100%;
+  padding: 6px 2px 2px;
 }
 
 .header-main {
   display: grid;
-  gap: 6px;
+  gap: 10px;
+  min-width: 0;
+  max-width: 760px;
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .header-title {
-  font-size: 1.15rem;
+  font-size: clamp(1.25rem, 2vw, 1.7rem);
   font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.header-strategy-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.header-subtitle {
+  color: rgba(255, 255, 255, 0.56);
+  line-height: 1.7;
+  font-size: 13px;
 }
 
 .header-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  color: var(--color-text-sec);
-  font-size: 13px;
+}
+
+.header-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+}
+
+.header-meta-label,
+.header-group-label {
+  color: rgba(255, 255, 255, 0.42);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 11px;
 }
 
 .header-actions {
+  display: grid;
+  gap: 12px;
+  justify-items: end;
+  flex-shrink: 0;
+}
+
+.header-target-group {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.header-button-row {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
@@ -405,31 +849,195 @@ const pctClass = (value) => {
   gap: 18px;
 }
 
-.overview-card {
-  display: grid;
-  gap: 16px;
-  padding: 18px;
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at top right, rgba(88, 176, 255, 0.14), transparent 36%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.04));
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.overview-top {
+.refresh-banner {
+  position: sticky;
+  top: 0;
+  z-index: 6;
   display: flex;
-  gap: 16px;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 184, 77, 0.22);
+  background:
+    linear-gradient(90deg, rgba(255, 184, 77, 0.16), rgba(255, 184, 77, 0.06)),
+    rgba(18, 20, 28, 0.88);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(14px);
 }
 
-.overview-badge {
-  min-width: 110px;
-  padding: 16px 18px;
-  border-radius: 18px;
+.refresh-banner-llm {
+  border-color: rgba(88, 176, 255, 0.2);
+  background:
+    linear-gradient(90deg, rgba(88, 176, 255, 0.16), rgba(88, 176, 255, 0.06)),
+    rgba(18, 20, 28, 0.88);
+}
+
+.refresh-banner-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.refresh-banner-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: #ffcb7a;
+  animation: refresh-spin 0.85s linear infinite;
+  flex-shrink: 0;
+}
+
+.refresh-banner-llm .refresh-banner-spinner {
+  border-top-color: #82b8ff;
+}
+
+.refresh-banner-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.refresh-banner-copy strong {
+  font-size: 14px;
+  color: #fff3dc;
+}
+
+.refresh-banner-llm .refresh-banner-copy strong {
+  color: #e2efff;
+}
+
+.refresh-banner-copy span {
+  color: rgba(255, 255, 255, 0.76);
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.refresh-banner-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.content-shell {
+  display: grid;
+  gap: 18px;
+  transition: opacity 180ms ease, filter 180ms ease, transform 180ms ease;
+}
+
+.content-shell-refreshing {
+  opacity: 0.68;
+  filter: saturate(0.82);
+}
+
+.hero-stage {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    radial-gradient(circle at top left, rgba(244, 193, 77, 0.08), transparent 26%),
+    radial-gradient(circle at right center, rgba(88, 176, 255, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.015));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 18px 46px rgba(5, 10, 20, 0.2);
+}
+
+.hero-orb {
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+  filter: blur(8px);
+  opacity: 0.7;
+}
+
+.hero-orb-a {
+  top: -64px;
+  left: -48px;
+  width: 180px;
+  height: 180px;
+  background: radial-gradient(circle, rgba(243, 194, 77, 0.18), transparent 70%);
+}
+
+.hero-orb-b {
+  right: 18%;
+  bottom: -90px;
+  width: 240px;
+  height: 240px;
+  background: radial-gradient(circle, rgba(79, 118, 217, 0.2), transparent 72%);
+}
+
+.hero-layout {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.hero-panel,
+.action-panel,
+.decision-card,
+.evidence-card,
+.detail-card,
+.snapshot-card {
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: 0 16px 32px rgba(6, 10, 18, 0.16);
+}
+
+.hero-panel {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  background:
+    radial-gradient(circle at right top, rgba(79, 118, 217, 0.16), transparent 34%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.055));
+}
+
+.hero-badge-stack {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.hero-top {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.hero-badge {
+  min-width: 118px;
+  min-height: 104px;
+  padding: 20px 18px;
+  border-radius: 24px;
   color: #fff;
   text-align: center;
   font-weight: 800;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 12px 30px rgba(0, 0, 0, 0.22);
+}
+
+.hero-badge-caption {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .badge-buy {
@@ -448,190 +1056,319 @@ const pctClass = (value) => {
   background: linear-gradient(135deg, #d84d58, #ff7a7f);
 }
 
-.overview-copy {
+.hero-copy {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  max-width: 760px;
 }
 
-.overview-title {
-  font-size: 1.05rem;
-  font-weight: 700;
-}
-
-.overview-desc,
-.overview-conclusion {
-  line-height: 1.7;
-}
-
-.overview-conclusion {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.overview-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.summary-card,
-.metric-card,
-.sub-panel {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.summary-label,
+.hero-kicker,
+.panel-kicker,
+.decision-kicker,
+.section-kicker,
+.evidence-kicker,
+.snapshot-label,
+.status-label,
+.execution-label,
 .sub-title {
   font-size: 12px;
-  color: var(--color-text-sec);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.summary-value {
-  font-size: 1.5rem;
-  line-height: 1;
-}
-
-.summary-tip,
-.section-note,
-.sub-copy {
-  color: var(--color-text-sec);
-  line-height: 1.6;
-}
-
-.llm-status {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.llm-status-label {
-  font-size: 11px;
   color: var(--color-text-sec);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.llm-status-success {
-  border-color: rgba(47, 207, 154, 0.25);
-  background: rgba(47, 207, 154, 0.08);
+.hero-title {
+  font-size: clamp(1.22rem, 2vw, 1.66rem);
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
-.llm-status-warning {
-  border-color: rgba(243, 194, 77, 0.25);
-  background: rgba(243, 194, 77, 0.08);
+.hero-desc,
+.panel-copy,
+.decision-note,
+.section-note,
+.execution-note,
+.snapshot-tip,
+.sub-copy {
+  color: var(--color-text-sec);
+  line-height: 1.7;
 }
 
-.llm-status-muted {
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-.section-grid {
+.hero-conclusion-card {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 10px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025)),
+    rgba(14, 18, 28, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-.checkup-section {
+.hero-conclusion-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero-conclusion {
+  font-size: clamp(1.35rem, 2.7vw, 2rem);
+  font-weight: 700;
+  line-height: 1.5;
+  color: #f5f7fb;
+}
+
+.hero-conclusion-note {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.58);
+  line-height: 1.7;
+}
+
+.hero-bottom {
   display: grid;
   gap: 12px;
-  padding: 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.checkup-section-full {
-  grid-column: 1 / -1;
-}
-
-.section-header {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.data-list {
-  display: grid;
+.hero-tags {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
-.data-item {
+.hero-tag {
+  padding: 8px 13px;
+  border-radius: 999px;
+  background: rgba(88, 176, 255, 0.08);
+  border: 1px solid rgba(88, 176, 255, 0.16);
+  color: #d7e5ff;
+  font-size: 12px;
+}
+
+.status-strip {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
 }
 
-.data-item span {
-  color: var(--color-text-sec);
-  flex-shrink: 0;
+.status-success {
+  border: 1px solid rgba(47, 207, 154, 0.25);
+  background: rgba(47, 207, 154, 0.08);
 }
 
-.data-item strong {
-  text-align: right;
+.status-warning {
+  border: 1px solid rgba(243, 194, 77, 0.25);
+  background: rgba(243, 194, 77, 0.08);
 }
 
-.metric-grid {
+.status-muted {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.action-panel {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  padding: 22px;
+  background:
+    radial-gradient(circle at left bottom, rgba(47, 207, 154, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.018));
+}
+
+.action-panel-head {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.panel-head {
+  display: grid;
+  gap: 6px;
+}
+
+.panel-title {
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+.execution-grid {
+  display: grid;
   gap: 10px;
 }
 
-.peer-summary,
-.strategy-pill,
+.execution-card {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 15px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.execution-card-primary {
+  background: linear-gradient(135deg, rgba(88, 176, 255, 0.1), rgba(88, 176, 255, 0.03));
+  border-color: rgba(88, 176, 255, 0.2);
+}
+
+.execution-card-watch {
+  border-left: 3px solid rgba(243, 194, 77, 0.7);
+}
+
+.execution-card-focus {
+  border-left: 3px solid rgba(88, 176, 255, 0.82);
+}
+
+.execution-card-risk {
+  border-left: 3px solid rgba(255, 122, 127, 0.78);
+}
+
+.execution-card-neutral {
+  border-left: 3px solid rgba(255, 255, 255, 0.16);
+}
+
+.execution-step {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.68);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.execution-copy,
+.execution-value,
+.snapshot-value,
 .section-emphasis,
-.final-line {
+.detail-card-title,
+.report-title,
+.strategy-pill,
+.sub-panel {
+  display: grid;
+  gap: 6px;
+}
+
+.execution-value,
+.snapshot-value,
+.section-emphasis,
+.detail-card-title,
+.report-title,
+.strategy-pill {
   font-weight: 700;
   line-height: 1.7;
 }
 
-.peer-list {
+.sub-panel {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.snapshot-grid,
+.decision-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.decision-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.snapshot-card {
   display: grid;
   gap: 8px;
+  padding: 16px 16px 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.038), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.02);
 }
 
-.peer-row {
+.snapshot-top {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.peer-main,
-.peer-side {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.strategy-pill {
-  display: inline-flex;
-  width: fit-content;
-  padding: 8px 12px;
+.snapshot-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.03);
 }
 
-.risk-list {
+.snapshot-card-market .snapshot-dot {
+  background: #f3c24d;
+}
+
+.snapshot-card-role .snapshot-dot {
+  background: #67a5ff;
+}
+
+.snapshot-card-structure .snapshot-dot {
+  background: #88a6ff;
+}
+
+.snapshot-card-defense .snapshot-dot {
+  background: #ff8d9b;
+}
+
+.snapshot-value {
+  font-size: 1.42rem;
+  line-height: 1.1;
+}
+
+.decision-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.016)),
+    rgba(255, 255, 255, 0.018);
+  box-shadow: none;
+}
+
+.decision-head {
+  display: grid;
+  gap: 4px;
+}
+
+.decision-card-risk {
+  border-color: rgba(255, 122, 127, 0.12);
+}
+
+.decision-card-context {
+  border-color: rgba(88, 176, 255, 0.12);
+}
+
+.decision-chip-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.decision-footnote {
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.62);
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.decision-note-muted {
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .risk-chip {
@@ -643,12 +1380,353 @@ const pctClass = (value) => {
   font-size: 12px;
 }
 
-.llm-copy {
+.context-pill-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.context-pill {
+  display: grid;
+  gap: 6px;
+  padding: 12px 13px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.026);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.context-pill span {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.46);
+}
+
+.context-pill strong {
+  line-height: 1.6;
+  color: #f1f5ff;
+}
+
+.evidence-section {
+  display: grid;
+  gap: 14px;
+}
+
+.section-heading {
+  display: grid;
+  gap: 4px;
+}
+
+.section-heading h3 {
+  margin: 0;
+  font-size: 1.08rem;
+}
+
+.section-heading-copy {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.52);
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.evidence-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.032), rgba(255, 255, 255, 0.018)),
+    rgba(255, 255, 255, 0.018);
+}
+
+.evidence-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.evidence-title {
+  margin-top: 4px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.evidence-summary {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-sec);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.evidence-highlight {
   padding: 12px 14px;
   border-radius: 14px;
   background: rgba(88, 176, 255, 0.08);
-  border: 1px solid rgba(88, 176, 255, 0.16);
+  border: 1px solid rgba(88, 176, 255, 0.14);
+  color: #eef4ff;
+  font-weight: 700;
   line-height: 1.7;
+}
+
+.evidence-fact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.evidence-fact-grid .data-item {
+  min-height: 68px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border-bottom: none;
+  background: rgba(255, 255, 255, 0.022);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.evidence-fact-grid .data-item strong {
+  text-align: left;
+}
+
+.evidence-details {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 12px;
+}
+
+.evidence-details-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.evidence-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.evidence-details-action {
+  color: rgba(255, 255, 255, 0.46);
+  font-weight: 400;
+}
+
+.evidence-note {
+  margin-top: 12px;
+}
+
+.evidence-copy {
+  margin-top: 12px;
+}
+
+.data-list {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-data-list {
+  gap: 4px;
+}
+
+.data-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.data-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.data-item span {
+  color: var(--color-text-sec);
+  flex-shrink: 0;
+}
+
+.data-item strong {
+  text-align: right;
+}
+
+.llm-copy {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(88, 176, 255, 0.08);
+  border: 1px solid rgba(88, 176, 255, 0.16);
+  line-height: 1.8;
+  white-space: pre-line;
+}
+
+.details-disclosure {
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    radial-gradient(circle at top right, rgba(88, 176, 255, 0.08), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.024), rgba(255, 255, 255, 0.014));
+  overflow: hidden;
+}
+
+.details-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 18px 20px;
+  cursor: pointer;
+  list-style: none;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.details-summary-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.details-kicker {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.42);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.details-summary-side {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.details-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+.details-summary-action {
+  color: var(--color-text-sec);
+  font-size: 13px;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 0 18px 18px;
+}
+
+.detail-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.016)),
+    rgba(255, 255, 255, 0.014);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.detail-card-full {
+  grid-column: 1 / -1;
+}
+
+.detail-card-head {
+  display: grid;
+  gap: 4px;
+}
+
+.detail-card-kicker {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.42);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.strategy-pill {
+  display: inline-flex;
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.detail-note-band {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.62);
+  line-height: 1.7;
+}
+
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.report-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.report-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.report-index {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(88, 176, 255, 0.08);
+  border: 1px solid rgba(88, 176, 255, 0.14);
+  color: #d5e6ff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.report-copy {
+  line-height: 1.8;
+  color: var(--color-text-sec);
+}
+
+@keyframes refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .text-red {
@@ -663,22 +1741,62 @@ const pctClass = (value) => {
   color: var(--color-text-pri);
 }
 
+@media (max-width: 1380px) {
+  .hero-layout,
+  .snapshot-grid,
+  .decision-grid,
+  .evidence-grid,
+  .details-grid,
+  .report-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1200px) {
-  .drawer-header,
-  .overview-top {
+  .header-shell,
+  .hero-top,
+  .evidence-head,
+  .details-summary {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .overview-grid,
-  .section-grid,
-  .metric-grid {
+  .header-actions,
+  .header-target-group {
+    justify-items: start;
+  }
+
+  .details-summary-side {
+    justify-items: start;
+  }
+
+  .header-button-row {
+    justify-content: flex-start;
+  }
+
+  .refresh-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .data-item {
+    flex-direction: column;
+  }
+
+  .execution-card {
     grid-template-columns: 1fr;
   }
 
-  .data-item,
-  .peer-row {
-    flex-direction: column;
+  .context-pill-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-fact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-summary {
+    white-space: normal;
   }
 }
 </style>

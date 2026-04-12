@@ -26,18 +26,19 @@ from app.services.sell_point import sell_point_service
 from app.services.account_adapter import account_adapter_service
 from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
-from app.services.stock_filter import stock_filter_service, merge_holdings_into_candidate_stocks
+from app.services.stock_filter import stock_filter_service, merge_holdings_into_candidate_stocks, StockFilterService
 from app.services.buy_point import buy_point_service
 from app.services.buy_point_sop import buy_point_sop_service
 from app.services.sell_point_sop import sell_point_sop_service
 from app.data.tushare_client import normalize_ts_code, tushare_client
 from app.models.schemas import StockInput
-from app.services.decision_context import decision_context_service
+from app.services.decision_context import decision_context_service, DecisionContextService
 from app.services.decision_flow import decision_flow_service
 from app.services.review_snapshot import review_snapshot_service
 from app.services.llm_explainer import llm_explainer_service
 from app.core.security import AuthenticatedAccount, get_current_account
 from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date, sector_scan_snapshot_service
+from app.services.strategy_config import build_stock_filter_strategy
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -52,6 +53,26 @@ def _resolve_account_id(current_account: Optional[AuthenticatedAccount]) -> Opti
     if isinstance(account_id, str) and account_id:
         return account_id
     return None
+
+
+def _normalize_strategy_style(style: Optional[str]) -> str:
+    normalized = str(style or "balanced").strip().lower()
+    if normalized not in {"balanced", "left", "right"}:
+        return "balanced"
+    return normalized
+
+
+def _is_default_strategy_style(style: Optional[str]) -> bool:
+    return _normalize_strategy_style(style) == "balanced"
+
+
+def _resolve_strategy_services(strategy_style: Optional[str]):
+    normalized_style = _normalize_strategy_style(strategy_style)
+    if normalized_style == "balanced":
+        return decision_context_service, stock_filter_service
+
+    strategy = build_stock_filter_strategy(normalized_style)
+    return DecisionContextService(strategy=strategy), StockFilterService(strategy=strategy)
 
 
 def _sell_point_cache_key(
@@ -377,6 +398,50 @@ def _collect_buy_point_source_stocks(stock_pools) -> list:
     return list(deduped.values())
 
 
+async def _compute_buy_point_bundle(
+    trade_date: str,
+    candidate_limit: int,
+    *,
+    account_id: Optional[str] = None,
+    strategy_style: str = "balanced",
+):
+    context_service, filter_service = _resolve_strategy_services(strategy_style)
+    context = await context_service.build_context(
+        trade_date,
+        top_gainers=candidate_limit,
+        include_holdings=False,
+        account_id=account_id,
+    )
+    review_bias_profile = await review_snapshot_service.get_review_bias_profile_safe(
+        limit_days=10,
+        account_id=account_id,
+    )
+    scored_stocks = filter_service.filter_with_context(
+        trade_date,
+        context.stocks,
+        market_env=context.market_env,
+        sector_scan=context.sector_scan,
+        account=context.account,
+        holdings=context.holdings_list,
+    )
+    stock_pools = filter_service.classify_pools(
+        trade_date,
+        context.stocks,
+        context.holdings_list,
+        context.account,
+        market_env=context.market_env,
+        sector_scan=context.sector_scan,
+        scored_stocks=scored_stocks,
+        review_bias_profile=review_bias_profile,
+    )
+    return {
+        "context": context,
+        "scored_stocks": scored_stocks,
+        "stock_pools": stock_pools,
+        "review_bias_profile": review_bias_profile,
+    }
+
+
 @router.get("/sell-point", response_model=ApiResponse)
 async def analyze_sell_point(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
@@ -537,6 +602,7 @@ async def analyze_buy_point(
     trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
     limit: int = Query(20, description="返回数量限制", ge=1, le=100),
     refresh: bool = Query(False, description="是否跳过三池快照缓存"),
+    strategy_style: str = Query("balanced", description="候选风格：balanced 均衡，left 偏左侧，right 偏右侧"),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """
@@ -551,10 +617,11 @@ async def analyze_buy_point(
         account_id = _resolve_account_id(current_account)
         candidate_limit = max(100, min(limit, 200))
         refresh_requested = refresh if isinstance(refresh, bool) else False
+        normalized_strategy_style = _normalize_strategy_style(strategy_style)
         expected_sector_scan_trade_date = await resolve_snapshot_lookup_trade_date(trade_date)
         snapshot_kwargs = {"account_id": account_id} if account_id else {}
         cached_stock_pools = None
-        if not refresh_requested:
+        if not refresh_requested and _is_default_strategy_style(normalized_strategy_style):
             cached_stock_pools = await review_snapshot_service.get_stock_pools_page_snapshot(
                 trade_date,
                 candidate_limit,
@@ -583,6 +650,22 @@ async def analyze_buy_point(
             bundle_context_account = account_context.account
             bundle_context_market_env = market_env
             bundle_context_sector_scan = None
+            should_persist_snapshots = True
+        elif not _is_default_strategy_style(normalized_strategy_style):
+            bundle = await _compute_buy_point_bundle(
+                trade_date,
+                candidate_limit,
+                account_id=account_id,
+                strategy_style=normalized_strategy_style,
+            )
+            scored_stocks = bundle["scored_stocks"]
+            stock_pools = bundle["stock_pools"]
+            review_bias_profile = bundle["review_bias_profile"]
+            bundle_context_stocks = bundle["context"].stocks
+            bundle_context_account = bundle["context"].account
+            bundle_context_market_env = bundle["context"].market_env
+            bundle_context_sector_scan = bundle["context"].sector_scan
+            should_persist_snapshots = False
         else:
             bundle = await decision_flow_service.build_candidate_analysis(
                 trade_date,
@@ -597,6 +680,7 @@ async def analyze_buy_point(
             bundle_context_account = bundle.context.account
             bundle_context_market_env = bundle.context.market_env
             bundle_context_sector_scan = bundle.context.sector_scan
+            should_persist_snapshots = True
 
         result = buy_point_service.analyze(
             trade_date,
@@ -608,23 +692,25 @@ async def analyze_buy_point(
             stock_pools=stock_pools,
             review_bias_profile=review_bias_profile,
         )
-        await review_snapshot_service.save_analysis_snapshot_safe(
-            trade_date,
-            stock_pools=None if use_cached_stock_pools else stock_pools,
-            buy_analysis=result,
-            **snapshot_kwargs,
-        )
-        if not use_cached_stock_pools:
-            await review_snapshot_service.save_stock_pools_page_snapshot_safe(
+        if should_persist_snapshots:
+            await review_snapshot_service.save_analysis_snapshot_safe(
                 trade_date,
-                candidate_limit,
-                stock_pools,
+                stock_pools=None if use_cached_stock_pools else stock_pools,
+                buy_analysis=result,
                 **snapshot_kwargs,
             )
+            if not use_cached_stock_pools:
+                await review_snapshot_service.save_stock_pools_page_snapshot_safe(
+                    trade_date,
+                    candidate_limit,
+                    stock_pools,
+                    **snapshot_kwargs,
+                )
 
         return ApiResponse(
             data={
                 "trade_date": result.trade_date,
+                "strategy_style": normalized_strategy_style,
                 "market_env_tag": result.market_env_tag.value,
                 "market_env_profile": getattr(bundle_context_market_env, "market_env_profile", "") or result.market_env_tag.value,
                 "market_headline": getattr(bundle_context_market_env, "market_headline", "") or "",

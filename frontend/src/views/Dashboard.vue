@@ -32,14 +32,17 @@
           </div>
         </section>
 
-        <section class="hero-guidance">
-          <article class="guidance-card guidance-card-focus">
-            <div class="guidance-label">重点关注</div>
-            <div class="guidance-copy">{{ summary.focus || '暂无' }}</div>
-          </article>
-          <article class="guidance-card guidance-card-avoid">
-            <div class="guidance-label">规避事项</div>
-            <div class="guidance-copy">{{ summary.avoid || '暂无' }}</div>
+        <section class="hero-sequence">
+          <article
+            v-for="item in todaySequence"
+            :key="item.label"
+            class="sequence-card"
+            :class="`sequence-card-${item.tone}`"
+          >
+            <div class="sequence-step">{{ item.step }}</div>
+            <div class="sequence-label">{{ item.label }}</div>
+            <div class="sequence-value">{{ item.value }}</div>
+            <div class="sequence-copy">{{ item.copy }}</div>
           </article>
         </section>
 
@@ -165,11 +168,90 @@
       </el-card>
     </div>
 
+    <div class="dashboard-execution-grid">
+      <el-card class="fill-card dashboard-bottom-card execution-panel">
+        <template #header>
+          <div class="section-header-copy">
+            <span>持仓处理 ({{ holdingPreview.length }})</span>
+            <span class="section-caption">先处理旧仓，再决定是否给新机会腾仓位。</span>
+          </div>
+        </template>
+        <div class="bottom-card-body">
+          <div class="execution-panel-intro execution-panel-intro-sell">
+            <strong>{{ holdingPanelTitle }}</strong>
+            <span>{{ holdingPanelCopy }}</span>
+          </div>
+          <el-skeleton v-if="loadingState.sellPoints && !sellPoints" :rows="5" animated class="fill-skeleton" />
+          <el-empty
+            v-else-if="!holdingPreview.length"
+            description="暂无卖出/减仓信号"
+          />
+          <div v-else class="action-list">
+            <article v-for="item in holdingPreview" :key="`${item.ts_code}-${item.stock_name}`" class="action-row action-row-sell">
+              <div class="action-main">
+                <div class="action-title">
+                  <span class="action-name">{{ item.stock_name }}</span>
+                  <span class="action-code">{{ item.ts_code }}</span>
+                </div>
+                <div class="action-meta">
+                  <span class="action-chip action-chip-danger">{{ item.sell_signal_tag || '处理' }}</span>
+                  <span class="action-chip">{{ item.sell_point_type || '未分类' }}</span>
+                  <span v-if="item.pnl_pct !== null && item.pnl_pct !== undefined" class="action-chip">{{ formatSignedPct(item.pnl_pct) }}</span>
+                </div>
+                <div class="action-reason">{{ getHoldingReasonText(item) }}</div>
+              </div>
+              <div class="action-side">
+                <div class="action-side-label">优先级</div>
+                <div class="action-side-value">{{ getHoldingActionText(item) }}</div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </el-card>
+
+      <el-card class="fill-card dashboard-bottom-card execution-panel">
+        <template #header>
+          <div class="section-header-copy">
+            <span>可买候选 ({{ buyCandidates.length }})</span>
+            <span class="section-caption">旧仓处理完，再看今天真正值得盯的开仓机会。</span>
+          </div>
+        </template>
+        <div class="bottom-card-body">
+          <div class="execution-panel-intro execution-panel-intro-buy">
+            <strong>{{ buyPanelTitle }}</strong>
+            <span>{{ buyPanelCopy }}</span>
+          </div>
+          <el-skeleton v-if="loadingState.buyPoints && !buyPoints" :rows="5" animated class="fill-skeleton" />
+          <el-empty v-else-if="!buyCandidates.length" description="暂无可买候选" />
+          <div v-else class="action-list">
+            <article v-for="item in buyCandidates" :key="`${item.ts_code}-${item.stock_name}`" class="action-row">
+              <div class="action-main">
+                <div class="action-title">
+                  <span class="action-name">{{ item.stock_name }}</span>
+                  <span class="action-code">{{ item.ts_code }}</span>
+                </div>
+                <div class="action-meta">
+                  <span class="action-chip">{{ item.candidate_bucket_tag || '未分层' }}</span>
+                  <span class="action-chip">{{ item.buy_point_type || '待观察' }}</span>
+                  <span class="action-chip">{{ item.buy_risk_level || '风险未标注' }}</span>
+                </div>
+                <div class="action-reason">{{ getBuyReasonText(item) }}</div>
+              </div>
+              <div class="action-side">
+                <div class="action-side-label">今日动作</div>
+                <div class="action-side-value">{{ getBuyActionText(item) }}</div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </el-card>
+    </div>
+
     <el-card class="dashboard-review-card">
       <template #header>
         <div class="section-header-copy">
           <span>分层复盘统计</span>
-          <span class="section-caption">先看哪类模式近期有效，再决定今天优先看哪类机会。</span>
+          <span class="section-caption">执行顺序确定后，再用它校验今天优先看哪类机会。</span>
         </div>
       </template>
       <el-skeleton v-if="loadingState.reviewStats && !reviewStats" :rows="4" animated />
@@ -200,74 +282,6 @@
         </el-table>
       </template>
     </el-card>
-
-    <div class="dashboard-execution-grid">
-      <el-card class="fill-card dashboard-bottom-card execution-panel">
-        <template #header>
-          <div class="section-header-copy">
-            <span>可买候选 ({{ buyCandidates.length }})</span>
-            <span class="section-caption">只展示今天真正能执行的候选。</span>
-          </div>
-        </template>
-        <div class="bottom-card-body">
-          <el-skeleton v-if="loadingState.buyPoints && !buyPoints" :rows="5" animated class="fill-skeleton" />
-          <el-empty v-else-if="!buyCandidates.length" description="暂无可买候选" />
-          <div v-else class="action-list">
-            <article v-for="item in buyCandidates" :key="`${item.ts_code}-${item.stock_name}`" class="action-row">
-              <div class="action-main">
-                <div class="action-title">
-                  <span class="action-name">{{ item.stock_name }}</span>
-                  <span class="action-code">{{ item.ts_code }}</span>
-                </div>
-                <div class="action-meta">
-                  <span class="action-chip">{{ item.candidate_bucket_tag || '未分层' }}</span>
-                  <span class="action-chip">{{ item.buy_point_type || '待观察' }}</span>
-                  <span class="action-chip">{{ item.buy_risk_level || '风险未标注' }}</span>
-                </div>
-              </div>
-              <div class="action-side">
-                <div class="action-side-label">今日动作</div>
-                <div class="action-side-value">可观察后出手</div>
-              </div>
-            </article>
-          </div>
-        </div>
-      </el-card>
-
-      <el-card class="fill-card dashboard-bottom-card execution-panel">
-        <template #header>
-          <div class="section-header-copy">
-            <span>持仓处理 ({{ holdingPreview.length }})</span>
-            <span class="section-caption">优先处理最该动的旧仓，不要让新机会掩盖风险。</span>
-          </div>
-        </template>
-        <div class="bottom-card-body">
-          <el-skeleton v-if="loadingState.sellPoints && !sellPoints" :rows="5" animated class="fill-skeleton" />
-          <el-empty
-            v-else-if="!holdingPreview.length"
-            description="暂无卖出/减仓信号"
-          />
-          <div v-else class="action-list">
-            <article v-for="item in holdingPreview" :key="`${item.ts_code}-${item.stock_name}`" class="action-row action-row-sell">
-              <div class="action-main">
-                <div class="action-title">
-                  <span class="action-name">{{ item.stock_name }}</span>
-                  <span class="action-code">{{ item.ts_code }}</span>
-                </div>
-                <div class="action-meta">
-                  <span class="action-chip action-chip-danger">{{ item.sell_signal_tag || '处理' }}</span>
-                  <span class="action-chip">{{ item.sell_point_type || '未分类' }}</span>
-                </div>
-              </div>
-              <div class="action-side">
-                <div class="action-side-label">优先级</div>
-                <div class="action-side-value">{{ item.sell_signal_tag === '卖出' ? '先处理' : '次级处理' }}</div>
-              </div>
-            </article>
-          </div>
-        </div>
-      </el-card>
-    </div>
   </div>
 </template>
 
@@ -400,32 +414,89 @@ const accountNarrative = computed(() => {
   if (ratio >= 0.45) return '仓位居中，有选择地参与，不需要把每个机会都抓住。'
   return '仓位偏轻，若市场确认转强，账户仍有主动空间。'
 })
-const heroPulseCards = computed(() => [
+const todaySequence = computed(() => ([
   {
-    label: '可买候选',
-    value: `${buyPoints.value?.available_buy_points?.length || 0}`,
-    copy: (buyPoints.value?.available_buy_points?.length || 0) > 0 ? '今天有可执行候选，但仍要按优先级筛。' : '没有舒服机会时，空仓等待也是执行。',
-    tone: (buyPoints.value?.available_buy_points?.length || 0) > 0 ? 'strong' : 'balanced',
+    step: '01',
+    label: '先处理旧仓',
+    value: holdingActions.value.length ? `先看 ${holdingActions.value.length} 只持仓` : '旧仓暂时不用动',
+    copy: holdingActions.value.length
+      ? (summary.value?.focus || '先把该卖、该减的旧仓处理完，再考虑新开仓。')
+      : '当前没有明确的卖出/减仓动作，新仓不会被旧风险打断。',
+    tone: holdingActions.value.length ? 'risk' : 'clear',
   },
   {
-    label: '持仓处理',
+    step: '02',
+    label: '再盯主线',
+    value: leaderSector.value?.sector?.sector_name || '主线待确认',
+    copy: sectorNarrative.value || '先看主线有没有继续强化，再决定今天把精力放在哪个方向。',
+    tone: leaderSector.value ? 'focus' : 'clear',
+  },
+  {
+    step: '03',
+    label: '最后决定开仓',
+    value: summary.value?.account_action_tag || '等待账户结论',
+    copy: accountNarrative.value || '先看账户仓位弹性和市场节奏，再决定今天能不能出手。',
+    tone: summary.value?.account_action_tag?.includes('可') ? 'clear' : 'focus',
+  },
+]))
+const heroPulseCards = computed(() => [
+  {
+    label: '待处理旧仓',
     value: `${holdingActions.value.length}`,
-    copy: holdingActions.value.length > 0 ? '旧仓待处理事项比新机会更优先。' : '当前没有明确卖减信号，可继续跟踪。', 
+    copy: holdingActions.value.length > 0 ? '今天先处理旧仓，不要让新机会盖住旧风险。' : '没有强制减卖信号，旧仓暂时不会占用注意力。',
     tone: holdingActions.value.length > 0 ? 'weak' : 'strong',
   },
   {
-    label: '账户仓位',
+    label: '可执行新仓',
+    value: `${buyPoints.value?.available_buy_points?.length || 0}`,
+    copy: (buyPoints.value?.available_buy_points?.length || 0) > 0 ? '候选是有的，但只盯前排，不撒网。' : '今天没有舒服的新票，等待本身就是纪律。',
+    tone: (buyPoints.value?.available_buy_points?.length || 0) > 0 ? 'strong' : 'balanced',
+  },
+  {
+    label: '账户弹性',
     value: accountProfile.value ? formatPercent(accountProfile.value.total_position_ratio) : '-',
     copy: accountNarrative.value || '等待账户数据加载。',
     tone: Number(accountProfile.value?.total_position_ratio || 0) > 0.7 ? 'weak' : Number(accountProfile.value?.total_position_ratio || 0) > 0.4 ? 'balanced' : 'strong',
   },
-  {
-    label: '交易节奏',
-    value: marketEnv.value?.trading_tempo_label || (marketEnv.value?.breakout_allowed ? '可确认后做' : '先不追'),
-    copy: marketEnv.value?.market_subheadline || '等待市场环境结果。',
-    tone: ['可盯确认突破', '主线确认后参与'].includes(marketEnv.value?.trading_tempo_label) ? 'strong' : ['观望低吸', '等待确认'].includes(marketEnv.value?.trading_tempo_label) ? 'balanced' : 'weak',
-  },
 ])
+const holdingPanelTitle = computed(() => {
+  if (holdingActions.value.length) return `今天先看 ${holdingActions.value.length} 只该动的持仓`
+  return '旧仓暂时没有必须先动的地方'
+})
+const holdingPanelCopy = computed(() => {
+  if (holdingActions.value.length) return '先处理最需要减卖的旧仓，再决定新仓还有没有必要看。'
+  return '当前旧仓没有强制动作，可以把注意力更多留给主线确认。'
+})
+const buyPanelTitle = computed(() => {
+  if (buyCandidates.value.length) return `再看 ${buyCandidates.value.length} 只可执行候选`
+  return '今天没有真正舒服的新仓机会'
+})
+const buyPanelCopy = computed(() => {
+  if (buyCandidates.value.length) return '这些票只代表进入执行名单，不代表都要买，仍要按前排顺序筛。'
+  return '没有舒服机会时，不开新仓比勉强出手更重要。'
+})
+const getBuyActionText = (item) => {
+  if (item.buy_signal_tag === '可买') return '确认后出手'
+  if (item.buy_signal_tag === '观察') return '先观察'
+  return item.buy_signal_tag || '等待确认'
+}
+const getBuyReasonText = (item) => (
+  item.buy_comment
+  || item.pool_decision_summary
+  || item.execution_proximity_note
+  || item.stock_comment
+  || '进入执行名单，但仍要看主线强度和触发位是否配合。'
+)
+const getHoldingActionText = (item) => {
+  if (item.sell_signal_tag === '卖出') return '先处理'
+  if (item.sell_signal_tag === '减仓') return '先收缩'
+  return item.sell_signal_tag || '处理'
+}
+const getHoldingReasonText = (item) => (
+  item.sell_reason
+  || item.sell_comment
+  || '这只持仓已经进入处理名单，优先级高于新开仓。'
+)
 const reviewHighlights = computed(() => {
   const stats = reviewStats.value?.bucket_stats || []
   if (!stats.length) return []
@@ -751,42 +822,59 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.hero-guidance {
+.hero-sequence {
   display: grid;
   gap: 14px;
 }
 
-.guidance-card {
+.sequence-card {
   padding: 18px;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: rgba(42, 46, 57, 0.72);
+  display: grid;
+  gap: 8px;
 }
 
-.guidance-card-focus {
+.sequence-card-focus {
   box-shadow: inset 0 0 0 1px rgba(41, 98, 255, 0.14);
 }
 
-.guidance-card-avoid {
+.sequence-card-risk {
   box-shadow: inset 0 0 0 1px rgba(242, 54, 69, 0.14);
 }
 
-.guidance-label {
-  color: var(--color-text-sec);
-  font-size: 12px;
-  margin-bottom: 10px;
+.sequence-card-clear {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.14);
 }
 
-.guidance-copy {
+.sequence-step,
+.sequence-label {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.sequence-step {
+  letter-spacing: 0.08em;
+}
+
+.sequence-value {
   color: var(--color-text-pri);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.sequence-copy {
+  color: var(--color-text-sec);
   line-height: 1.7;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .hero-pulse {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -1108,6 +1196,36 @@ onMounted(() => {
   min-height: 380px;
 }
 
+.execution-panel-intro {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.execution-panel-intro strong {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.execution-panel-intro span {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.execution-panel-intro-buy {
+  background: rgba(84, 210, 164, 0.06);
+  border-color: rgba(84, 210, 164, 0.14);
+}
+
+.execution-panel-intro-sell {
+  background: rgba(242, 54, 69, 0.06);
+  border-color: rgba(242, 54, 69, 0.14);
+}
+
 .action-list {
   display: flex;
   flex-direction: column;
@@ -1155,6 +1273,13 @@ onMounted(() => {
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 10px;
+}
+
+.action-reason {
+  margin-top: 10px;
+  color: var(--color-text-sec);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .action-chip {
@@ -1229,7 +1354,7 @@ onMounted(() => {
   }
 
   .hero-command,
-  .guidance-card,
+  .sequence-card,
   .pulse-card,
   .leader-sector-hero,
   .position-meter,

@@ -30,6 +30,14 @@
               <el-radio-button label="stable">稳定模式</el-radio-button>
               <el-radio-button label="radar">实时雷达</el-radio-button>
             </el-radio-group>
+            <div class="style-switch-wrap">
+              <span class="style-switch-label">候选风格</span>
+              <el-radio-group v-model="strategyStyle" size="small" class="style-switch">
+                <el-radio-button label="balanced">均衡</el-radio-button>
+                <el-radio-button label="left">偏左侧</el-radio-button>
+                <el-radio-button label="right">偏右侧</el-radio-button>
+              </el-radio-group>
+            </div>
             <el-button @click="handleRefresh" :loading="refreshButtonLoading">
               {{ poolsData.refresh_in_progress ? '刷新中...' : '刷新' }}
             </el-button>
@@ -77,6 +85,7 @@
             </div>
             <div class="ops-toolbar-context">
               <span class="ops-context-chip">{{ isRadarMode ? '实时雷达' : '稳定模式' }}</span>
+              <span class="ops-context-chip">候选 {{ strategyStyleLabel }}</span>
               <span class="ops-context-chip">{{ marketEnvironmentTagLabel }}</span>
               <span v-if="primaryDirectionItems.length" class="ops-context-chip">
                 {{ primaryDirectionItems[0].sourceLabel }} {{ primaryDirectionItems[0].name }}
@@ -1478,6 +1487,14 @@ const route = useRoute()
 const router = useRouter()
 const focusOnly = ref(false)
 const poolMode = ref(String(route.query.mode || 'stable').trim() === 'radar' ? 'radar' : 'stable')
+
+const normalizeStrategyStyle = (value) => {
+  const normalized = String(value || 'balanced').trim().toLowerCase()
+  if (normalized === 'left' || normalized === 'right') return normalized
+  return 'balanced'
+}
+
+const strategyStyle = ref(normalizeStrategyStyle(route.query.strategy_style))
 let refreshPollTimer = null
 let radarAutoRefreshTimer = null
 const waitingForRefreshResult = ref(false)
@@ -1491,6 +1508,12 @@ const focusSectorSourceType = computed(() => String(route.query.focus_sector_sou
 const reviewBucketFilter = computed(() => String(route.query.review_bucket || '').trim())
 const reviewSourceFilter = computed(() => String(route.query.review_source || '').trim())
 const isRadarMode = computed(() => poolMode.value === 'radar')
+const strategyStyleLabel = computed(() => {
+  const style = normalizeStrategyStyle(poolsData.value.strategy_style || strategyStyle.value)
+  if (style === 'left') return '偏左侧'
+  if (style === 'right') return '偏右侧'
+  return '均衡'
+})
 const poolsFreshnessItems = computed(() => [
   {
     label: '模式',
@@ -1501,6 +1524,11 @@ const poolsFreshnessItems = computed(() => [
     label: '请求日',
     value: displayDate.value || '-',
     tone: 'strong',
+  },
+  {
+    label: '候选风格',
+    value: strategyStyleLabel.value,
+    tone: strategyStyle.value === 'balanced' ? 'strong' : 'warn',
   },
   {
     label: '候选口径',
@@ -2184,6 +2212,7 @@ const buildFocusQuery = (sectorName = '', sectorSourceType = '') => {
   const query = {}
   if (sectorName) query.focus_sector = sectorName
   if (sectorSourceType) query.focus_sector_source_type = sectorSourceType
+  if (strategyStyle.value !== 'balanced') query.strategy_style = strategyStyle.value
   return query
 }
 
@@ -3051,6 +3080,7 @@ const loadAccountCrossAnalysis = async (tradeDate, options = {}) => {
   try {
     const res = await decisionApi.buyPoint(tradeDate, 50, {
       refresh: Boolean(options.refresh),
+      strategyStyle: strategyStyle.value,
       timeout: BUY_POINT_TIMEOUT,
     })
     const payload = res.data || {}
@@ -3078,7 +3108,12 @@ const loadData = async (options = {}) => {
     if (!options.polling) {
       loadError.value = ''
     }
-    const res = await stockApi.pools(tradeDate, 50, { ...options, mode: poolMode.value, timeout: POOLS_TIMEOUT })
+    const res = await stockApi.pools(tradeDate, 50, {
+      ...options,
+      mode: poolMode.value,
+      strategyStyle: strategyStyle.value,
+      timeout: POOLS_TIMEOUT,
+    })
     const payload = res.data.data || {
       global_trade_gate: null,
       market_watch_pool: [],
@@ -3101,6 +3136,7 @@ const loadData = async (options = {}) => {
       candidate_data_message: '',
       snapshot_status_message: '',
       mode: poolMode.value,
+      strategy_style: strategyStyle.value,
       is_realtime: poolMode.value === 'radar',
       radar_generated_at: '',
     }
@@ -3176,6 +3212,17 @@ watch(poolMode, async (nextMode) => {
   loadData({ refresh: true })
 })
 
+watch(strategyStyle, async (nextStyle) => {
+  const query = { ...route.query }
+  if (nextStyle === 'balanced') {
+    delete query.strategy_style
+  } else {
+    query.strategy_style = nextStyle
+  }
+  await router.replace({ query })
+  loadData({ refresh: true })
+})
+
 onUnmounted(() => {
   stopRefreshPolling()
   stopRadarAutoRefresh()
@@ -3191,6 +3238,16 @@ watch(
     const normalized = String(value || 'stable').trim() === 'radar' ? 'radar' : 'stable'
     if (poolMode.value !== normalized) {
       poolMode.value = normalized
+    }
+  }
+)
+
+watch(
+  () => route.query.strategy_style,
+  (value) => {
+    const normalized = normalizeStrategyStyle(value)
+    if (strategyStyle.value !== normalized) {
+      strategyStyle.value = normalized
     }
   }
 )
@@ -4595,6 +4652,23 @@ onUnmounted(() => {
 }
 
 .mode-switch {
+  flex-shrink: 0;
+}
+
+.style-switch-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.style-switch-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-sec);
+}
+
+.style-switch {
   flex-shrink: 0;
 }
 

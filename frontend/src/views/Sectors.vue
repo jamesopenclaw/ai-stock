@@ -44,54 +44,21 @@
             <div class="hero-side-value">{{ marketEnv?.market_env_tag || '未知' }}</div>
             <div class="hero-side-copy">{{ marketEnvTitle }}</div>
           </div>
-        <div class="hero-side-card">
-          <div class="hero-side-label">主线题材</div>
-          <div class="hero-side-value">{{ themeLeaderSector?.sector_name || '暂无明确题材主线' }}</div>
-          <div class="hero-side-copy">{{ themeLeaderSummary }}</div>
-          <el-button
-            v-if="themeLeaderSector && !leaderLoading && !leaderLoaded"
-            type="primary"
-            link
-            size="small"
-            @click="loadLeaderData()"
-          >
-            加载风向标
-          </el-button>
-          <el-button
-            v-else-if="themeLeaderSector && leaderLoading"
-            type="primary"
-            link
-            size="small"
-            loading
-          >
-            加载中
-          </el-button>
         </div>
-        <div class="hero-side-card">
-          <div class="hero-side-label">承接行业</div>
-          <div class="hero-side-value">{{ industryLeaderSector?.sector_name || '暂无明确承接行业' }}</div>
-          <div class="hero-side-copy">{{ industryLeaderSummary }}</div>
-          <el-button
-            v-if="industryLeaderSector && !leaderLoading && !leaderLoaded"
-            type="primary"
-            link
-            size="small"
-            @click="loadLeaderData()"
+        <div class="hero-sequence">
+          <article
+            v-for="step in heroSteps"
+            :key="step.label"
+            class="hero-step-card"
+            :class="`hero-step-card-${step.tone}`"
           >
-            加载风向标
-          </el-button>
-          <el-button
-            v-else-if="industryLeaderSector && leaderLoading"
-            type="primary"
-            link
-            size="small"
-            loading
-          >
-            加载中
-          </el-button>
+            <div class="hero-step-index">{{ step.step }}</div>
+            <div class="hero-step-label">{{ step.label }}</div>
+            <div class="hero-step-value">{{ step.value }}</div>
+            <div class="hero-step-copy">{{ step.copy }}</div>
+          </article>
         </div>
       </div>
-    </div>
       <el-alert
         v-if="sectorModeAlertVisible"
         :title="sectorModeAlertTitle"
@@ -110,55 +77,11 @@
         </div>
       </div>
 
-      <div v-if="hasHotBoards" class="hot-boards-panel">
-        <div class="hot-boards-head">
-          <div>
-            <div class="hot-boards-title">新浪热榜</div>
-            <div class="hot-boards-desc">补一眼盘中最热的板块、行业和概念，作为外部热度参考，不替代你的板块扫描结论。</div>
-          </div>
-          <div class="hot-boards-meta">{{ hotBoardsMeta }}</div>
-        </div>
-        <div class="hot-boards-grid">
-          <section v-for="group in hotBoardGroups" :key="group.key" class="hot-board-card">
-            <div class="hot-board-card-head">
-              <div>
-                <div class="hot-board-card-title">{{ group.label }}</div>
-                <div class="hot-board-card-copy">{{ group.copy }}</div>
-              </div>
-            </div>
-            <div v-if="group.rows.length" class="hot-board-list">
-              <button
-                v-for="item in group.rows"
-                :key="`${group.key}-${item.sector_id || item.sector_name}`"
-                type="button"
-                class="hot-board-row"
-                @click="goToPage('/buy', item.sector_name)"
-              >
-                <div class="hot-board-row-main">
-                  <div class="hot-board-row-name">{{ item.sector_name }}</div>
-                  <div class="hot-board-row-meta">
-                    <span>{{ item.leader_stock_name || '暂无领涨股' }}</span>
-                    <span v-if="item.stock_count">成分 {{ item.stock_count }}</span>
-                  </div>
-                </div>
-                <div class="hot-board-row-side">
-                  <strong :class="item.sector_change_pct > 0 ? 'text-red' : 'text-green'">
-                    {{ item.sector_change_pct?.toFixed(2) }}%
-                  </strong>
-                  <span>{{ formatHotBoardTime(item.quote_time) }}</span>
-                </div>
-              </button>
-            </div>
-            <div v-else class="hot-board-empty">当前未拿到这类热榜。</div>
-          </section>
-        </div>
-      </div>
-
       <div v-if="focusRows.length" class="focus-board">
         <div class="focus-board-head">
           <div>
-            <div class="focus-board-title">双主线视图</div>
-            <div class="focus-board-desc">先区分题材主线和承接行业，再决定要不要去三池和买点页细看。</div>
+            <div class="focus-board-title">优先下钻方向</div>
+            <div class="focus-board-desc">先从最值得继续看的几个方向下钻，不要一开始就翻全部板块。</div>
           </div>
         </div>
         <div class="focus-board-grid">
@@ -174,6 +97,10 @@
               <span>综合分 {{ row.sector_score }}</span>
               <span :class="row.sector_change_pct > 0 ? 'text-red' : 'text-green'">{{ row.sector_change_pct?.toFixed(2) }}%</span>
               <span>{{ row.sector_tradeability_tag || '-' }}</span>
+            </div>
+            <div class="focus-card-actions">
+              <el-button type="primary" link size="small" @click="goToPage('/pools', row)">去三池看方向</el-button>
+              <el-button type="primary" link size="small" @click="goToPage('/buy', row)">去买点找执行位</el-button>
             </div>
           </article>
         </div>
@@ -339,6 +266,50 @@
           </el-table>
         </el-tab-pane>
       </el-tabs>
+
+      <details v-if="hasHotBoards" class="hot-boards-panel">
+        <summary class="hot-boards-summary">
+          <div>
+            <div class="hot-boards-title">新浪热榜</div>
+            <div class="hot-boards-desc">外部热度参考，放在次级位置，不替代这页自己的主线判断。</div>
+          </div>
+          <div class="hot-boards-meta">{{ hotBoardsMeta }}</div>
+        </summary>
+        <div class="hot-boards-grid">
+          <section v-for="group in hotBoardGroups" :key="group.key" class="hot-board-card">
+            <div class="hot-board-card-head">
+              <div>
+                <div class="hot-board-card-title">{{ group.label }}</div>
+                <div class="hot-board-card-copy">{{ group.copy }}</div>
+              </div>
+            </div>
+            <div v-if="group.rows.length" class="hot-board-list">
+              <button
+                v-for="item in group.rows"
+                :key="`${group.key}-${item.sector_id || item.sector_name}`"
+                type="button"
+                class="hot-board-row"
+                @click="goToPage('/buy', item.sector_name)"
+              >
+                <div class="hot-board-row-main">
+                  <div class="hot-board-row-name">{{ item.sector_name }}</div>
+                  <div class="hot-board-row-meta">
+                    <span>{{ item.leader_stock_name || '暂无领涨股' }}</span>
+                    <span v-if="item.stock_count">成分 {{ item.stock_count }}</span>
+                  </div>
+                </div>
+                <div class="hot-board-row-side">
+                  <strong :class="item.sector_change_pct > 0 ? 'text-red' : 'text-green'">
+                    {{ item.sector_change_pct?.toFixed(2) }}%
+                  </strong>
+                  <span>{{ formatHotBoardTime(item.quote_time) }}</span>
+                </div>
+              </button>
+            </div>
+            <div v-else class="hot-board-empty">当前未拿到这类热榜。</div>
+          </section>
+        </div>
+      </details>
       </template>
     </el-card>
   </div>
@@ -618,6 +589,29 @@ const actionCopy = computed(() => {
   }
   return `${primaryLeaderSector.value.sector_summary_reason || primaryLeaderSector.value.sector_comment || '该方向当前更强'}。先盯龙头和中军是否继续联动，再决定是否从观察转执行。`
 })
+const heroSteps = computed(() => ([
+  {
+    step: '01',
+    label: '先看主线题材',
+    value: themeLeaderSector.value?.sector_name || '暂无明确题材主线',
+    copy: themeLeaderSummary.value,
+    tone: themeLeaderSector.value ? 'focus' : 'wait',
+  },
+  {
+    step: '02',
+    label: '再看承接行业',
+    value: industryLeaderSector.value?.sector_name || '暂无明确承接行业',
+    copy: industryLeaderSummary.value,
+    tone: industryLeaderSector.value ? 'support' : 'wait',
+  },
+  {
+    step: '03',
+    label: '最后决定下钻',
+    value: primaryLeaderSector.value?.sector_action_hint || '先观察',
+    copy: leaderFlowSummary.value,
+    tone: primaryLeaderSector.value?.sector_action_hint === '可执行' ? 'go' : 'wait',
+  },
+]))
 
 const sectorModeAlertVisible = computed(() => (
   scanData.value.sector_data_mode === 'industry_only' ||
@@ -907,6 +901,7 @@ onMounted(() => {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
   gap: 16px;
+  align-items: start;
   margin-bottom: 16px;
   padding: 20px;
   border-radius: 18px;
@@ -914,6 +909,10 @@ onMounted(() => {
     radial-gradient(circle at top right, rgba(255, 196, 64, 0.12), transparent 32%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.04));
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.scan-hero-main {
+  display: grid;
+  align-content: start;
 }
 .scan-kicker {
   font-size: 12px;
@@ -949,6 +948,13 @@ onMounted(() => {
 .scan-hero-side {
   display: grid;
   gap: 12px;
+  align-content: start;
+}
+.hero-sequence {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 .hero-side-card {
   padding: 14px 16px;
@@ -970,6 +976,41 @@ onMounted(() => {
   color: var(--color-text-sec);
   line-height: 1.6;
   font-size: 13px;
+}
+.hero-step-card {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  display: grid;
+  gap: 6px;
+}
+.hero-step-card-focus {
+  box-shadow: inset 0 0 0 1px rgba(84, 210, 164, 0.14);
+}
+.hero-step-card-support {
+  box-shadow: inset 0 0 0 1px rgba(61, 119, 255, 0.14);
+}
+.hero-step-card-go {
+  box-shadow: inset 0 0 0 1px rgba(255, 196, 64, 0.14);
+}
+.hero-step-card-wait {
+  opacity: 0.9;
+}
+.hero-step-index,
+.hero-step-label {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+.hero-step-value {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.hero-step-copy {
+  color: var(--color-text-sec);
+  font-size: 13px;
+  line-height: 1.6;
 }
 .total-text {
   color: var(--color-text-sec);
@@ -1056,6 +1097,12 @@ onMounted(() => {
   color: var(--color-text-sec);
   font-size: 12px;
 }
+.focus-card-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .hot-boards-panel {
   margin-bottom: 16px;
   padding: 18px;
@@ -1064,6 +1111,17 @@ onMounted(() => {
     radial-gradient(circle at top left, rgba(61, 119, 255, 0.12), transparent 32%),
     linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.04));
   border: 1px solid rgba(255,255,255,0.06);
+}
+.hot-boards-summary {
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  cursor: pointer;
+}
+.hot-boards-summary::-webkit-details-marker {
+  display: none;
 }
 .hot-boards-head {
   display: flex;
@@ -1087,6 +1145,7 @@ onMounted(() => {
   white-space: nowrap;
 }
 .hot-boards-grid {
+  margin-top: 14px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
@@ -1270,6 +1329,11 @@ onMounted(() => {
     grid-template-columns: 1fr;
   }
 
+  .hero-sequence {
+    grid-template-columns: 1fr;
+  }
+
+  .hot-boards-summary,
   .hot-boards-head {
     flex-direction: column;
   }

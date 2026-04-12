@@ -1,7 +1,7 @@
 """
 规则策略配置对象
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict
 
 
@@ -41,6 +41,17 @@ class StockFilterStrategyConfig:
     market_watch_per_sector_limit: int = 4
     account_executable_limit: int = 5
     sector_representative_limit: int = 6
+    mainline_pullback_per_sector_limit: int = 3
+    mainline_low_suck_per_sector_limit: int = 2
+    mainline_pullback_change_min: float = -2.5
+    mainline_pullback_change_max: float = 4.8
+    mainline_pullback_close_floor_vs_preclose: float = 0.985
+    mainline_pullback_close_quality_min: float = 0.35
+    mainline_pullback_anchor_gap_max: float = 0.02
+    mainline_low_suck_change_min: float = -4.0
+    mainline_low_suck_change_max: float = 2.5
+    mainline_low_suck_close_quality_min: float = 0.45
+    mainline_low_suck_min_vol_ratio: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -59,6 +70,57 @@ class SellPointStrategyConfig:
     reduce_pct: float = 8.0
 
 
-DEFAULT_STOCK_FILTER_STRATEGY = StockFilterStrategyConfig()
+_BASE_STOCK_FILTER_STRATEGY = StockFilterStrategyConfig()
+
+
+def build_stock_filter_strategy(
+    style: str = "balanced",
+    **overrides,
+) -> StockFilterStrategyConfig:
+    normalized = str(style or "balanced").strip().lower()
+    if normalized == "balanced":
+        strategy = _BASE_STOCK_FILTER_STRATEGY
+    elif normalized == "left":
+        strategy = replace(
+            _BASE_STOCK_FILTER_STRATEGY,
+            mainline_pullback_per_sector_limit=4,
+            mainline_low_suck_per_sector_limit=3,
+            mainline_pullback_change_min=-3.5,
+            mainline_pullback_change_max=3.8,
+            mainline_pullback_close_floor_vs_preclose=0.975,
+            mainline_pullback_close_quality_min=0.28,
+            mainline_pullback_anchor_gap_max=0.03,
+            mainline_low_suck_change_min=-5.0,
+            mainline_low_suck_change_max=2.0,
+            mainline_low_suck_close_quality_min=0.38,
+            mainline_low_suck_min_vol_ratio=0.9,
+        )
+    elif normalized == "right":
+        strategy = replace(
+            _BASE_STOCK_FILTER_STRATEGY,
+            mainline_pullback_per_sector_limit=2,
+            mainline_low_suck_per_sector_limit=1,
+            mainline_pullback_change_min=-1.5,
+            mainline_pullback_change_max=5.5,
+            mainline_pullback_close_floor_vs_preclose=0.99,
+            mainline_pullback_close_quality_min=0.45,
+            mainline_pullback_anchor_gap_max=0.012,
+            mainline_low_suck_change_min=-2.5,
+            mainline_low_suck_change_max=1.5,
+            mainline_low_suck_close_quality_min=0.52,
+            mainline_low_suck_min_vol_ratio=1.2,
+        )
+    else:
+        raise ValueError(f"unknown stock filter strategy style: {style}")
+
+    if overrides:
+        strategy = replace(strategy, **overrides)
+    return strategy
+
+
+BALANCED_STOCK_FILTER_STRATEGY = build_stock_filter_strategy("balanced")
+LEFT_BIASED_STOCK_FILTER_STRATEGY = build_stock_filter_strategy("left")
+RIGHT_BIASED_STOCK_FILTER_STRATEGY = build_stock_filter_strategy("right")
+DEFAULT_STOCK_FILTER_STRATEGY = BALANCED_STOCK_FILTER_STRATEGY
 DEFAULT_BUY_POINT_STRATEGY = BuyPointStrategyConfig()
 DEFAULT_SELL_POINT_STRATEGY = SellPointStrategyConfig()

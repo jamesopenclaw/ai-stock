@@ -3092,6 +3092,10 @@ class StockFilterService:
             bonus += 4
         if "涨幅前列" in source:
             bonus += 3
+        if "主线回踩补充" in source:
+            bonus += 2
+        if "主线低吸补充" in source:
+            bonus += 1.5
         if "持仓补齐" in source:
             bonus -= 2
         return bonus
@@ -3360,6 +3364,10 @@ class StockFilterService:
         source = stock.candidate_source_tag or ""
         if "持仓补齐" in source:
             return "持仓映射"
+        if "主线回踩补充" in source:
+            return "趋势回踩"
+        if "主线低吸补充" in source:
+            return "异动预备"
         if "涨停入选" in source or (
             strength_tag == StockStrengthTag.STRONG and stock.change_pct >= 5 and tradeability_tag == StockTradeabilityTag.TRADABLE
         ):

@@ -264,13 +264,19 @@ export const sectorApi = {
 export const stockApi = {
   filter: (tradeDate, limit) => api.get('/stock/filter', { params: { trade_date: tradeDate, limit } }),
   pools: (tradeDate, limit, options = {}) => cachedGet(
-    scopedCacheKey('stock-pools', [tradeDate, String(limit), String(options.mode || 'stable')]),
+    scopedCacheKey('stock-pools', [
+      tradeDate,
+      String(limit),
+      String(options.mode || 'stable'),
+      String(options.strategyStyle || 'balanced'),
+    ]),
     () => api.get('/stock/pools', {
       params: {
         trade_date: tradeDate,
         limit,
         refresh: Boolean(options.refresh),
         mode: options.mode || 'stable',
+        strategy_style: options.strategyStyle || 'balanced',
         include_watch_candidates: true,
       },
       timeout: options.timeout
@@ -313,6 +319,7 @@ export const decisionApi = {
       trade_date: tradeDate,
       limit,
       refresh: Boolean(options.refresh),
+      strategy_style: options.strategyStyle || 'balanced',
     },
     timeout: options.timeout
   }),

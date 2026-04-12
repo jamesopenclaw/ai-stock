@@ -44,6 +44,13 @@ class SellDailyLevels:
     range_low_20d: Optional[float]
 
 
+@dataclass
+class SellPlanAnchor:
+    price: float
+    target_input: object
+    levels: SellDailyLevels
+
+
 class SellPointSopService:
     """按卖点 SOP 输出单只持仓的结构化处理建议。"""
 
@@ -210,6 +217,7 @@ class SellPointSopService:
             daily_judgement,
             intraday_judgement,
             levels,
+            history_rows,
         )
         execution = self._build_execution(
             target_holding,
@@ -451,9 +459,11 @@ class SellPointSopService:
         daily_judgement: SellPointSopDailyJudgement,
         intraday_judgement: SellPointSopIntradayJudgement,
         levels: SellDailyLevels,
+        history_rows: List[Dict],
     ) -> SellPointSopOrderPlan:
         live_holding_price = self._round_price(getattr(holding, "market_price", None))
-        price = float(live_holding_price or target_input.close or 0)
+        live_price = float(live_holding_price or target_input.close or 0)
+        plan_anchor = self._build_plan_anchor(target_input, levels, history_rows)
         sell_style = self._resolve_sell_style(
             target_scored,
             account_context,
@@ -463,36 +473,36 @@ class SellPointSopService:
             holding,
         )
         proactive_ref = self._select_proactive_ref(
-            price,
+            live_price,
             target_input,
             levels,
             sell_style,
             holding,
         )
         rebound_ref = self._select_rebound_ref(
-            price,
-            target_input,
-            levels,
+            plan_anchor.price,
+            plan_anchor.target_input,
+            plan_anchor.levels,
             sell_style,
             holding,
         )
         stop_ref = self._select_stop_ref(
-            price,
-            target_input,
-            levels,
+            plan_anchor.price,
+            plan_anchor.target_input,
+            plan_anchor.levels,
             sell_style,
             daily_judgement.sell_point_level,
         )
         priority_exit_ref = self._select_priority_exit_ref(
-            price,
+            live_price,
             target_input,
             sell_style,
             intraday_judgement.conclusion,
         )
         observe_ref = self._select_observe_ref(
-            price,
-            target_input,
-            levels,
+            plan_anchor.price,
+            plan_anchor.target_input,
+            plan_anchor.levels,
             sell_style,
             intraday_judgement.conclusion,
         )
@@ -516,7 +526,7 @@ class SellPointSopService:
             else "[当前不适用]"
         )
         rebound_zone = (
-            self._format_zone(rebound_ref, self._rebound_buffer_pct(sell_style, target_input))
+            self._format_zone(rebound_ref, self._rebound_buffer_pct(sell_style, plan_anchor.target_input))
             if rebound_ref is not None and sell_style in {"observation_exit", "weak_exit"}
             else "[当前不适用]"
         )
@@ -572,6 +582,64 @@ class SellPointSopService:
             rebound_condition=rebound_condition,
             stop_condition=f"跌破 {stop_price} 且 3-5 分钟无法收回，就按结构失效处理。",
             hold_condition=hold_condition,
+        )
+
+    def _build_plan_anchor(
+        self,
+        target_input,
+        levels: SellDailyLevels,
+        history_rows: List[Dict],
+    ) -> SellPlanAnchor:
+        """盘中计划位默认锚定到上一已完成交易日，避免随实时价漂移。"""
+        fallback_price = self._round_price(getattr(target_input, "close", None)) or 0.0
+        if not self._is_realtime_quote(target_input) or not history_rows:
+            return SellPlanAnchor(
+                price=float(fallback_price),
+                target_input=target_input,
+                levels=levels,
+            )
+
+        anchor_row = history_rows[-1] or {}
+        anchor_close = self._round_price(anchor_row.get("close")) or fallback_price
+        anchor_open = self._round_price(anchor_row.get("open")) or anchor_close
+        anchor_high = self._round_price(anchor_row.get("high")) or anchor_close
+        anchor_low = self._round_price(anchor_row.get("low")) or anchor_close
+        anchor_pre_close = (
+            self._round_price(history_rows[-2].get("close"))
+            if len(history_rows) >= 2
+            else self._round_price(getattr(target_input, "pre_close", None))
+        ) or anchor_close
+        anchor_input = SimpleNamespace(
+            ts_code=getattr(target_input, "ts_code", None),
+            stock_name=getattr(target_input, "stock_name", None),
+            sector_name=getattr(target_input, "sector_name", None),
+            close=anchor_close,
+            open=anchor_open,
+            high=anchor_high,
+            low=anchor_low,
+            pre_close=anchor_pre_close,
+            change_pct=0.0,
+            turnover_rate=getattr(target_input, "turnover_rate", 0.0),
+            amount=0.0,
+            avg_price=anchor_close,
+            intraday_volume_ratio=None,
+            vol_ratio=0.0,
+            quote_time=None,
+            data_source="previous_daily_plan_anchor",
+        )
+        anchor_levels = SellDailyLevels(
+            ma5=levels.ma5,
+            ma10=levels.ma10,
+            ma20=levels.ma20,
+            prev_high=anchor_high,
+            prev_low=anchor_low,
+            range_high_20d=levels.range_high_20d,
+            range_low_20d=levels.range_low_20d,
+        )
+        return SellPlanAnchor(
+            price=float(anchor_close),
+            target_input=anchor_input,
+            levels=anchor_levels,
         )
 
     def _build_execution(
@@ -783,6 +851,9 @@ class SellPointSopService:
         if not candidates:
             return None
         return self._round_price(min(candidates, key=lambda item: item[0])[1])
+
+    def _is_realtime_quote(self, target_input) -> bool:
+        return str(getattr(target_input, "data_source", "") or "").startswith("realtime_")
 
     def _resolve_sell_style(
         self,

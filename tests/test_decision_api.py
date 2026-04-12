@@ -474,6 +474,107 @@ async def test_buy_point_refresh_bypasses_cached_stock_pools_snapshot(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_buy_point_non_default_style_bypasses_default_snapshots(monkeypatch):
+    context = type(
+        "Context",
+        (),
+        {
+            "stocks": [],
+            "account": AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.2,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            "market_env": type(
+                "Env",
+                (),
+                {
+                    "market_env_tag": MarketEnvTag.NEUTRAL,
+                    "market_env_profile": "偏左侧测试",
+                    "market_headline": "",
+                    "market_subheadline": "",
+                    "trading_tempo_label": "",
+                },
+            )(),
+            "sector_scan": None,
+        },
+    )()
+    pools = StockPoolsOutput(
+        trade_date="2026-03-24",
+        resolved_trade_date="2026-03-24",
+        sector_scan_trade_date="2026-03-24",
+        sector_scan_resolved_trade_date="2026-03-24",
+        snapshot_version=decision.STOCK_POOLS_SNAPSHOT_VERSION,
+        market_watch_pool=[],
+        account_executable_pool=[],
+        holding_process_pool=[],
+        total_count=0,
+    )
+    buy_result = BuyPointResponse(
+        trade_date="2026-03-24",
+        market_env_tag=MarketEnvTag.NEUTRAL,
+        available_buy_points=[],
+        observe_buy_points=[],
+        not_buy_points=[],
+        total_count=0,
+    )
+    compute_calls = []
+    save_calls = []
+
+    async def fake_compute(*args, **kwargs):
+        compute_calls.append((args, kwargs))
+        return {
+            "context": context,
+            "scored_stocks": [],
+            "stock_pools": pools,
+            "review_bias_profile": {"exact": {}, "bucket": {}},
+        }
+
+    async def should_not_read_snapshot(*args, **kwargs):
+        raise AssertionError("non-default style should bypass default stock-pools snapshot")
+
+    async def fake_save_snapshot(*args, **kwargs):
+        save_calls.append(("analysis", args, kwargs))
+        return 1
+
+    async def fake_save_page_snapshot(*args, **kwargs):
+        save_calls.append(("page", args, kwargs))
+        return 1
+
+    monkeypatch.setattr(decision, "_compute_buy_point_bundle", fake_compute)
+    monkeypatch.setattr(
+        decision.review_snapshot_service,
+        "get_stock_pools_page_snapshot",
+        should_not_read_snapshot,
+    )
+    monkeypatch.setattr(
+        decision.review_snapshot_service,
+        "save_analysis_snapshot_safe",
+        fake_save_snapshot,
+    )
+    monkeypatch.setattr(
+        decision.review_snapshot_service,
+        "save_stock_pools_page_snapshot_safe",
+        fake_save_page_snapshot,
+    )
+    monkeypatch.setattr(decision.buy_point_service, "analyze", lambda *args, **kwargs: buy_result)
+
+    response = await decision.analyze_buy_point(
+        trade_date="2026-03-24",
+        limit=20,
+        strategy_style="left",
+    )
+
+    assert response.code == 200
+    assert response.data["strategy_style"] == "left"
+    assert len(compute_calls) == 1
+    assert compute_calls[0][1]["strategy_style"] == "left"
+    assert save_calls == []
+
+
+@pytest.mark.asyncio
 async def test_decision_summary_uses_lightweight_account_context(monkeypatch):
     market_env = MarketEnvOutput(
         trade_date="2026-03-24",

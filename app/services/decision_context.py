@@ -7,12 +7,17 @@ from typing import Dict, List, Optional
 
 from app.services.market_data_gateway import market_data_gateway
 from app.models.schemas import AccountInput, AccountPosition, StockInput
+from app.data.tushare_client import is_sector_scan_board_eligible, tushare_client
 from app.services.market_env import market_env_service
 from app.services.portfolio_service import portfolio_service
 from app.services.sector_scan import sector_scan_service
 from app.services.sector_scan_snapshot import (
     resolve_snapshot_lookup_trade_date,
     sector_scan_snapshot_service,
+)
+from app.services.strategy_config import (
+    DEFAULT_STOCK_FILTER_STRATEGY,
+    StockFilterStrategyConfig,
 )
 from app.services.stock_filter import merge_holdings_into_candidate_stocks
 
@@ -69,6 +74,12 @@ class DecisionContext:
 class DecisionContextService:
     """统一构建市场、板块、候选股、持仓和账户上下文。"""
 
+    MAINLINE_PULLBACK_SOURCE_TAG = "主线回踩补充"
+    MAINLINE_LOW_SUCK_SOURCE_TAG = "主线低吸补充"
+
+    def __init__(self, strategy: Optional[StockFilterStrategyConfig] = None):
+        self.strategy = strategy or DEFAULT_STOCK_FILTER_STRATEGY
+
     async def _resolve_selection_trade_date(self, trade_date: str) -> str:
         """三池/选股默认跟随板块页的稳定快照日。"""
         return await resolve_snapshot_lookup_trade_date(trade_date)
@@ -110,6 +121,351 @@ class DecisionContextService:
             trade_date,
         )
 
+    def _append_candidate_source_tag(self, current: str, new_source: str) -> str:
+        parts = [part.strip() for part in str(current or "").split("/") if part.strip()]
+        if new_source and new_source not in parts:
+            parts.append(new_source)
+        return "/".join(parts)
+
+    def _merge_candidate_stocks(
+        self,
+        base_stocks: List[StockInput],
+        extra_stocks: List[StockInput],
+    ) -> List[StockInput]:
+        if not extra_stocks:
+            return base_stocks
+
+        merged = list(base_stocks)
+        index_by_code = {
+            market_data_gateway.normalize_ts_code(stock.ts_code): index
+            for index, stock in enumerate(merged)
+        }
+        for extra in extra_stocks:
+            normalized = market_data_gateway.normalize_ts_code(extra.ts_code)
+            existing_index = index_by_code.get(normalized)
+            if existing_index is None:
+                index_by_code[normalized] = len(merged)
+                merged.append(extra)
+                continue
+
+            existing = merged[existing_index]
+            existing.candidate_source_tag = self._append_candidate_source_tag(
+                existing.candidate_source_tag,
+                extra.candidate_source_tag,
+            )
+            if extra.concept_names:
+                existing.concept_names = list(
+                    dict.fromkeys(
+                        list(existing.concept_names or []) + list(extra.concept_names or [])
+                    )
+                )
+            if (
+                (not existing.sector_name or existing.sector_name == "未知")
+                and extra.sector_name
+            ):
+                existing.sector_name = extra.sector_name
+            if existing.avg_price is None and extra.avg_price is not None:
+                existing.avg_price = extra.avg_price
+            if existing.volume is None and extra.volume is not None:
+                existing.volume = extra.volume
+        return merged
+
+    def _iter_mainline_sector_targets(self, sector_scan) -> List[tuple[str, str]]:
+        if not sector_scan:
+            return []
+
+        targets: List[tuple[str, str]] = []
+        seen = set()
+        groups = [
+            getattr(sector_scan, "theme_leaders", []),
+            getattr(sector_scan, "industry_leaders", []),
+            getattr(sector_scan, "mainline_sectors", []),
+            getattr(sector_scan, "sub_mainline_sectors", []),
+        ]
+        for group in groups:
+            for sector in list(group or []):
+                name = str(getattr(sector, "sector_name", "") or "").strip()
+                source_type = str(getattr(sector, "sector_source_type", "") or "").strip()
+                if not name:
+                    continue
+                key = (name, source_type)
+                if key in seen:
+                    continue
+                seen.add(key)
+                targets.append(key)
+        return targets
+
+    def _close_quality_from_row(
+        self,
+        close: float,
+        low: float,
+        high: float,
+    ) -> float:
+        intraday_range = float(high or 0) - float(low or 0)
+        if intraday_range <= 0:
+            return 0.5
+        return max(0.0, min(1.0, (float(close or 0) - float(low or 0)) / intraday_range))
+
+    def _has_upper_shadow_risk_from_row(
+        self,
+        *,
+        open_price: float,
+        close: float,
+        high: float,
+        low: float,
+    ) -> bool:
+        intraday_range = float(high or 0) - float(low or 0)
+        if intraday_range <= 0:
+            return False
+        upper_shadow = float(high or 0) - max(float(open_price or 0), float(close or 0))
+        return (upper_shadow / intraday_range) >= 0.35
+
+    def _classify_mainline_recall_source(
+        self,
+        *,
+        close: float,
+        open_price: float,
+        high: float,
+        low: float,
+        pre_close: float,
+        change_pct: float,
+        avg_price: Optional[float],
+        vol_ratio: Optional[float],
+    ) -> Optional[str]:
+        close_quality = self._close_quality_from_row(close, low, high)
+        upper_shadow_risk = self._has_upper_shadow_risk_from_row(
+            open_price=open_price,
+            close=close,
+            high=high,
+            low=low,
+        )
+        if upper_shadow_risk:
+            return None
+
+        anchor_distances = [
+            abs(float(close) - float(anchor)) / max(float(close), 0.01)
+            for anchor in [avg_price, pre_close, open_price]
+            if anchor is not None and float(anchor) > 0
+        ]
+        nearest_anchor = min(anchor_distances) if anchor_distances else 999.0
+
+        if (
+            self.strategy.mainline_pullback_change_min <= float(change_pct or 0) <= self.strategy.mainline_pullback_change_max
+            and float(close or 0) >= float(pre_close or 0) * self.strategy.mainline_pullback_close_floor_vs_preclose
+            and close_quality >= self.strategy.mainline_pullback_close_quality_min
+            and nearest_anchor <= self.strategy.mainline_pullback_anchor_gap_max
+        ):
+            return self.MAINLINE_PULLBACK_SOURCE_TAG
+
+        if (
+            self.strategy.mainline_low_suck_change_min <= float(change_pct or 0) <= self.strategy.mainline_low_suck_change_max
+            and close_quality >= self.strategy.mainline_low_suck_close_quality_min
+            and float(vol_ratio or 1.0) >= self.strategy.mainline_low_suck_min_vol_ratio
+        ):
+            return self.MAINLINE_LOW_SUCK_SOURCE_TAG
+
+        return None
+
+    def _mainline_recall_sort_key(
+        self,
+        source_tag: str,
+        *,
+        close: float,
+        high: float,
+        low: float,
+        change_pct: float,
+        amount: float,
+        vol_ratio: Optional[float],
+        avg_price: Optional[float],
+        pre_close: float,
+        open_price: float,
+    ) -> tuple:
+        close_quality = self._close_quality_from_row(close, low, high)
+        anchor_distances = [
+            abs(float(close) - float(anchor)) / max(float(close), 0.01)
+            for anchor in [avg_price, pre_close, open_price]
+            if anchor is not None and float(anchor) > 0
+        ]
+        nearest_anchor = min(anchor_distances) if anchor_distances else 999.0
+        if source_tag == self.MAINLINE_PULLBACK_SOURCE_TAG:
+            return (
+                -nearest_anchor,
+                -abs(float(change_pct or 0) - 1.5),
+                close_quality,
+                float(amount or 0),
+                float(vol_ratio or 1.0),
+            )
+        return (
+            close_quality,
+            float(vol_ratio or 1.0),
+            -abs(float(change_pct or 0)),
+            float(amount or 0),
+            -nearest_anchor,
+        )
+
+    def _build_mainline_pullback_candidates(
+        self,
+        trade_date: str,
+        sector_scan,
+        existing_stocks: List[StockInput],
+    ) -> List[StockInput]:
+        target_specs = self._iter_mainline_sector_targets(sector_scan)
+        if not target_specs:
+            return []
+
+        payload = market_data_gateway.fetch_recent_stock_daily_df(trade_date)
+        df = payload.get("df")
+        if df is None or bool(getattr(df, "empty", False)):
+            return []
+
+        stock_meta_map = market_data_gateway.get_stock_basic_snapshot_map()
+        daily_basic_df = None
+        daily_basic = getattr(market_data_gateway.pro, "daily_basic", None)
+        data_trade_date = str(payload.get("data_trade_date") or str(trade_date).replace("-", ""))
+        if callable(daily_basic):
+            try:
+                daily_basic_df = daily_basic(
+                    trade_date=data_trade_date,
+                    fields="ts_code,turnover_rate,volume_ratio",
+                )
+            except TypeError:
+                daily_basic_df = daily_basic(trade_date=data_trade_date)
+
+        source_df = market_data_gateway.build_daily_stock_source_df(
+            df,
+            stock_meta_map,
+            daily_basic_df=daily_basic_df,
+        )
+        if source_df is None or source_df.empty:
+            return []
+
+        existing_codes = {
+            market_data_gateway.normalize_ts_code(stock.ts_code)
+            for stock in existing_stocks
+        }
+        concept_cache: Dict[str, List[str]] = {}
+        grouped: Dict[str, Dict[str, List[tuple[tuple, StockInput]]]] = {
+            name: {
+                self.MAINLINE_PULLBACK_SOURCE_TAG: [],
+                self.MAINLINE_LOW_SUCK_SOURCE_TAG: [],
+            }
+            for name, _source_type in target_specs
+        }
+
+        for _, row in source_df.iterrows():
+            ts_code = str(row.get("ts_code") or "").strip()
+            if not ts_code or not is_sector_scan_board_eligible(ts_code):
+                continue
+            normalized = market_data_gateway.normalize_ts_code(ts_code)
+            if normalized in existing_codes:
+                continue
+
+            stock_name = str(row.get("stock_name") or ts_code).strip()
+            if "ST" in stock_name.upper():
+                continue
+
+            close = float(row.get("close") or 0)
+            high = float(row.get("high") or 0)
+            low = float(row.get("low") or 0)
+            open_price = float(row.get("open") or 0)
+            pre_close = float(row.get("pre_close") or 0)
+            amount = float(row.get("amount") or 0)
+            if min(close, high, low, open_price, pre_close) <= 0:
+                continue
+            if close < 2.0 or amount < 30000:
+                continue
+
+            industry = str(row.get("industry") or "未知").strip() or "未知"
+            concept_names = concept_cache.get(normalized)
+            if concept_names is None:
+                concept_names = tushare_client._get_ths_concept_names_for_stock(ts_code)
+                concept_cache[normalized] = concept_names
+
+            matched_name = None
+            for name, source_type in target_specs:
+                if source_type == "concept":
+                    if name in concept_names:
+                        matched_name = name
+                        break
+                elif industry == name:
+                    matched_name = name
+                    break
+            if not matched_name:
+                continue
+
+            change_pct = float(row.get("pct_change") or 0)
+            vol_ratio = row.get("volume_ratio")
+            avg_price = row.get("avg_price")
+            source_tag = self._classify_mainline_recall_source(
+                close=close,
+                open_price=open_price,
+                high=high,
+                low=low,
+                pre_close=pre_close,
+                change_pct=change_pct,
+                avg_price=float(avg_price) if avg_price is not None else None,
+                vol_ratio=float(vol_ratio) if vol_ratio is not None else None,
+            )
+            if not source_tag:
+                continue
+
+            candidate = StockInput(
+                ts_code=ts_code,
+                stock_name=stock_name,
+                sector_name=matched_name,
+                close=close,
+                change_pct=change_pct,
+                turnover_rate=float(row.get("turnover_rate") or 0),
+                amount=amount,
+                vol_ratio=float(vol_ratio) if vol_ratio is not None else None,
+                high=high,
+                low=low,
+                open=open_price,
+                pre_close=pre_close,
+                trend_tag="上升" if close >= pre_close else "震荡",
+                stage_tag="回调" if source_tag == self.MAINLINE_PULLBACK_SOURCE_TAG else "启动",
+                candidate_source_tag=source_tag,
+                volume=float(row.get("volume") or 0) if row.get("volume") is not None else None,
+                avg_price=float(avg_price) if avg_price is not None else None,
+                quote_time=row.get("quote_time"),
+                data_source="daily",
+                concept_names=list(concept_names or []),
+            )
+            grouped.setdefault(matched_name, {}).setdefault(source_tag, []).append(
+                (
+                    self._mainline_recall_sort_key(
+                        source_tag,
+                        close=close,
+                        high=high,
+                        low=low,
+                        change_pct=change_pct,
+                        amount=amount,
+                        vol_ratio=float(vol_ratio) if vol_ratio is not None else None,
+                        avg_price=float(avg_price) if avg_price is not None else None,
+                        pre_close=pre_close,
+                        open_price=open_price,
+                    ),
+                    candidate,
+                )
+            )
+
+        extras: List[StockInput] = []
+        for name, _source_type in target_specs:
+            buckets = grouped.get(name) or {}
+            pullback_rows = list(buckets.get(self.MAINLINE_PULLBACK_SOURCE_TAG) or [])
+            low_suck_rows = list(buckets.get(self.MAINLINE_LOW_SUCK_SOURCE_TAG) or [])
+            pullback_rows.sort(key=lambda item: item[0], reverse=True)
+            low_suck_rows.sort(key=lambda item: item[0], reverse=True)
+            extras.extend(
+                candidate
+                for _score, candidate in pullback_rows[: self.strategy.mainline_pullback_per_sector_limit]
+            )
+            extras.extend(
+                candidate
+                for _score, candidate in low_suck_rows[: self.strategy.mainline_low_suck_per_sector_limit]
+            )
+        return extras
+
     def get_candidate_stocks(
         self,
         trade_date: str,
@@ -117,6 +473,7 @@ class DecisionContextService:
         holdings_list: Optional[List[dict]] = None,
         include_holdings: bool = False,
         prefer_today: bool = False,
+        sector_scan=None,
     ) -> tuple[List[StockInput], Optional[str], Optional[str], Optional[str]]:
         """获取候选股，并按需将持仓并入候选池。"""
         stock_payload = market_data_gateway.get_expanded_stock_list_with_meta(
@@ -151,6 +508,14 @@ class DecisionContextService:
             )
             for s in stock_list
         ]
+        stocks = self._merge_candidate_stocks(
+            stocks,
+            self._build_mainline_pullback_candidates(
+                trade_date,
+                sector_scan,
+                stocks,
+            ),
+        )
 
         if include_holdings:
             stocks = merge_holdings_into_candidate_stocks(
@@ -193,6 +558,7 @@ class DecisionContextService:
             top_gainers=top_gainers,
             holdings_list=None,
             include_holdings=False,
+            sector_scan=sector_scan,
         )
         if len(candidate_payload) == 4:
             stocks, resolved_stock_trade_date, candidate_data_status, candidate_data_message = candidate_payload

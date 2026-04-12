@@ -572,7 +572,7 @@ const quoteModeTitle = computed(() => (
 ))
 const quoteModeCopy = computed(() => (
   isRealtimeQuote.value
-    ? '下面的买入触发和失效位可以直接作为盘中执行参考。'
+    ? '现价和分时判断按实时行情更新；低吸区、突破区、确认区和失效线默认锚定上一交易日结构。'
     : '下面的价位更适合作为计划参考，盘中仍要结合承接、量能和站稳情况确认。'
 ))
 const primaryOrderCard = computed(() => (

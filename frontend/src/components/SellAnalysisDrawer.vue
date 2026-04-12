@@ -291,7 +291,7 @@ const quoteModeTitle = computed(() => (
 ))
 const quoteModeCopy = computed(() => (
   isRealtimeQuote.value
-    ? '下面的分时和价位可以直接作为执行参考。'
+    ? '现价和分时判断按实时行情更新；守位、失守位和反抽区默认锚定上一交易日结构。'
     : '下面的价位更适合作为计划参考，盘中仍要结合承接和回流确认。'
 ))
 const primaryExecutionLabel = computed(() => {
