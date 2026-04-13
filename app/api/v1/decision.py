@@ -44,7 +44,9 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 STOCK_POOLS_SNAPSHOT_VERSION = 7
 SELL_POINT_CACHE_TTL_SECONDS = 20
+BUY_POINT_CACHE_TTL_SECONDS = 20
 _sell_point_page_cache: dict[str, dict] = {}
+_buy_point_page_cache: dict[str, dict] = {}
 
 
 def _resolve_account_id(current_account: Optional[AuthenticatedAccount]) -> Optional[str]:
@@ -75,6 +77,15 @@ def _resolve_strategy_services(strategy_style: Optional[str]):
     return DecisionContextService(strategy=strategy), StockFilterService(strategy=strategy)
 
 
+def _resolve_buy_point_candidate_limit(limit: int) -> int:
+    """
+    买点页只展示前几十只，候选集没必要固定跑满 100。
+    默认按展示量的约 2 倍预取，最低保留 60，只在大列表场景放宽到 120。
+    """
+    safe_limit = max(1, int(limit or 1))
+    return max(60, min(safe_limit * 2, 120))
+
+
 def _sell_point_cache_key(
     trade_date: str,
     account_id: Optional[str],
@@ -82,6 +93,32 @@ def _sell_point_cache_key(
     include_add_signals: bool,
 ) -> str:
     return f"{trade_date}:{account_id or ''}:{int(include_llm)}:{int(include_add_signals)}"
+
+
+def _buy_point_cache_key(
+    trade_date: str,
+    account_id: Optional[str],
+    limit: int,
+    strategy_style: str,
+) -> str:
+    return f"{trade_date}:{account_id or ''}:{limit}:{strategy_style}"
+
+
+def _get_cached_buy_point_payload(cache_key: str) -> Optional[dict]:
+    cached = _buy_point_page_cache.get(cache_key)
+    if not cached:
+        return None
+    if time.monotonic() - float(cached.get("fetched_at") or 0) > BUY_POINT_CACHE_TTL_SECONDS:
+        _buy_point_page_cache.pop(cache_key, None)
+        return None
+    return copy.deepcopy(cached.get("data"))
+
+
+def _cache_buy_point_payload(cache_key: str, payload: dict) -> None:
+    _buy_point_page_cache[cache_key] = {
+        "fetched_at": time.monotonic(),
+        "data": copy.deepcopy(payload),
+    }
 
 
 def _get_cached_sell_point_payload(cache_key: str) -> Optional[dict]:
@@ -646,9 +683,19 @@ async def analyze_buy_point(
 
     try:
         account_id = _resolve_account_id(current_account)
-        candidate_limit = max(100, min(limit, 200))
+        candidate_limit = _resolve_buy_point_candidate_limit(limit)
         refresh_requested = refresh if isinstance(refresh, bool) else False
         normalized_strategy_style = _normalize_strategy_style(strategy_style)
+        cache_key = _buy_point_cache_key(
+            trade_date,
+            account_id,
+            limit,
+            normalized_strategy_style,
+        )
+        if not refresh_requested:
+            cached_payload = _get_cached_buy_point_payload(cache_key)
+            if cached_payload is not None:
+                return ApiResponse(data=cached_payload)
         expected_sector_scan_trade_date = await resolve_snapshot_lookup_trade_date(trade_date)
         snapshot_kwargs = {"account_id": account_id} if account_id else {}
         cached_stock_pools = None
@@ -744,23 +791,24 @@ async def analyze_buy_point(
                     **snapshot_kwargs,
                 )
 
-        return ApiResponse(
-            data={
-                "trade_date": result.trade_date,
-                "strategy_style": normalized_strategy_style,
-                "market_env_tag": result.market_env_tag.value,
-                "market_env_profile": getattr(bundle_context_market_env, "market_env_profile", "") or result.market_env_tag.value,
-                "market_headline": getattr(bundle_context_market_env, "market_headline", "") or "",
-                "market_subheadline": getattr(bundle_context_market_env, "market_subheadline", "") or "",
-                "trading_tempo_label": getattr(bundle_context_market_env, "trading_tempo_label", "") or "",
-                "theme_leaders": [sector.model_dump() for sector in getattr(result, "theme_leaders", [])],
-                "industry_leaders": [sector.model_dump() for sector in getattr(result, "industry_leaders", [])],
-                "available_buy_points": [bp.model_dump() for bp in result.available_buy_points],
-                "observe_buy_points": [bp.model_dump() for bp in result.observe_buy_points],
-                "not_buy_points": [bp.model_dump() for bp in result.not_buy_points],
-                "total_count": result.total_count,
-            }
-        )
+        payload = {
+            "trade_date": result.trade_date,
+            "strategy_style": normalized_strategy_style,
+            "market_env_tag": result.market_env_tag.value,
+            "market_env_profile": getattr(bundle_context_market_env, "market_env_profile", "") or result.market_env_tag.value,
+            "market_headline": getattr(bundle_context_market_env, "market_headline", "") or "",
+            "market_subheadline": getattr(bundle_context_market_env, "market_subheadline", "") or "",
+            "trading_tempo_label": getattr(bundle_context_market_env, "trading_tempo_label", "") or "",
+            "theme_leaders": [sector.model_dump() for sector in getattr(result, "theme_leaders", [])],
+            "industry_leaders": [sector.model_dump() for sector in getattr(result, "industry_leaders", [])],
+            "available_buy_points": [bp.model_dump() for bp in result.available_buy_points],
+            "observe_buy_points": [bp.model_dump() for bp in result.observe_buy_points],
+            "not_buy_points": [bp.model_dump() for bp in result.not_buy_points],
+            "total_count": result.total_count,
+        }
+        if not refresh_requested:
+            _cache_buy_point_payload(cache_key, payload)
+        return ApiResponse(data=payload)
     except Exception as e:
         return ApiResponse(code=500, message=f"买点分析失败: {str(e)}")
 

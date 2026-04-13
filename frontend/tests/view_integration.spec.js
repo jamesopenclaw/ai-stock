@@ -647,7 +647,7 @@ describe('关键页面联调', () => {
 
     expect(decisionApi.buyPoint).toHaveBeenCalledOnce()
     expect(decisionApi.reviewStats).toHaveBeenCalled()
-    expect(decisionApi.buyPoint).toHaveBeenCalledWith(expect.any(String), 30, expect.objectContaining({ refresh: true, timeout: 90000 }))
+    expect(decisionApi.buyPoint).toHaveBeenCalledWith(expect.any(String), 30, expect.objectContaining({ refresh: false, timeout: 90000 }))
     expect(wrapper.text()).toContain('买点分析')
     expect(wrapper.text()).toContain('机器人先锋')
     expect(wrapper.text()).toContain('主执行名单')
@@ -795,6 +795,60 @@ describe('关键页面联调', () => {
         bucket: '趋势回踩',
       },
     })
+  })
+
+  it('BuyPoint 页面会把跌破失效价但仍在观察期内的票标成失效观察期', async () => {
+    decisionApi.buyPoint.mockResolvedValue(
+      makeResponse({
+        market_env_tag: '进攻',
+        available_buy_points: [
+          {
+            ts_code: '603067.SH',
+            stock_name: '振华股份',
+            sector_name: '化工',
+            stock_pool_tag: '账户可参与池',
+            account_entry_mode: 'standard',
+            candidate_bucket_tag: '趋势回踩',
+            candidate_source_tag: '主线回踩补位',
+            buy_point_type: '回踩承接',
+            buy_display_type: '回踩承接',
+            buy_execution_context: '回踩确认',
+            buy_risk_level: '中',
+            buy_account_fit: '适合',
+            buy_trigger_cond: '先回踩执行位',
+            buy_confirm_cond: '承接稳住再处理',
+            buy_invalid_cond: '跌破失效价作废',
+            buy_comment: '当前价已跌破失效价 37.67，仍处于 5 分钟拉回观察期；若 3 分钟内收不回，再踢出可买池',
+            buy_current_price: 36.95,
+            buy_current_change_pct: -4.27,
+            buy_trigger_price: 38.77,
+            buy_invalid_price: 37.67,
+            buy_trigger_gap_pct: -4.69,
+            buy_invalid_gap_pct: -1.91,
+            buy_required_volume_ratio: 1.1,
+            execution_reference_price: 38.77,
+            execution_reference_gap_pct: -4.69,
+            execution_proximity_tag: '接近执行位',
+            invalidation_watch_active: true,
+            invalidation_watch_remaining_seconds: 180,
+            invalidation_watch_deadline: '2026-04-13 11:05:00',
+          },
+        ],
+        observe_buy_points: [],
+        not_buy_points: [],
+      })
+    )
+    decisionApi.reviewStats.mockResolvedValue(makeResponse({ bucket_stats: [] }))
+
+    const { default: BuyPointView } = await import('../src/views/BuyPoint.vue')
+    const wrapper = await mountView(BuyPointView)
+    await new Promise((resolve) => window.setTimeout(resolve, 80))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('失效观察期')
+    expect(wrapper.text()).toContain('当前价已在失效价 37.67 下方')
+    expect(wrapper.text()).toContain('到 11:05:00 仍收不回')
+    expect(wrapper.text()).not.toContain('建议先买')
   })
 
   it('BuyPoint 页面会把过远的回踩承接触发位降级为深回踩参考', async () => {

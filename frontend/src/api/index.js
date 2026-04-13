@@ -314,15 +314,26 @@ export const stockApi = {
 
 // Decision API
 export const decisionApi = {
-  buyPoint: (tradeDate, limit, options = {}) => api.get('/decision/buy-point', {
-    params: {
-      trade_date: tradeDate,
-      limit,
+  buyPoint: (tradeDate, limit, options = {}) => cachedGet(
+    scopedCacheKey('decision-buy-point', [
+      tradeDate,
+      String(limit),
+      String(options.strategyStyle || 'balanced'),
+    ]),
+    () => api.get('/decision/buy-point', {
+      params: {
+        trade_date: tradeDate,
+        limit,
+        refresh: Boolean(options.refresh),
+        strategy_style: options.strategyStyle || 'balanced',
+      },
+      timeout: options.timeout
+    }),
+    {
+      ttlMs: options.ttlMs ?? 20 * 1000,
       refresh: Boolean(options.refresh),
-      strategy_style: options.strategyStyle || 'balanced',
-    },
-    timeout: options.timeout
-  }),
+    }
+  ),
   sellPoint: (tradeDate, options = {}) => api.get('/decision/sell-point', {
     params: {
       trade_date: tradeDate,

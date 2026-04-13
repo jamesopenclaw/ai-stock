@@ -16,7 +16,7 @@
                 <el-radio-button label="right">偏右侧</el-radio-button>
               </el-radio-group>
             </div>
-            <el-button @click="loadData" :loading="loading">刷新</el-button>
+            <el-button @click="loadData({ refresh: true })" :loading="loading">刷新</el-button>
           </div>
         </div>
       </template>
@@ -198,6 +198,7 @@
                   <div class="signal-badges">
                     <el-tag size="small" type="primary">{{ point.buy_display_type || point.buy_point_type }}</el-tag>
                     <el-tag v-if="point.buy_execution_context" size="small" type="info">{{ point.buy_execution_context }}</el-tag>
+                    <el-tag v-if="isInvalidationWatchActive(point)" size="small" type="danger">失效观察期</el-tag>
                     <el-tag v-if="entryModeBadgeLabel(point)" size="small" :type="entryModeBadgeType(point)">{{ entryModeBadgeLabel(point) }}</el-tag>
                     <el-tag size="small" :type="riskTagType(point.buy_risk_level)">{{ point.buy_risk_level }}风险</el-tag>
                     <el-tag size="small" :type="accountFitType(point.buy_account_fit)">{{ point.buy_account_fit }}</el-tag>
@@ -222,6 +223,10 @@
                 <div class="signal-intent">
                   {{ primaryActionLine(point, displayEnvProfile) }}
                 </div>
+	                <div v-if="isInvalidationWatchActive(point)" class="signal-watch-alert">
+                    <div class="signal-watch-alert-title">已跌破失效价，先看能否拉回</div>
+                    <div class="signal-watch-alert-copy">{{ invalidationWatchLine(point) }}</div>
+                  </div>
 	                <div v-if="buySizingLine(point)" :class="['signal-sizing', entryModeSizingClass(point)]">
 	                  {{ buySizingLine(point) }}
 	                </div>
@@ -416,6 +421,7 @@
                       <el-tag size="small" type="warning">备选</el-tag>
                       <el-tag size="small" type="primary">{{ point.buy_display_type || point.buy_point_type }}</el-tag>
                       <el-tag v-if="point.buy_execution_context" size="small" type="info">{{ point.buy_execution_context }}</el-tag>
+                      <el-tag v-if="isInvalidationWatchActive(point)" size="small" type="danger">失效观察期</el-tag>
                       <el-tag v-if="entryModeBadgeLabel(point)" size="small" :type="entryModeBadgeType(point)">{{ entryModeBadgeLabel(point) }}</el-tag>
                     </div>
 	                  </div>
@@ -432,6 +438,10 @@
 
                   <div class="signal-intent signal-intent-watch">
                     {{ primaryActionLine(point, displayEnvProfile) }}
+                  </div>
+                  <div v-if="isInvalidationWatchActive(point)" class="signal-watch-alert signal-watch-alert-watch">
+                    <div class="signal-watch-alert-title">已跌破失效价，先看能否拉回</div>
+                    <div class="signal-watch-alert-copy">{{ invalidationWatchLine(point) }}</div>
                   </div>
                   <div class="hard-filter-strip" :class="{ 'hard-filter-warn': (point.hard_filter_failed_count || 0) > 0 }">
                     {{ hardFilterLine(point) }}
@@ -1395,6 +1405,27 @@ const executionGapLabel = (point) => {
   return '距执行位'
 }
 
+const isInvalidationWatchActive = (point) => Boolean(point?.invalidation_watch_active)
+
+const invalidationWatchRemainingMinutes = (point) => {
+  const seconds = Number(point?.invalidation_watch_remaining_seconds)
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0
+  return Math.max(1, Math.ceil(seconds / 60))
+}
+
+const invalidationWatchLine = (point) => {
+  const invalid = formatPrice(point?.buy_invalid_price)
+  const deadline = point?.invalidation_watch_deadline ? formatLocalTime(point.invalidation_watch_deadline) : ''
+  const remainingMinutes = invalidationWatchRemainingMinutes(point)
+  if (remainingMinutes > 0 && deadline) {
+    return `当前价已在失效价 ${invalid} 下方，先观察 ${remainingMinutes} 分钟内能否拉回；若到 ${deadline} 仍收不回，再踢出可买池。`
+  }
+  if (remainingMinutes > 0) {
+    return `当前价已在失效价 ${invalid} 下方，先观察 ${remainingMinutes} 分钟内能否拉回；若仍收不回，再踢出可买池。`
+  }
+  return `当前价已在失效价 ${invalid} 下方，先看能否快速拉回；若仍收不回，再踢出可买池。`
+}
+
 const splitCond = (text) => {
   if (!text) return ['-']
   return String(text)
@@ -1442,6 +1473,10 @@ const envChecklist = (tag) => {
 }
 
 const primaryActionLine = (point, envTag) => {
+  if (isInvalidationWatchActive(point)) {
+    const invalid = formatPrice(point.buy_invalid_price)
+    return `失效观察：当前价已跌破失效价 ${invalid}，先别执行，等重新拉回后再判断。`
+  }
   const trigger = formatPrice(executionReferencePrice(point))
   const invalid = formatPrice(point.buy_invalid_price)
   const prefix = envTag === '防守' ? '轻仓试错' : envTag === '中性偏谨慎' ? '低吸确认' : envTag === '弱中性' ? '观察优先' : '执行计划'
@@ -1551,6 +1586,7 @@ const observeConfirmBody = (point) => {
 }
 
 const buySizingLine = (point) => {
+  if (isInvalidationWatchActive(point)) return ''
   if (!point?.recommended_shares || !point?.recommended_order_amount) return ''
   const pct = point.recommended_order_pct ? `${(Number(point.recommended_order_pct) * 100).toFixed(0)}%` : null
   const price = point.sizing_reference_price ? Number(point.sizing_reference_price).toFixed(2) : formatPrice(point.buy_current_price)
@@ -1693,14 +1729,14 @@ const clearReviewFilter = () => {
 
 const hardFilterLine = (point) => point.hard_filter_summary || '硬过滤状态未返回'
 
-const loadData = async ({ silent = false } = {}) => {
+const loadData = async ({ silent = false, refresh = false } = {}) => {
   if (!silent) loading.value = true
   loadError.value = ''
   try {
     const tradeDate = getLocalDate()
     displayDate.value = tradeDate
     const res = await decisionApi.buyPoint(tradeDate, 30, {
-      refresh: true,
+      refresh: Boolean(refresh),
       strategyStyle: strategyStyle.value,
       timeout: BUY_POINT_TIMEOUT,
     })
@@ -1722,7 +1758,7 @@ const loadData = async ({ silent = false } = {}) => {
 
 const loadReviewInsight = async () => {
   try {
-    const res = await decisionApi.reviewStats(10, { refresh: true, timeout: REVIEW_STATS_TIMEOUT })
+    const res = await decisionApi.reviewStats(10, { timeout: REVIEW_STATS_TIMEOUT })
     reviewStatsData.value = res.data.data || null
   } catch (error) {
     reviewStatsData.value = null
@@ -2464,6 +2500,31 @@ watch(
 .signal-intent-watch {
   background: rgba(243, 194, 77, 0.08);
   border-color: rgba(243, 194, 77, 0.16);
+}
+
+.signal-watch-alert {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(245, 110, 128, 0.08);
+  border: 1px solid rgba(245, 110, 128, 0.22);
+  color: #ffd7dd;
+  display: grid;
+  gap: 4px;
+}
+
+.signal-watch-alert-watch {
+  background: rgba(245, 110, 128, 0.06);
+}
+
+.signal-watch-alert-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.signal-watch-alert-copy {
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 236, 240, 0.92);
 }
 
 .hard-filter-strip {

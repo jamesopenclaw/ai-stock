@@ -37,6 +37,7 @@ from app.models.schemas import (
     SectorTradeabilityTag,
 )
 from app.services.buy_point import BuyPointService
+from app.services.buy_point_invalid_state_service import buy_point_invalid_state_service
 
 
 class TestBuyPoint:
@@ -702,6 +703,178 @@ class TestBuyPoint:
         assert len(response.available_buy_points) == 1
         assert response.observe_buy_points == []
         assert response.available_buy_points[0].buy_signal_tag == BuySignalTag.CAN_BUY
+
+    def test_price_below_invalid_level_removes_point_from_available(self, service, medium_stock, monkeypatch):
+        """
+        测试：当前价已跌破失效价时，不应继续留在可买池。
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        medium_stock.stock_tradeability_tag = StockTradeabilityTag.TRADABLE
+        medium_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+        monkeypatch.setattr(
+            "app.services.buy_point.tushare_client._should_use_realtime_quote",
+            lambda trade_date: False,
+        )
+
+        monkeypatch.setattr(
+            service,
+            "_analyze_stock_buy_point",
+            lambda stock, market_env, account=None, review_bias_profile=None: BuyPointOutput(
+                ts_code=stock.ts_code,
+                stock_name=stock.stock_name,
+                sector_name=stock.sector_name,
+                stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE.value,
+                buy_signal_tag=BuySignalTag.CAN_BUY,
+                buy_point_type=BuyPointType.RETRACE_SUPPORT,
+                buy_display_type="回踩承接",
+                buy_execution_context="回踩确认",
+                buy_trigger_cond="先等回踩执行位",
+                buy_confirm_cond="承接稳住再处理",
+                buy_invalid_cond="跌破失效价作废",
+                buy_current_price=36.95,
+                buy_current_change_pct=-4.27,
+                execution_reference_price=36.95,
+                execution_reference_gap_pct=0.0,
+                buy_trigger_price=38.77,
+                buy_invalid_price=37.67,
+                buy_trigger_gap_pct=-4.69,
+                buy_invalid_gap_pct=-1.91,
+                buy_risk_level=RiskLevel.MEDIUM,
+                buy_account_fit="适合",
+                buy_comment="原本属于回踩型可买计划",
+            ),
+        )
+
+        response = service.analyze(
+            "2026-04-13",
+            stocks=[],
+            account=AccountInput(
+                total_asset=100000,
+                available_cash=50000,
+                total_position_ratio=0.1,
+                holding_count=1,
+                today_new_buy_count=0,
+            ),
+            market_env=MockMarketEnv(),
+            scored_stocks=[medium_stock],
+            stock_pools=StockPoolsOutput(
+                trade_date="2026-04-13",
+                market_watch_pool=[],
+                account_executable_pool=[medium_stock],
+                holding_process_pool=[],
+                total_count=1,
+            ),
+        )
+
+        assert response.available_buy_points == []
+        assert response.observe_buy_points == []
+        assert len(response.not_buy_points) == 1
+        assert response.not_buy_points[0].buy_signal_tag == BuySignalTag.NOT_BUY
+        assert "跌破失效价" in response.not_buy_points[0].buy_comment
+
+    def test_realtime_breach_invalid_level_gets_five_minute_reclaim_window(self, service, medium_stock, monkeypatch):
+        """
+        测试：盘中实时价跌破失效价后，先保留 5 分钟拉回观察期；超过 5 分钟仍未收回才踢出可买池。
+        """
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        medium_stock.stock_tradeability_tag = StockTradeabilityTag.TRADABLE
+        medium_stock.stock_pool_tag = StockPoolTag.ACCOUNT_EXECUTABLE
+        buy_point_invalid_state_service.clear_breach_time("buy-point-invalid:600519.SH:2026-04-13:37.67")
+        monkeypatch.setattr(
+            "app.services.buy_point.tushare_client._should_use_realtime_quote",
+            lambda trade_date: False,
+        )
+
+        current_state = {
+            "quote_time": "2026-04-13 11:00:00",
+            "price": 36.95,
+            "invalid": 37.67,
+        }
+
+        def fake_analyze(stock, market_env, account=None, review_bias_profile=None):
+            return BuyPointOutput(
+                ts_code=stock.ts_code,
+                stock_name=stock.stock_name,
+                sector_name=stock.sector_name,
+                stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE.value,
+                buy_signal_tag=BuySignalTag.CAN_BUY,
+                buy_point_type=BuyPointType.RETRACE_SUPPORT,
+                buy_display_type="回踩承接",
+                buy_execution_context="回踩确认",
+                buy_trigger_cond="先等回踩执行位",
+                buy_confirm_cond="承接稳住再处理",
+                buy_invalid_cond="跌破失效价作废",
+                buy_current_price=current_state["price"],
+                buy_current_change_pct=-4.27,
+                buy_quote_time=current_state["quote_time"],
+                buy_data_source="realtime_sina",
+                execution_reference_price=current_state["price"],
+                execution_reference_gap_pct=0.0,
+                buy_trigger_price=38.77,
+                buy_invalid_price=current_state["invalid"],
+                buy_trigger_gap_pct=-4.69,
+                buy_invalid_gap_pct=-1.91,
+                buy_risk_level=RiskLevel.MEDIUM,
+                buy_account_fit="适合",
+                buy_comment="原本属于回踩型可买计划",
+            )
+
+        monkeypatch.setattr(service, "_analyze_stock_buy_point", fake_analyze)
+
+        def run_once():
+            return service.analyze(
+                "2026-04-13",
+                stocks=[],
+                account=AccountInput(
+                    total_asset=100000,
+                    available_cash=50000,
+                    total_position_ratio=0.1,
+                    holding_count=1,
+                    today_new_buy_count=0,
+                ),
+                market_env=MockMarketEnv(),
+                scored_stocks=[medium_stock],
+                stock_pools=StockPoolsOutput(
+                    trade_date="2026-04-13",
+                    market_watch_pool=[],
+                    account_executable_pool=[medium_stock],
+                    holding_process_pool=[],
+                    total_count=1,
+                ),
+            )
+
+        first = run_once()
+        assert len(first.available_buy_points) == 1
+        assert "5 分钟能否拉回" in first.available_buy_points[0].buy_comment
+        assert first.available_buy_points[0].invalidation_watch_active is True
+        assert first.available_buy_points[0].invalidation_watch_remaining_seconds == 300
+        assert first.available_buy_points[0].invalidation_watch_deadline == "2026-04-13 11:05:00"
+
+        current_state["quote_time"] = "2026-04-13 11:04:00"
+        second = run_once()
+        assert len(second.available_buy_points) == 1
+        assert "仍处于 5 分钟拉回观察期" in second.available_buy_points[0].buy_comment
+        assert second.available_buy_points[0].invalidation_watch_active is True
+        assert second.available_buy_points[0].invalidation_watch_remaining_seconds == 60
+        assert second.available_buy_points[0].invalidation_watch_deadline == "2026-04-13 11:05:00"
+
+        current_state["quote_time"] = "2026-04-13 11:06:00"
+        third = run_once()
+        assert third.available_buy_points == []
+        assert third.observe_buy_points == []
+        assert len(third.not_buy_points) == 1
+        assert third.not_buy_points[0].buy_signal_tag == BuySignalTag.NOT_BUY
+        assert "连续跌破失效价" in third.not_buy_points[0].buy_comment
+        assert third.not_buy_points[0].invalidation_watch_active is False
+        assert third.not_buy_points[0].invalidation_watch_remaining_seconds is None
 
     def test_buy_point_contains_current_price_and_gap(self, service, strong_stock):
         """

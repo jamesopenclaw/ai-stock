@@ -617,6 +617,9 @@ class BuyPointOutput(BaseModel):
     buy_invalid_price: Optional[float] = Field(None, description="失效价格")
     buy_trigger_gap_pct: Optional[float] = Field(None, description="距触发价百分比")
     buy_invalid_gap_pct: Optional[float] = Field(None, description="距失效价百分比")
+    invalidation_watch_active: bool = Field(False, description="是否处于跌破失效价后的拉回观察期")
+    invalidation_watch_remaining_seconds: Optional[int] = Field(None, description="失效观察期剩余秒数")
+    invalidation_watch_deadline: Optional[str] = Field(None, description="失效观察期截止时间")
     buy_required_volume_ratio: Optional[float] = Field(None, description="所需量比")
     buy_requires_sector_resonance: bool = Field(False, description="是否要求板块共振")
     # 风险评估

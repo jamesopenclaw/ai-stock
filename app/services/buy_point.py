@@ -1,6 +1,7 @@
 """
 买点分析服务
 """
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from app.data.tushare_client import normalize_ts_code, tushare_client
@@ -26,6 +27,7 @@ from app.services.market_env import market_env_service
 from app.services.sector_scan import sector_scan_service
 from app.services.stock_filter import stock_filter_service
 from app.services.account_adapter import AccountAdapterService
+from app.services.buy_point_invalid_state_service import buy_point_invalid_state_service
 from app.services.strategy_config import (
     BuyPointStrategyConfig,
     DEFAULT_BUY_POINT_STRATEGY,
@@ -40,6 +42,7 @@ class BuyPointService:
         self.sector_scan_service = sector_scan_service
         self.stock_filter_service = stock_filter_service
         self.strategy = strategy or DEFAULT_BUY_POINT_STRATEGY
+        self._invalid_reclaim_grace_seconds = 5 * 60
 
     def _bucket_structure_bonus(self, bucket_tag: Optional[str]) -> float:
         bucket = str(bucket_tag or "").strip()
@@ -215,6 +218,7 @@ class BuyPointService:
             buy_point = self._analyze_stock_buy_point(stock, market_env, account, review_bias_profile)
             buy_point = self._attach_direction_match(buy_point, stock, direction_context)
             buy_point = self._apply_display_quote(buy_point, stock, display_quote_map)
+            buy_point = self._invalidate_broken_buy_point(buy_point)
             buy_point = self._downgrade_far_from_trigger_available(buy_point, stock)
             buy_point = self._apply_recommended_order_sizing(buy_point, stock, market_env, account)
             analyzed_count += 1
@@ -332,6 +336,154 @@ class BuyPointService:
         buy_point.sizing_reference_price = None
         buy_point.sizing_note = None
         return buy_point
+
+    def _invalidate_broken_buy_point(self, buy_point: BuyPointOutput) -> BuyPointOutput:
+        """
+        当前价已经跌破失效价时，这笔计划不再属于可买/观察中的有效计划。
+        """
+        if buy_point.buy_signal_tag == BuySignalTag.NOT_BUY:
+            return buy_point
+
+        current_price = buy_point.buy_current_price
+        invalid_price = buy_point.buy_invalid_price
+        if current_price is None or invalid_price is None:
+            self._set_invalidation_watch_state(buy_point, active=False)
+            return buy_point
+        quote_dt = self._parse_quote_time(buy_point.buy_quote_time)
+        tracker_key = self._invalid_breach_tracker_key(buy_point.ts_code, invalid_price, quote_dt)
+        if current_price > invalid_price:
+            self._clear_invalid_breach_tracker(tracker_key)
+            self._set_invalidation_watch_state(buy_point, active=False)
+            return buy_point
+
+        if not self._is_realtime_buy_point(buy_point):
+            return self._finalize_invalid_buy_point(
+                buy_point,
+                invalid_price,
+                tracker_key,
+                f"当前价已跌破失效价 {invalid_price:.2f}，这笔计划先作废",
+            )
+
+        if quote_dt is None:
+            return self._finalize_invalid_buy_point(
+                buy_point,
+                invalid_price,
+                tracker_key,
+                f"当前价已跌破失效价 {invalid_price:.2f}，这笔计划先作废",
+            )
+
+        first_breach_dt = self._parse_quote_time(
+            buy_point_invalid_state_service.get_first_breach_time(tracker_key)
+        )
+        if first_breach_dt is None or quote_dt < first_breach_dt:
+            buy_point_invalid_state_service.mark_first_breach_time(tracker_key, quote_dt)
+            self._set_invalidation_watch_state(
+                buy_point,
+                active=True,
+                remaining_seconds=self._invalid_reclaim_grace_seconds,
+                deadline_dt=quote_dt,
+            )
+            buy_point.buy_comment = (
+                f"当前价已跌破失效价 {invalid_price:.2f}，先观察 5 分钟能否拉回；"
+                f"若未收回，再踢出可买池"
+            )
+            return buy_point
+
+        elapsed_seconds = max(0.0, (quote_dt - first_breach_dt).total_seconds())
+        if elapsed_seconds < self._invalid_reclaim_grace_seconds:
+            remaining_seconds = int(self._invalid_reclaim_grace_seconds - elapsed_seconds)
+            remaining_minutes = max(1, (remaining_seconds + 59) // 60)
+            self._set_invalidation_watch_state(
+                buy_point,
+                active=True,
+                remaining_seconds=remaining_seconds,
+                deadline_dt=first_breach_dt,
+                deadline_is_first_breach=True,
+            )
+            buy_point.buy_comment = (
+                f"当前价已跌破失效价 {invalid_price:.2f}，仍处于 5 分钟拉回观察期；"
+                f"若 {remaining_minutes} 分钟内收不回，再踢出可买池"
+            )
+            return buy_point
+
+        return self._finalize_invalid_buy_point(
+            buy_point,
+            invalid_price,
+            tracker_key,
+            f"当前价已连续跌破失效价 {invalid_price:.2f} 超过 5 分钟，这笔计划先作废",
+        )
+
+    def _finalize_invalid_buy_point(
+        self,
+        buy_point: BuyPointOutput,
+        invalid_price: float,
+        tracker_key: Optional[str],
+        message: str,
+    ) -> BuyPointOutput:
+        self._clear_invalid_breach_tracker(tracker_key)
+        self._set_invalidation_watch_state(buy_point, active=False)
+        buy_point.buy_signal_tag = BuySignalTag.NOT_BUY
+        buy_point.buy_comment = message
+        buy_point.recommended_order_pct = None
+        buy_point.recommended_order_amount = None
+        buy_point.recommended_shares = None
+        buy_point.recommended_lots = None
+        buy_point.sizing_reference_price = None
+        buy_point.sizing_note = None
+        return buy_point
+
+    def _is_realtime_buy_point(self, buy_point: BuyPointOutput) -> bool:
+        source = str(getattr(buy_point, "buy_data_source", "") or "").strip().lower()
+        return source.startswith("realtime_")
+
+    def _parse_quote_time(self, value: Optional[str]) -> Optional[datetime]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+
+    def _invalid_breach_tracker_key(
+        self,
+        ts_code: str,
+        invalid_price: float,
+        quote_dt: Optional[datetime],
+    ) -> str:
+        normalized = normalize_ts_code(ts_code) or str(ts_code or "").strip().upper()
+        date_part = quote_dt.strftime("%Y-%m-%d") if quote_dt else "unknown-date"
+        return f"buy-point-invalid:{normalized}:{date_part}:{invalid_price:.2f}"
+
+    def _clear_invalid_breach_tracker(self, tracker_key: Optional[str]) -> None:
+        if not tracker_key:
+            return
+        buy_point_invalid_state_service.clear_breach_time(tracker_key)
+
+    def _set_invalidation_watch_state(
+        self,
+        buy_point: BuyPointOutput,
+        *,
+        active: bool,
+        remaining_seconds: Optional[int] = None,
+        deadline_dt: Optional[datetime] = None,
+        deadline_is_first_breach: bool = False,
+    ) -> None:
+        buy_point.invalidation_watch_active = active
+        if not active:
+            buy_point.invalidation_watch_remaining_seconds = None
+            buy_point.invalidation_watch_deadline = None
+            return
+        safe_remaining = max(0, int(remaining_seconds or 0))
+        buy_point.invalidation_watch_remaining_seconds = safe_remaining
+        if deadline_dt is not None:
+            if deadline_is_first_breach:
+                deadline = deadline_dt.timestamp() + self._invalid_reclaim_grace_seconds
+            else:
+                deadline = deadline_dt.timestamp() + safe_remaining
+            buy_point.invalidation_watch_deadline = datetime.fromtimestamp(deadline).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            buy_point.invalidation_watch_deadline = None
 
     def _available_trigger_gap_floor_pct(self, ts_code: str) -> float:
         """
