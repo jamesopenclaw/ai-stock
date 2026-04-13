@@ -270,7 +270,7 @@ const currentPnlClass = computed(() => {
 const quoteMeta = computed(() => {
   const source = basic.value?.data_source
   const quoteTime = basic.value?.quote_time
-  const sourceLabel = source && String(source).startsWith('realtime_') ? '盘中实时' : '日线回退'
+  const sourceLabel = source && String(source).startsWith('realtime_') ? '实时/收盘快照' : '日线回退'
   if (quoteTime) return `${sourceLabel} ${formatLocalDateTime(quoteTime)}`
   return `${sourceLabel} ${displayTradeDate.value}`
 })
@@ -287,11 +287,11 @@ const actionHeadline = computed(() => {
   return '先守关键位，承接没坏前不急着动'
 })
 const quoteModeTitle = computed(() => (
-  isRealtimeQuote.value ? '当前为盘中实时口径' : '当前为日线回退口径'
+  isRealtimeQuote.value ? '当前为实时/收盘快照口径' : '当前为日线回退口径'
 ))
 const quoteModeCopy = computed(() => (
   isRealtimeQuote.value
-    ? '现价和分时判断按实时行情更新；守位、失守位和反抽区默认锚定上一交易日结构。'
+    ? '现价按实时行情或收盘后快照更新；守位、失守位和反抽区默认锚定上一交易日结构。'
     : '下面的价位更适合作为计划参考，盘中仍要结合承接和回流确认。'
 ))
 const primaryExecutionLabel = computed(() => {

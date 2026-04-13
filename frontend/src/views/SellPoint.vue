@@ -564,7 +564,7 @@ const isRealtimeSource = (source) => String(source || '').startsWith('realtime_'
 
 const quoteSourceLabel = (source) => {
   if (!source) return '日线回退'
-  if (String(source).startsWith('realtime_')) return '盘中实时'
+  if (String(source).startsWith('realtime_')) return '实时/收盘快照'
   if (source === 'mock') return '模拟数据'
   return '日线回退'
 }
@@ -589,8 +589,8 @@ const sellFreshnessItems = computed(() => {
     : !sellRealtimeCount.value
       ? '全部为回退价格'
       : sellRealtimeCount.value === total
-        ? '全部为盘中实时'
-        : `混合口径 ${sellRealtimeCount.value}/${total} 为盘中实时`
+        ? '全部为实时/收盘快照'
+        : `混合口径 ${sellRealtimeCount.value}/${total} 为实时/收盘快照`
   const resolvedTradeDate = sellData.value?.resolved_trade_date || displayDate.value || '-'
   return [
     { label: '分析日', value: displayDate.value || '-', tone: 'strong' },

@@ -1288,7 +1288,7 @@ const isRealtimeSource = (source) => String(source || '').startsWith('realtime_'
 
 const quoteSourceLabel = (source) => {
   if (!source) return '日线回退'
-  if (String(source).startsWith('realtime_')) return '盘中实时'
+  if (String(source).startsWith('realtime_')) return '实时/收盘快照'
   if (source === 'mock') return '模拟数据'
   return '日线回退'
 }
@@ -1310,8 +1310,8 @@ const buyFreshnessSummary = computed(() => {
   const total = allBuyCandidates.value.length
   if (!total) return '当前无候选'
   if (!buyRealtimeCount.value) return '全部为回退价格'
-  if (buyRealtimeCount.value === total) return '全部为盘中实时'
-  return `混合口径 ${buyRealtimeCount.value}/${total} 为盘中实时`
+  if (buyRealtimeCount.value === total) return '全部为实时/收盘快照'
+  return `混合口径 ${buyRealtimeCount.value}/${total} 为实时/收盘快照`
 })
 const buyFreshnessItems = computed(() => [
   { label: '分析日', value: displayDate.value || '-', tone: 'strong' },

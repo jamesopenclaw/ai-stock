@@ -11,6 +11,7 @@ from app.models.schemas import NotificationListResponse, NotificationSettingsPay
 @pytest.mark.asyncio
 async def test_list_notifications_reads_scoped_events(monkeypatch):
     captured = {}
+    refresh_calls = []
 
     async def fake_list_events(account_id, *, status=None, category=None, priority=None, limit=20):
         captured["list"] = {
@@ -22,7 +23,11 @@ async def test_list_notifications_reads_scoped_events(monkeypatch):
         }
         return NotificationListResponse()
 
+    async def fake_refresh_notifications(current_account, current_user=None):
+        refresh_calls.append((current_account.id, getattr(current_user, "id", None)))
+
     monkeypatch.setattr(notification.notification_service, "list_events", fake_list_events)
+    monkeypatch.setattr(notification, "_refresh_notifications", fake_refresh_notifications)
 
     response = await notification.list_notifications(
         limit=30,
@@ -45,6 +50,7 @@ async def test_list_notifications_reads_scoped_events(monkeypatch):
             "limit": 30,
         },
     }
+    assert refresh_calls == []
 
 
 @pytest.mark.asyncio
@@ -80,7 +86,45 @@ async def test_list_notifications_passes_pending_status_when_explicit(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_list_notifications_refreshes_only_when_explicit(monkeypatch):
+    refresh_calls = []
+
+    async def fake_list_events(account_id, *, status=None, category=None, priority=None, limit=20):
+        return NotificationListResponse()
+
+    async def fake_refresh_notifications(current_account, current_user=None):
+        refresh_calls.append((current_account.id, getattr(current_user, "id", None)))
+
+    monkeypatch.setattr(notification.notification_service, "list_events", fake_list_events)
+    monkeypatch.setattr(notification, "_refresh_notifications", fake_refresh_notifications)
+
+    response = await notification.list_notifications(
+        refresh=True,
+        current_user=AuthenticatedUser(
+            id="user-001",
+            username="user",
+            display_name="普通用户",
+            default_account_id="acct-001",
+            role="user",
+            status="active",
+        ),
+        current_account=AuthenticatedAccount(
+            id="acct-001",
+            account_code="ACC001",
+            account_name="测试账户",
+            owner_user_id="user-001",
+            status="active",
+        ),
+    )
+
+    assert response.code == 200
+    assert refresh_calls == [("acct-001", "user-001")]
+
+
+@pytest.mark.asyncio
 async def test_notification_summary_returns_service_payload(monkeypatch):
+    refresh_calls = []
+
     async def fake_summary(account_id):
         assert account_id == "acct-001"
         return NotificationSummaryResponse(
@@ -91,7 +135,11 @@ async def test_notification_summary_returns_service_payload(monkeypatch):
             quiet_window_label=None,
         )
 
+    async def fake_refresh_notifications(current_account, current_user=None):
+        refresh_calls.append((current_account.id, getattr(current_user, "id", None)))
+
     monkeypatch.setattr(notification.notification_service, "get_summary", fake_summary)
+    monkeypatch.setattr(notification, "_refresh_notifications", fake_refresh_notifications)
 
     response = await notification.get_notification_summary(
         current_account=AuthenticatedAccount(
@@ -111,6 +159,43 @@ async def test_notification_summary_returns_service_payload(monkeypatch):
         "quiet_window_active": False,
         "quiet_window_label": None,
     }
+    assert refresh_calls == []
+
+
+@pytest.mark.asyncio
+async def test_notification_summary_refreshes_only_when_explicit(monkeypatch):
+    refresh_calls = []
+
+    async def fake_summary(account_id):
+        return NotificationSummaryResponse()
+
+    async def fake_refresh_notifications(current_account, current_user=None):
+        refresh_calls.append((current_account.id, getattr(current_user, "id", None)))
+
+    monkeypatch.setattr(notification.notification_service, "get_summary", fake_summary)
+    monkeypatch.setattr(notification, "_refresh_notifications", fake_refresh_notifications)
+
+    response = await notification.get_notification_summary(
+        refresh=True,
+        current_user=AuthenticatedUser(
+            id="user-001",
+            username="user",
+            display_name="普通用户",
+            default_account_id="acct-001",
+            role="user",
+            status="active",
+        ),
+        current_account=AuthenticatedAccount(
+            id="acct-001",
+            account_code="ACC001",
+            account_name="测试账户",
+            owner_user_id="user-001",
+            status="active",
+        ),
+    )
+
+    assert response.code == 200
+    assert refresh_calls == [("acct-001", "user-001")]
 
 
 @pytest.mark.asyncio

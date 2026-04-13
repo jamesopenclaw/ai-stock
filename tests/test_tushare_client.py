@@ -1392,11 +1392,20 @@ def test_get_up_down_ratio_with_meta_skips_same_day_daily_during_intraday():
     assert client.pro.daily_calls == [(None, None, None, "20260320")]
 
 
-def test_should_use_realtime_quote_stops_after_market_close():
-    """收盘后不应继续把当天视为盘中实时窗口。"""
+def test_should_use_realtime_quote_keeps_post_close_snapshot_before_eod_ready():
+    """收盘后到日线稳定前，仍应允许当天收盘快照覆盖。"""
     client = TushareClient.__new__(TushareClient)
     client.token = "test-token"
     client._now_sh = lambda: datetime(2026, 4, 7, 15, 1, 0, tzinfo=TushareClient.SH_TZ)
+
+    assert client._should_use_realtime_quote("20260407") is True
+
+
+def test_should_use_realtime_quote_stops_after_eod_ready():
+    """19:00 后应切回稳定日线，不再使用实时/收盘快照窗口。"""
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._now_sh = lambda: datetime(2026, 4, 7, 19, 1, 0, tzinfo=TushareClient.SH_TZ)
 
     assert client._should_use_realtime_quote("20260407") is False
 

@@ -142,14 +142,14 @@ class TushareClient:
 
     def _should_use_realtime_quote(self, trade_date: str) -> bool:
         """
-        当前请求是否适合尝试盘中实时行情。
+        当前请求是否适合尝试个股实时/收盘快照行情。
 
         仅在：
         - 已配置 token
         - 请求日期等于上海时区今天
         - 交易日工作日
-        - 09:15 ~ 15:00
-        时尝试实时覆盖。
+        - 09:15 ~ 19:00
+        时尝试实时覆盖；15:00 后优先拿收盘快照，19:00 后切回稳定日线。
         """
         if not self.token:
             return False
@@ -161,7 +161,7 @@ class TushareClient:
         if now.weekday() >= 5:
             return False
         current_time = now.time()
-        return self.REALTIME_SESSION_START <= current_time <= self.REALTIME_SESSION_END
+        return self.REALTIME_SESSION_START <= current_time < self.EOD_DATA_READY_TIME
 
     def _should_use_market_snapshot(self, trade_date: str) -> bool:
         """
