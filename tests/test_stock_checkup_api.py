@@ -12,6 +12,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.api.v1 import stock  # noqa: E402
 from app.models.schemas import (  # noqa: E402
     LlmCallStatus,
+    StockPatternAnalysisResponse,
+    StockPatternAnnotation,
+    StockPatternBasicInfo,
+    StockPatternCandle,
+    StockPatternChartPayload,
+    StockPatternFeatureSnapshot,
+    StockPatternResult,
     StockCheckupBasicInfo,
     StockCheckupDailyStructure,
     StockCheckupDirectionPosition,
@@ -74,4 +81,66 @@ async def test_get_stock_checkup_returns_response(monkeypatch):
     assert response.code == 200
     assert response.data["trade_date"] == "2026-03-23"
     assert response.data["rule_snapshot"]["basic_info"]["stock_name"] == "沪电股份"
+    assert response.data["llm_status"]["status"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_get_stock_pattern_analysis_returns_response(monkeypatch):
+    sample = StockPatternAnalysisResponse(
+        trade_date="2026-04-14",
+        resolved_trade_date="2026-04-14",
+        basic_info=StockPatternBasicInfo(
+            ts_code="002463.SZ",
+            stock_name="沪电股份",
+            sector_name="元器件",
+            board="主板",
+            trade_date="2026-04-14",
+            resolved_trade_date="2026-04-14",
+        ),
+        feature_snapshot=StockPatternFeatureSnapshot(
+            history_window=100,
+            sufficient_history=True,
+            ma_alignment="多头排列",
+        ),
+        chart_payload=StockPatternChartPayload(
+            candles=[
+                StockPatternCandle(
+                    trade_date="2026-04-14",
+                    open=10.0,
+                    high=10.3,
+                    low=9.9,
+                    close=10.2,
+                    volume=123456,
+                )
+            ],
+            moving_averages={"ma5": [None], "ma10": [None]},
+        ),
+        pattern_analysis=StockPatternResult(
+            primary_pattern="平台突破临界",
+            confidence="中",
+            pattern_phase="临近突破",
+            pattern_summary="先看平台上沿是否有效突破。",
+            breakout_level=10.28,
+            defense_level=9.98,
+            key_annotations=[
+                StockPatternAnnotation(price=10.28, label="突破线", annotation_type="breakout"),
+            ],
+        ),
+        llm_status=LlmCallStatus(enabled=False, success=False, status="disabled", message="未启用"),
+    )
+
+    async def fake_analyze(*args, **kwargs):
+        return sample
+
+    monkeypatch.setattr(stock.pattern_analysis_service, "analyze", fake_analyze)
+
+    response = await stock.get_stock_pattern_analysis(
+        "002463.SZ",
+        trade_date="2026-04-14",
+        force_llm_refresh=False,
+    )
+
+    assert response.code == 200
+    assert response.data["basic_info"]["stock_name"] == "沪电股份"
+    assert response.data["pattern_analysis"]["primary_pattern"] == "平台突破临界"
     assert response.data["llm_status"]["status"] == "disabled"

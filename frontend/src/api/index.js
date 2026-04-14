@@ -309,6 +309,13 @@ export const stockApi = {
       force_llm_refresh: Boolean(options.forceLlmRefresh)
     },
     timeout: options.timeout
+  }),
+  patternAnalysis: (tsCode, tradeDate, options = {}) => api.get(`/stock/pattern-analysis/${encodeURIComponent(tsCode)}`, {
+    params: {
+      trade_date: tradeDate,
+      force_llm_refresh: Boolean(options.forceLlmRefresh)
+    },
+    timeout: options.timeout ?? 90000
   })
 }
 

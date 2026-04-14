@@ -199,6 +199,9 @@
                   <span v-if="item.pnl_pct !== null && item.pnl_pct !== undefined" class="action-chip">{{ formatSignedPct(item.pnl_pct) }}</span>
                 </div>
                 <div class="action-reason">{{ getHoldingReasonText(item) }}</div>
+                <div class="action-row-actions">
+                  <el-button type="warning" link size="small" @click="openPatternAnalysis(item)">形态分析</el-button>
+                </div>
               </div>
               <div class="action-side">
                 <div class="action-side-label">优先级</div>
@@ -236,6 +239,9 @@
                   <span class="action-chip">{{ item.buy_risk_level || '风险未标注' }}</span>
                 </div>
                 <div class="action-reason">{{ getBuyReasonText(item) }}</div>
+                <div class="action-row-actions">
+                  <el-button type="warning" link size="small" @click="openPatternAnalysis(item)">形态分析</el-button>
+                </div>
               </div>
               <div class="action-side">
                 <div class="action-side-label">今日动作</div>
@@ -287,6 +293,7 @@
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import { decisionApi, marketApi, sectorApi, accountApi } from '../api'
 import { authState } from '../auth'
@@ -298,6 +305,8 @@ const leaderSector = ref(null)
 const accountProfile = ref(null)
 const buyPoints = ref(null)
 const sellPoints = ref(null)
+const route = useRoute()
+const router = useRouter()
 const reviewStats = ref(null)
 const loadingState = ref({
   summary: false,
@@ -308,6 +317,18 @@ const loadingState = ref({
   sellPoints: false,
   reviewStats: false,
 })
+
+const openPatternAnalysis = (item) => {
+  router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      pattern_ts_code: item.ts_code,
+      pattern_stock_name: item.stock_name || item.ts_code,
+      pattern_trade_date: getLocalDate(),
+    },
+  })
+}
 const refreshVersion = ref(0)
 
 const getActionClass = (action) => {
@@ -1280,6 +1301,10 @@ onMounted(() => {
   color: var(--color-text-sec);
   font-size: 13px;
   line-height: 1.65;
+}
+
+.action-row-actions {
+  margin-top: 8px;
 }
 
 .action-chip {

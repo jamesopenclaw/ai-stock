@@ -330,6 +330,9 @@
                         <el-button text size="small" @click="openCheckup(item.stock, focusItemCheckupTarget(item))">
                           全面体检
                         </el-button>
+                        <el-button text size="small" @click="openPatternAnalysis(item.stock)">
+                          形态分析
+                        </el-button>
                         <el-button text size="small" @click="activateTab(focusItemTab(item), { scroll: true })">
                           定位到{{ focusItemPoolLabel(item) }}
                         </el-button>
@@ -438,6 +441,7 @@
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                   </div>
                 </article>
               </section>
@@ -486,6 +490,7 @@
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                   </div>
                 </article>
               </section>
@@ -528,6 +533,7 @@
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                   </div>
                 </article>
               </section>
@@ -570,6 +576,7 @@
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                   </div>
                 </article>
               </section>
@@ -626,6 +633,7 @@
                     <div class="stock-inline-actions">
                       <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                       <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
+                      <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                     </div>
                   </div>
                 </div>
@@ -655,6 +663,7 @@
                   <div class="stock-inline-actions">
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                   </div>
                 </article>
               </div>
@@ -824,6 +833,7 @@
                     <span class="footer-flag">只观察，不直接执行</span>
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                   </div>
                 </div>
               </article>
@@ -890,6 +900,7 @@
                     <div class="footer-actions">
                       <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                       <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
+                      <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                     </div>
                   </div>
                 </article>
@@ -972,6 +983,7 @@
                     <span>{{ item.invalidLine }}</span>
                     <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(item.stock)">买点详解</el-button>
                     <el-button class="checkup-analysis-btn" size="small" @click="openCheckup(item.stock, '交易型')">全面体检</el-button>
+                    <el-button class="checkup-analysis-btn" size="small" @click="openPatternAnalysis(item.stock)">形态分析</el-button>
                   </div>
                 </article>
               </div>
@@ -1143,6 +1155,7 @@
                         <span class="footer-flag">{{ accountFooterFlag(stock) }}</span>
                         <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                         <el-button type="primary" link size="small" @click="openCheckup(stock, '交易型')">全面体检</el-button>
+                        <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                       </div>
                     </div>
                   </article>
@@ -1270,6 +1283,7 @@
                     <span class="footer-flag">{{ holdingFooterFlag(stock) }}</span>
                     <el-button class="sell-analysis-btn" size="small" @click="openSellAnalysis(stock)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(stock, '持仓型')">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
                   </div>
                 </div>
               </article>
@@ -1391,6 +1405,7 @@
                 <span>市场分 {{ formatScore(stock.market_strength_score) }} / 执行分 {{ formatScore(stock.execution_opportunity_score) }}</span>
                 <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
                 <el-button class="checkup-analysis-btn" size="small" @click="openCheckup(stock, candidateDiagnosticCheckupTarget(stock))">全面体检</el-button>
+                <el-button class="checkup-analysis-btn" size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
               </div>
             </article>
           </section>
@@ -2998,6 +3013,18 @@ const openCheckup = (stock, defaultTarget = '观察型') => {
     defaultTarget
   }
   checkupVisible.value = true
+}
+
+const openPatternAnalysis = (stock) => {
+  router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      pattern_ts_code: stock.ts_code,
+      pattern_stock_name: stock.stock_name || stock.ts_code,
+      pattern_trade_date: displayDate.value || getLocalDate(),
+    },
+  })
 }
 
 const openBuyAnalysis = (stock) => {

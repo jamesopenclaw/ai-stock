@@ -9,7 +9,9 @@
           </div>
           <div class="header-actions">
             <el-button @click="loadData({ refresh: true })" :loading="loading">刷新</el-button>
-            <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
+            <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>
+              {{ llmRefreshing ? '正在刷新解读...' : '刷新解读' }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -29,6 +31,11 @@
           :note="sellFreshnessNote"
         />
         <div class="decision-overview">
+          <div v-if="llmRefreshing" class="llm-refresh-banner">
+            <span class="llm-refresh-banner-label">LLM 解读刷新中</span>
+            <strong>正在重新生成页面摘要和个股解读，请等待新结果覆盖当前文案。</strong>
+            <span class="llm-refresh-banner-copy">通常需要 10-20 秒，刷新期间先保留当前解读，不代表已经完成。</span>
+          </div>
           <div class="overview-copy">
             <div class="overview-title">{{ sellHeadline }}</div>
             <div class="overview-desc">{{ sellGuidance }}</div>
@@ -130,8 +137,11 @@
                   </div>
                 </div>
 
-                <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
-                  <div class="llm-copy-head">LLM 解读</div>
+                <div v-if="hasLlmCopy(point)" class="llm-copy-panel" :class="{ 'llm-copy-panel-refreshing': llmRefreshing }">
+                  <div class="llm-copy-head">
+                    <span>LLM 解读</span>
+                    <span v-if="llmRefreshing" class="llm-copy-refresh-flag">刷新中</span>
+                  </div>
                   <div class="llm-copy-paragraph">{{ point.llm_plain_note || point.llm_action_sentence || point.sell_reason }}</div>
                 </div>
 
@@ -181,6 +191,7 @@
                     </el-button>
                     <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(point)">形态分析</el-button>
                   </div>
                 </div>
               </article>
@@ -229,8 +240,11 @@
                   </div>
                 </div>
 
-                <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
-                  <div class="llm-copy-head">LLM 解读</div>
+                <div v-if="hasLlmCopy(point)" class="llm-copy-panel" :class="{ 'llm-copy-panel-refreshing': llmRefreshing }">
+                  <div class="llm-copy-head">
+                    <span>LLM 解读</span>
+                    <span v-if="llmRefreshing" class="llm-copy-refresh-flag">刷新中</span>
+                  </div>
                   <div class="llm-copy-paragraph">{{ point.llm_plain_note || point.llm_action_sentence || point.sell_reason }}</div>
                 </div>
 
@@ -280,6 +294,7 @@
                     </el-button>
                     <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(point)">形态分析</el-button>
                   </div>
                 </div>
               </article>
@@ -339,8 +354,11 @@
                   </div>
                 </div>
 
-                <div v-if="hasLlmCopy(point)" class="llm-copy-panel">
-                  <div class="llm-copy-head">LLM 解读</div>
+                <div v-if="hasLlmCopy(point)" class="llm-copy-panel" :class="{ 'llm-copy-panel-refreshing': llmRefreshing }">
+                  <div class="llm-copy-head">
+                    <span>LLM 解读</span>
+                    <span v-if="llmRefreshing" class="llm-copy-refresh-flag">刷新中</span>
+                  </div>
                   <div class="llm-copy-paragraph">{{ point.llm_plain_note || point.llm_action_sentence || point.sell_comment || point.sell_reason }}</div>
                 </div>
 
@@ -391,6 +409,7 @@
                     <el-button v-if="point.add_signal_tag" type="primary" link size="small" @click="openBuyAnalysis(point)">查看加仓分析</el-button>
                     <el-button type="primary" link size="small" @click="openSellAnalysis(point)">卖点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(point)">形态分析</el-button>
                   </div>
                 </div>
               </article>
@@ -492,11 +511,13 @@ const sellChecklist = computed(() => {
 const llmStatus = computed(() => sellData.value.llm_status || null)
 const llmStatusVisible = computed(() => Boolean(llmStatus.value))
 const llmStatusClass = computed(() => {
+  if (llmRefreshing.value) return 'llm-status-refreshing'
   if (llmStatus.value?.success) return 'llm-status-success'
   if (llmStatus.value?.enabled) return 'llm-status-warning'
   return 'llm-status-muted'
 })
 const llmStatusText = computed(() => {
+  if (llmRefreshing.value) return '正在刷新页面摘要和个股解读，请等待新结果返回'
   if (!llmStatus.value) return ''
   return llmStatus.value.message || (llmStatus.value.success ? 'LLM 解释增强已生效' : 'LLM 当前未生效')
 })
@@ -672,6 +693,18 @@ const openCheckup = (point, defaultTarget = '持仓型') => {
     defaultTarget
   }
   checkupVisible.value = true
+}
+
+const openPatternAnalysis = (point) => {
+  router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      pattern_ts_code: point.ts_code,
+      pattern_stock_name: point.stock_name || point.ts_code,
+      pattern_trade_date: displayDate.value || getLocalDate(),
+    },
+  })
 }
 
 const openSellAnalysis = (point) => {
@@ -862,6 +895,9 @@ const loadData = async (options = {}) => {
     if (sellData.value.sell_positions?.length) activeTab.value = 'sell'
     else if (sellData.value.reduce_positions?.length) activeTab.value = 'reduce'
     else activeTab.value = 'hold'
+    if (forceLlmRefresh) {
+      ElMessage.success('解读刷新完成')
+    }
     handleNotificationQuery()
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '加载失败'
@@ -944,6 +980,34 @@ watch(
 .overview-copy {
   display: grid;
   gap: 8px;
+}
+
+.llm-refresh-banner {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(88, 176, 255, 0.22);
+  background: linear-gradient(135deg, rgba(88, 176, 255, 0.14), rgba(88, 176, 255, 0.06));
+}
+
+.llm-refresh-banner-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9dc2ff;
+}
+
+.llm-refresh-banner strong {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--color-text-main);
+}
+
+.llm-refresh-banner-copy {
+  color: var(--color-text-sec);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .overview-title {
@@ -1042,6 +1106,11 @@ watch(
 .llm-status-success {
   border-color: rgba(47, 207, 154, 0.25);
   background: rgba(47, 207, 154, 0.08);
+}
+
+.llm-status-refreshing {
+  border-color: rgba(88, 176, 255, 0.25);
+  background: rgba(88, 176, 255, 0.1);
 }
 
 .llm-status-warning {
@@ -1281,11 +1350,29 @@ watch(
   background: linear-gradient(135deg, rgba(88, 176, 255, 0.09), rgba(88, 176, 255, 0.04));
 }
 
+.llm-copy-panel-refreshing {
+  border-color: rgba(88, 176, 255, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(88, 176, 255, 0.12);
+}
+
 .llm-copy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #9dc2ff;
+}
+
+.llm-copy-refresh-flag {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(88, 176, 255, 0.14);
+  color: #c5dbff;
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
 .llm-copy-paragraph {

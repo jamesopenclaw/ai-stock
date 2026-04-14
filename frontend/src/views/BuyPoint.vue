@@ -380,6 +380,7 @@
                     <span v-if="point.buy_requires_sector_resonance" class="footer-flag">{{ resonanceLabel(point) }}</span>
                     <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(point)">形态分析</el-button>
                   </div>
                 </div>
               </article>
@@ -467,6 +468,7 @@
                     <span>{{ point.buy_comment || '优先级次于主执行名单。' }}</span>
                     <div class="footer-actions">
                       <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
+                      <el-button type="warning" link size="small" @click="openPatternAnalysis(point)">形态分析</el-button>
                     </div>
                   </div>
                 </article>
@@ -635,6 +637,7 @@
                     <span class="footer-flag">{{ observeFooterFlag(point) }}</span>
                     <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                     <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                    <el-button type="warning" link size="small" @click="openPatternAnalysis(point)">形态分析</el-button>
                   </div>
                 </div>
               </article>
@@ -667,6 +670,7 @@
                 <div class="skip-actions">
                   <el-button type="primary" link size="small" @click="openBuyAnalysis(point)">买点详解</el-button>
                   <el-button type="primary" link size="small" @click="openCheckup(point)">全面体检</el-button>
+                  <el-button type="warning" link size="small" @click="openPatternAnalysis(point)">形态分析</el-button>
                 </div>
               </div>
             </div>
@@ -1633,6 +1637,18 @@ const openCheckup = (point, defaultTarget = '交易型') => {
     defaultTarget
   }
   checkupVisible.value = true
+}
+
+const openPatternAnalysis = (point) => {
+  router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      pattern_ts_code: point.ts_code,
+      pattern_stock_name: point.stock_name || point.ts_code,
+      pattern_trade_date: displayDate.value || getLocalDate(),
+    },
+  })
 }
 
 const openBuyAnalysis = (point) => {

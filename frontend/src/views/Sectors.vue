@@ -199,6 +199,15 @@
 
               <div class="sector-card-actions">
                 <el-button type="primary" link size="small" @click="openTopStocks(row)">查看板块 Top10</el-button>
+                <el-button
+                  v-if="leaderStocksForSector(row).length"
+                  type="warning"
+                  link
+                  size="small"
+                  @click="openPatternAnalysis(leaderStocksForSector(row)[0])"
+                >
+                  风向标形态分析
+                </el-button>
                 <el-button type="primary" link size="small" @click="goToPage('/pools', row)">去三池看这个方向</el-button>
                 <el-button type="primary" link size="small" @click="goToPage('/buy', row)">去买点找执行位</el-button>
               </div>
@@ -325,6 +334,7 @@
     :trade-date="scanData.trade_date || getLocalDate()"
     :sector="activeTopSector"
     @checkup="openCheckup"
+    @pattern-analysis="openPatternAnalysis"
   />
 </template>
 
@@ -738,6 +748,18 @@ const openCheckup = (stock) => {
     defaultTarget: '观察型'
   }
   checkupVisible.value = true
+}
+
+const openPatternAnalysis = (stock) => {
+  router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      pattern_ts_code: stock.ts_code,
+      pattern_stock_name: stock.stock_name || stock.ts_code,
+      pattern_trade_date: scanData.value?.resolved_trade_date || scanData.value?.trade_date || getLocalDate(),
+    },
+  })
 }
 
 const openTopStocks = (sector) => {

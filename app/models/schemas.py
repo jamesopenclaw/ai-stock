@@ -1235,6 +1235,152 @@ class LlmStockCheckupReport(BaseModel):
     one_line_conclusion: str = ""
 
 
+class StockPatternBasicInfo(BaseModel):
+    """股票形态分析基础信息"""
+    ts_code: str
+    stock_name: str
+    sector_name: str
+    board: str = ""
+    trade_date: str = ""
+    resolved_trade_date: Optional[str] = None
+    data_source: Optional[str] = None
+    quote_time: Optional[str] = None
+
+
+class StockPatternFeatureSnapshot(BaseModel):
+    """形态分析特征快照"""
+    history_window: int = 0
+    sufficient_history: bool = False
+    latest_close: Optional[float] = None
+    latest_change_pct: Optional[float] = None
+    latest_turnover_rate: Optional[float] = None
+    latest_vol_ratio: Optional[float] = None
+    ma5: Optional[float] = None
+    ma10: Optional[float] = None
+    ma20: Optional[float] = None
+    ma60: Optional[float] = None
+    ma_alignment: str = ""
+    ma_slope_10: Optional[float] = None
+    ma_slope_20: Optional[float] = None
+    ma_slope_60: Optional[float] = None
+    range20_high: Optional[float] = None
+    range20_low: Optional[float] = None
+    range60_high: Optional[float] = None
+    range60_low: Optional[float] = None
+    range20_position: str = ""
+    range60_position: str = ""
+    amplitude_20d_pct: Optional[float] = None
+    amplitude_60d_pct: Optional[float] = None
+    center_shift_20d_pct: Optional[float] = None
+    close_quality: Optional[float] = None
+    volume_pattern: str = ""
+    candle_bias: str = ""
+    swing_highs: List[float] = Field(default_factory=list)
+    swing_lows: List[float] = Field(default_factory=list)
+    neckline_level: Optional[float] = None
+    platform_upper: Optional[float] = None
+    platform_lower: Optional[float] = None
+    breakout_ready: bool = False
+    retrace_ready: bool = False
+    notes: List[str] = Field(default_factory=list)
+    flag_pole_high: Optional[float] = None
+    flag_pole_start: Optional[float] = None
+    flag_pole_gain_pct: Optional[float] = None
+    flag_pullback_pct: Optional[float] = None
+    flag_face_high: Optional[float] = None
+    flag_face_low: Optional[float] = None
+
+
+class StockPatternCandidate(BaseModel):
+    """形态候选项"""
+    name: str
+    score: float = 0.0
+    confidence: str = ""
+    phase: str = ""
+    summary: str = ""
+    rule_hits: List[str] = Field(default_factory=list)
+    conflict_points: List[str] = Field(default_factory=list)
+
+
+class StockPatternAnnotation(BaseModel):
+    """图表关键标注"""
+    trade_date: Optional[str] = None
+    price: float
+    label: str
+    annotation_type: str = "point"
+
+
+class StockPatternLine(BaseModel):
+    """图表价格线"""
+    label: str
+    line_type: str
+    price: Optional[float] = None
+    start_trade_date: Optional[str] = None
+    end_trade_date: Optional[str] = None
+    start_price: Optional[float] = None
+    end_price: Optional[float] = None
+
+
+class StockPatternZone(BaseModel):
+    """图表价格区间"""
+    label: str
+    zone_type: str
+    start_trade_date: Optional[str] = None
+    end_trade_date: Optional[str] = None
+    low_price: float
+    high_price: float
+
+
+class StockPatternCandle(BaseModel):
+    """K 线数据"""
+    trade_date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: Optional[float] = None
+
+
+class StockPatternChartPayload(BaseModel):
+    """形态分析图表数据"""
+    candles: List[StockPatternCandle] = Field(default_factory=list)
+    moving_averages: dict = Field(default_factory=dict)
+    price_lines: List[StockPatternLine] = Field(default_factory=list)
+    zones: List[StockPatternZone] = Field(default_factory=list)
+    annotations: List[StockPatternAnnotation] = Field(default_factory=list)
+    default_window: int = 100
+
+
+class StockPatternResult(BaseModel):
+    """形态分析结果"""
+    primary_pattern: str = ""
+    secondary_patterns: List[str] = Field(default_factory=list)
+    confidence: str = ""
+    pattern_phase: str = ""
+    pattern_summary: str = ""
+    pattern_rationale: str = ""
+    execution_hint: str = ""
+    risk_hint: str = ""
+    support_levels: List[float] = Field(default_factory=list)
+    pressure_levels: List[float] = Field(default_factory=list)
+    breakout_level: Optional[float] = None
+    defense_level: Optional[float] = None
+    invalid_if: str = ""
+    key_annotations: List[StockPatternAnnotation] = Field(default_factory=list)
+    candidates: List[StockPatternCandidate] = Field(default_factory=list)
+
+
+class StockPatternAnalysisResponse(BaseModel):
+    """股票形态分析响应"""
+    trade_date: str
+    resolved_trade_date: Optional[str] = None
+    basic_info: StockPatternBasicInfo
+    feature_snapshot: StockPatternFeatureSnapshot
+    chart_payload: StockPatternChartPayload
+    pattern_analysis: StockPatternResult
+    llm_status: "LlmCallStatus"
+
+
 class StockCheckupRequest(BaseModel):
     """个股体检请求"""
     ts_code: str = Field(..., description="股票代码")
@@ -1396,3 +1542,4 @@ class ApiResponse(BaseModel):
 
 
 StockCheckupResponse.model_rebuild()
+StockPatternAnalysisResponse.model_rebuild()

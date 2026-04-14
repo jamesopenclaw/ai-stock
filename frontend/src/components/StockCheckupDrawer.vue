@@ -36,7 +36,9 @@
             </div>
             <div class="header-button-row">
               <el-button @click="loadData()" :loading="loading">刷新</el-button>
-              <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
+              <el-button @click="refreshLlm()" :loading="llmRefreshing" type="primary" plain>
+                {{ llmRefreshing ? '正在刷新解读...' : '刷新解读' }}
+              </el-button>
             </div>
           </div>
         </div>
@@ -361,6 +363,7 @@ const llmStatusClass = computed(() => {
   return 'status-muted'
 })
 const llmStatusText = computed(() => {
+  if (llmRefreshing.value) return '正在刷新最新 LLM 解读，当前文案仍是上一版结果。'
   if (!llmStatus.value) return ''
   return llmStatus.value.message || (llmStatus.value.success ? 'LLM 体检已生效' : 'LLM 当前未生效')
 })
@@ -681,6 +684,9 @@ const loadData = async (options = {}) => {
 
 const refreshLlm = async () => {
   await loadData({ forceLlmRefresh: true })
+  if (data.value) {
+    ElMessage.success('解读刷新完成')
+  }
 }
 
 const reportContent = (key) => {

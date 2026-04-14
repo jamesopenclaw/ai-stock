@@ -18,6 +18,9 @@ from app.models.schemas import (
     LlmSellSummary,
     LlmStockCheckupReport,
     SellPointResponse,
+    StockPatternBasicInfo,
+    StockPatternFeatureSnapshot,
+    StockPatternResult,
     StockCheckupRuleSnapshot,
     StockCheckupTarget,
     StockOutput,
@@ -82,6 +85,7 @@ ts_code, plain_note, risk_note
 16. 对两只同为卖出或同为减仓的股票，也要根据 stock_specific_facts 调整切入角度。亏损较深与小幅亏损、持有 3 天与 35 天、实时分时与日线回退，表达重点都应不同。
 17. 不要总用这些开头或骨架：“当前亏损较深”“重点是提高退出效率”“如果不及时处理”。可以保留事实，但要换成更贴合该票处境的自然表达。
 18. 如果 sell_trigger_cond 中有明确价位，plain_note 可以自然带一句“现在先盯 X 一线”，但不要把整段写成规则朗读。
+18.1 避免多只股票只替换名称和价格，其他句式和逻辑几乎不变。
 19. 输出必须是 JSON 对象，字段只允许：
 page_summary, action_summary, notes
 20. notes 是数组，每项字段只允许：
@@ -129,6 +133,25 @@ final_conclusion / 11）一句话结论
 9. 对含有“[需确认]”的信息，要明确保守表达，不要脑补；但要把“需确认”翻译成操作影响，例如降低确定性、等盘中确认、不要追价。
 10. content 要短、直接、可执行，像交易员写复盘提示，避免空话、套话和章节字段复读。
 11. 最终一句话结论要清楚表达“能不能看、能不能做、错了怎么看”。
+""".strip()
+
+    STOCK_PATTERN_SYSTEM_PROMPT = """
+你是 A 股短线交易系统里的股票形态分析助手。你的任务不是自由发挥，而是在给定的候选形态中做收敛判断，并输出结构化结论。
+
+严格遵守：
+1. 只能使用输入里已有事实、候选形态、关键价位和结构特征，不能新增任何价格、均线、颈线、支撑、压力。
+2. primary_pattern 必须从输入候选形态名称里选择；如果候选不足，只能返回“未识别明确形态”。
+3. secondary_patterns 只能从输入候选形态名称里选择，且不能重复 primary_pattern。
+4. 不能创造新的形态名，不能把弱候选包装成高确定性结论。
+5. confidence 只能输出：高 / 中 / 低。
+6. pattern_phase 必须是阶段判断，不要写成长段解释。
+7. pattern_summary 要直接回答“当前最像什么，关键看哪里”。
+8. pattern_rationale 必须吸收至少 2 个输入中的具体结构事实，说明为什么像、又为什么还不能完全下结论。
+9. execution_hint 要回答下一步最该盯哪个价位或哪个结构变化，不要泛泛而谈。
+10. risk_hint 要回答最容易误判的点，优先引用输入中的 conflict_points 或数据边界。
+11. invalid_if 只能复用输入已经给出的失效条件或关键价位，不能生成新条件。
+12. 输出必须是 JSON 对象，字段只允许：
+primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary, pattern_rationale, execution_hint, risk_hint, invalid_if
 """.strip()
 
     async def is_enabled(self) -> bool:
@@ -854,6 +877,109 @@ final_conclusion / 11）一句话结论
         normalized = stripped.strip("。.!！?？ ")
         return normalized in {"", "-", "需确认", "该项需确认"}
 
+    def _build_stock_pattern_payload(
+        self,
+        *,
+        basic_info: StockPatternBasicInfo,
+        feature_snapshot: StockPatternFeatureSnapshot,
+        pattern_analysis: StockPatternResult,
+        trade_date: str,
+    ) -> Dict:
+        compressed_features = {
+            "history_window": feature_snapshot.history_window,
+            "sufficient_history": feature_snapshot.sufficient_history,
+            "latest_close": feature_snapshot.latest_close,
+            "latest_change_pct": feature_snapshot.latest_change_pct,
+            "latest_turnover_rate": feature_snapshot.latest_turnover_rate,
+            "latest_vol_ratio": feature_snapshot.latest_vol_ratio,
+            "ma_alignment": feature_snapshot.ma_alignment,
+            "ma5": feature_snapshot.ma5,
+            "ma10": feature_snapshot.ma10,
+            "ma20": feature_snapshot.ma20,
+            "ma60": feature_snapshot.ma60,
+            "ma_slope_10": feature_snapshot.ma_slope_10,
+            "ma_slope_20": feature_snapshot.ma_slope_20,
+            "ma_slope_60": feature_snapshot.ma_slope_60,
+            "range20_high": feature_snapshot.range20_high,
+            "range20_low": feature_snapshot.range20_low,
+            "range60_high": feature_snapshot.range60_high,
+            "range60_low": feature_snapshot.range60_low,
+            "range20_position": feature_snapshot.range20_position,
+            "range60_position": feature_snapshot.range60_position,
+            "amplitude_20d_pct": feature_snapshot.amplitude_20d_pct,
+            "amplitude_60d_pct": feature_snapshot.amplitude_60d_pct,
+            "center_shift_20d_pct": feature_snapshot.center_shift_20d_pct,
+            "close_quality": feature_snapshot.close_quality,
+            "volume_pattern": feature_snapshot.volume_pattern,
+            "candle_bias": feature_snapshot.candle_bias,
+            "swing_highs": feature_snapshot.swing_highs,
+            "swing_lows": feature_snapshot.swing_lows,
+            "neckline_level": feature_snapshot.neckline_level,
+            "platform_upper": feature_snapshot.platform_upper,
+            "platform_lower": feature_snapshot.platform_lower,
+            "breakout_ready": feature_snapshot.breakout_ready,
+            "retrace_ready": feature_snapshot.retrace_ready,
+            "notes": feature_snapshot.notes,
+        }
+        return {
+            "trade_date": trade_date,
+            "basic_info": basic_info.model_dump(mode="json"),
+            "feature_snapshot": compressed_features,
+            "rule_result": {
+                "primary_pattern": pattern_analysis.primary_pattern,
+                "secondary_patterns": pattern_analysis.secondary_patterns,
+                "confidence": pattern_analysis.confidence,
+                "pattern_phase": pattern_analysis.pattern_phase,
+                "pattern_summary": pattern_analysis.pattern_summary,
+                "support_levels": pattern_analysis.support_levels,
+                "pressure_levels": pattern_analysis.pressure_levels,
+                "breakout_level": pattern_analysis.breakout_level,
+                "defense_level": pattern_analysis.defense_level,
+                "invalid_if": pattern_analysis.invalid_if,
+                "key_annotations": [item.model_dump(mode="json") for item in pattern_analysis.key_annotations],
+            },
+            "candidate_patterns": [
+                {
+                    "name": item.name,
+                    "score": item.score,
+                    "confidence": item.confidence,
+                    "phase": item.phase,
+                    "summary": item.summary,
+                    "rule_hits": item.rule_hits,
+                    "conflict_points": item.conflict_points,
+                }
+                for item in pattern_analysis.candidates
+            ],
+            "allowed_pattern_names": [item.name for item in pattern_analysis.candidates] or ["未识别明确形态"],
+        }
+
+    def _normalize_stock_pattern_result(self, data: Dict, rule_result: StockPatternResult) -> Dict:
+        if not isinstance(data, dict):
+            raise ValueError("LLM 形态分析返回不是对象")
+        allowed_names = {item.name for item in rule_result.candidates} or {"未识别明确形态"}
+        primary_pattern = str(data.get("primary_pattern") or "").strip() or rule_result.primary_pattern
+        if primary_pattern not in allowed_names:
+            primary_pattern = rule_result.primary_pattern if rule_result.primary_pattern in allowed_names else "未识别明确形态"
+        secondary_patterns = []
+        for item in data.get("secondary_patterns") or []:
+            name = str(item or "").strip()
+            if name and name != primary_pattern and name in allowed_names and name not in secondary_patterns:
+                secondary_patterns.append(name)
+        confidence = str(data.get("confidence") or "").strip()
+        if confidence not in {"高", "中", "低"}:
+            confidence = rule_result.confidence or "中"
+        return {
+            "primary_pattern": primary_pattern,
+            "secondary_patterns": secondary_patterns or rule_result.secondary_patterns,
+            "confidence": confidence,
+            "pattern_phase": str(data.get("pattern_phase") or "").strip() or rule_result.pattern_phase,
+            "pattern_summary": str(data.get("pattern_summary") or "").strip() or rule_result.pattern_summary,
+            "pattern_rationale": str(data.get("pattern_rationale") or "").strip() or rule_result.pattern_rationale,
+            "execution_hint": str(data.get("execution_hint") or "").strip() or rule_result.execution_hint,
+            "risk_hint": str(data.get("risk_hint") or "").strip() or rule_result.risk_hint,
+            "invalid_if": str(data.get("invalid_if") or "").strip() or rule_result.invalid_if,
+        }
+
     async def explain_stock_checkup_with_status(
         self,
         rule_snapshot: StockCheckupRuleSnapshot,
@@ -981,6 +1107,94 @@ final_conclusion / 11）一句话结论
                 success=False,
                 status="validation_error",
                 message=f"LLM 个股体检校验失败：{exc}",
+            )
+
+    async def explain_stock_pattern_with_status(
+        self,
+        *,
+        basic_info: StockPatternBasicInfo,
+        feature_snapshot: StockPatternFeatureSnapshot,
+        pattern_analysis: StockPatternResult,
+        trade_date: str,
+        account_id: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> tuple[Optional[Dict], LlmCallStatus]:
+        runtime = await llm_client.get_runtime_config()
+        if not (
+            runtime.get("enabled")
+            and str(runtime.get("api_key") or "").strip()
+            and str(runtime.get("model") or "").strip()
+            and str(runtime.get("base_url") or "").strip()
+        ):
+            return None, LlmCallStatus(
+                enabled=False,
+                success=False,
+                status="disabled",
+                message="LLM 未启用或配置不完整",
+            )
+
+        payload = self._build_stock_pattern_payload(
+            basic_info=basic_info,
+            feature_snapshot=feature_snapshot,
+            pattern_analysis=pattern_analysis,
+            trade_date=trade_date,
+        )
+        cache_key = self._cache_key(
+            scene="stock_pattern_analysis",
+            account_id=str(account_id or ""),
+            trade_date=trade_date,
+            provider=str(runtime.get("provider") or ""),
+            model=str(runtime.get("model") or ""),
+            payload=payload,
+        )
+        if not force_refresh:
+            cache_kwargs = {"account_id": account_id} if account_id else {}
+            cached = await llm_cache_service.get_cache(
+                cache_key=cache_key,
+                **cache_kwargs,
+            )
+            if cached:
+                try:
+                    return self._normalize_stock_pattern_result(cached, pattern_analysis), LlmCallStatus(
+                        enabled=True,
+                        success=True,
+                        status="cached",
+                        message="LLM 形态分析已命中缓存",
+                    )
+                except Exception as exc:
+                    logger.warning(f"LLM 形态分析缓存校验失败: {exc}")
+
+        llm_kwargs = {"account_id": account_id} if account_id else {}
+        data, status = await llm_client.chat_json_with_status(
+            self.STOCK_PATTERN_SYSTEM_PROMPT,
+            payload,
+            scene="stock_pattern_analysis",
+            trade_date=trade_date,
+            request_label="stock_pattern_analysis_v1",
+            **llm_kwargs,
+        )
+        if not data:
+            return None, status
+        try:
+            normalized = self._normalize_stock_pattern_result(data, pattern_analysis)
+            await llm_cache_service.upsert_cache(
+                scene="stock_pattern_analysis",
+                cache_key=cache_key,
+                trade_date=trade_date,
+                provider=str(runtime.get("provider") or ""),
+                model=str(runtime.get("model") or ""),
+                payload=payload,
+                response=normalized,
+                **llm_kwargs,
+            )
+            return normalized, status
+        except Exception as exc:
+            logger.warning(f"LLM 形态分析校验失败: {exc}")
+            return None, LlmCallStatus(
+                enabled=True,
+                success=False,
+                status="validation_error",
+                message=f"LLM 形态分析校验失败：{exc}",
             )
 
     def apply_sell_summary(

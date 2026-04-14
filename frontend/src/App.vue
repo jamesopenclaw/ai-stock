@@ -85,6 +85,12 @@
       <NotificationCenter
         v-model="notificationCenterVisible"
       />
+      <PatternAnalysisDrawer
+        v-model="patternAnalysisVisible"
+        :ts-code="patternAnalysisTarget.tsCode"
+        :stock-name="patternAnalysisTarget.stockName"
+        :trade-date="patternAnalysisTarget.tradeDate"
+      />
     </el-container>
   </el-container>
 </template>
@@ -111,6 +117,7 @@ import {
 } from '@element-plus/icons-vue'
 import NotificationBell from './components/NotificationBell.vue'
 import NotificationCenter from './components/NotificationCenter.vue'
+import PatternAnalysisDrawer from './components/PatternAnalysisDrawer.vue'
 import { adminApi, authApi } from './api'
 import { authState, clearSession, getRefreshToken, setCurrentAccount, setSession } from './auth'
 import { useNotificationStore } from './stores/notificationStore'
@@ -170,6 +177,22 @@ const currentGroupLabel = computed(() => {
   const matchedGroup = visibleMenuGroups.value.find((group) => group.items.some((item) => item.path === route.path))
   return matchedGroup?.label || '交易工作台'
 })
+const patternAnalysisVisible = computed({
+  get: () => Boolean(String(route.query.pattern_ts_code || '').trim()),
+  set: (visible) => {
+    if (visible) return
+    const query = { ...route.query }
+    delete query.pattern_ts_code
+    delete query.pattern_stock_name
+    delete query.pattern_trade_date
+    router.replace({ path: route.path, query })
+  },
+})
+const patternAnalysisTarget = computed(() => ({
+  tsCode: String(route.query.pattern_ts_code || '').trim(),
+  stockName: String(route.query.pattern_stock_name || '').trim(),
+  tradeDate: String(route.query.pattern_trade_date || dayjs().format('YYYY-MM-DD')).trim(),
+}))
 
 const syncSelectedAccount = () => {
   selectedAccountId.value = currentAccount.value?.id || ''

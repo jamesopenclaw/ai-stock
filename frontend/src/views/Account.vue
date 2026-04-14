@@ -155,6 +155,7 @@
           <template #default="{ row }">
             <div class="action-buttons">
               <el-button type="primary" link size="small" @click="openCheckup(row)">全面体检</el-button>
+              <el-button type="warning" link size="small" @click="openPatternAnalysis(row)">形态分析</el-button>
               <el-button type="success" link size="small" @click="openEditDialog(row, 'add')">加仓</el-button>
               <el-button type="warning" link size="small" @click="openEditDialog(row, 'reduce')">减仓</el-button>
               <el-button type="primary" link size="small" @click="openEditDialog(row, 'update')">调整</el-button>
@@ -270,6 +271,7 @@
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { accountApi, stockApi } from '../api'
 import { ElMessage } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
@@ -293,6 +295,8 @@ const configForm = ref({ availableCash: 1_000_000 })
 const checkupVisible = ref(false)
 const checkupStock = ref({ tsCode: '', stockName: '', defaultTarget: '持仓型' })
 const deleteTarget = ref({ id: null, ts_code: '', stock_name: '' })
+const route = useRoute()
+const router = useRouter()
 
 const getLocalDate = () => {
   const now = new Date()
@@ -600,6 +604,18 @@ const openCheckup = (row) => {
     defaultTarget: '持仓型'
   }
   checkupVisible.value = true
+}
+
+const openPatternAnalysis = (row) => {
+  router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      pattern_ts_code: row.ts_code,
+      pattern_stock_name: row.stock_name || row.ts_code,
+      pattern_trade_date: getLocalDate(),
+    },
+  })
 }
 
 const loadData = async (options = {}) => {

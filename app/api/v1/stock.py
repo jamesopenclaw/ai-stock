@@ -20,6 +20,7 @@ from app.services.stock_filter import (
 from app.services.decision_context import decision_context_service, DecisionContextService
 from app.services.sell_point import sell_point_service
 from app.services.stock_checkup import stock_checkup_service
+from app.services.pattern_analysis import pattern_analysis_service
 from app.services.buy_point_sop import buy_point_sop_service
 from app.services.sell_point_sop import sell_point_sop_service
 from app.services.llm_explainer import llm_explainer_service
@@ -777,6 +778,30 @@ async def get_stock_checkup(
         return ApiResponse(data=result.model_dump(mode="json"))
     except Exception as e:
         return ApiResponse(code=500, message=f"获取个股体检失败: {str(e)}")
+
+
+@router.get("/pattern-analysis/{ts_code}", response_model=ApiResponse)
+async def get_stock_pattern_analysis(
+    ts_code: str,
+    trade_date: Optional[str] = Query(None, description="交易日，格式YYYY-MM-DD，默认今天"),
+    force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 缓存"),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
+    """获取单只股票的形态分析结果。"""
+    if not trade_date:
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
+        result = await pattern_analysis_service.analyze(
+            ts_code,
+            trade_date,
+            account_id=account_id,
+            force_llm_refresh=force_llm_refresh,
+        )
+        return ApiResponse(data=result.model_dump(mode="json"))
+    except Exception as e:
+        return ApiResponse(code=500, message=f"获取股票形态分析失败: {str(e)}")
 
 
 @router.get("/buy-analysis/{ts_code}", response_model=ApiResponse)

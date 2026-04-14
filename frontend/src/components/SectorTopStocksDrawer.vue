@@ -89,6 +89,7 @@
 
             <div class="stock-actions">
               <el-button type="primary" link size="small" @click="$emit('checkup', stock)">查看体检</el-button>
+              <el-button type="warning" link size="small" @click="$emit('pattern-analysis', stock)">形态分析</el-button>
             </div>
           </article>
         </div>
@@ -108,7 +109,7 @@ const props = defineProps({
   sector: { type: Object, default: null },
 })
 
-const emit = defineEmits(['update:modelValue', 'checkup'])
+const emit = defineEmits(['update:modelValue', 'checkup', 'pattern-analysis'])
 
 const loading = ref(false)
 const data = ref(null)

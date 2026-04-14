@@ -21,7 +21,9 @@
         </div>
         <div class="header-actions">
           <el-button @click="loadData" :loading="loading">刷新</el-button>
-          <el-button @click="refreshLlm" :loading="llmRefreshing" type="primary" plain>刷新解读</el-button>
+          <el-button @click="refreshLlm" :loading="llmRefreshing" type="primary" plain>
+            {{ llmRefreshing ? '正在刷新解读...' : '刷新解读' }}
+          </el-button>
         </div>
       </div>
     </template>
@@ -38,6 +40,11 @@
           :description="loadError ? '买点 SOP 加载失败' : '暂无买点分析结果'"
         />
         <template v-else>
+        <div v-if="llmRefreshing" class="llm-refresh-banner">
+          <span class="llm-refresh-banner-label">LLM 解读刷新中</span>
+          <strong>正在重新生成这只股票的买点说明，请等待新结果覆盖当前文案。</strong>
+          <span class="llm-refresh-banner-copy">通常需要 10-20 秒，刷新期间会先保留旧解读，避免页面突然空掉。</span>
+        </div>
         <div class="overview-card">
           <div class="overview-top">
             <div class="overview-badge" :class="actionBadgeClass">
@@ -318,13 +325,19 @@
             <div class="section-header">辅助解读</div>
             <div v-if="llmStatusVisible" class="decision-summary" :class="llmStatusClass">{{ llmStatusText }}</div>
           </div>
-          <div v-if="llmSummary?.plain_note" class="llm-note-main">{{ llmSummary.plain_note }}</div>
+          <div v-if="llmSummary?.plain_note" class="llm-note-main" :class="{ 'llm-note-main-refreshing': llmRefreshing }">
+            <div class="llm-note-head">
+              <span>卡片说明</span>
+              <span v-if="llmRefreshing" class="llm-note-refresh-flag">刷新中</span>
+            </div>
+            <div>{{ llmSummary.plain_note }}</div>
+          </div>
           <div class="llm-note-grid">
-            <article v-if="llmSummary?.execution_hint" class="llm-note-card">
+            <article v-if="llmSummary?.execution_hint" class="llm-note-card" :class="{ 'llm-note-card-refreshing': llmRefreshing }">
               <span>当前最该盯</span>
               <strong>{{ llmSummary.execution_hint }}</strong>
             </article>
-            <article v-if="llmSummary?.risk_hint" class="llm-note-card">
+            <article v-if="llmSummary?.risk_hint" class="llm-note-card" :class="{ 'llm-note-card-refreshing': llmRefreshing }">
               <span>最容易误读</span>
               <strong>{{ llmSummary.risk_hint }}</strong>
             </article>
@@ -401,10 +414,12 @@ const quoteMeta = computed(() => {
 })
 const llmStatusVisible = computed(() => Boolean(llmStatus.value?.message))
 const llmStatusText = computed(() => {
+  if (llmRefreshing.value) return '正在刷新这只股票的页面说明和执行提示，请等待新结果返回'
   if (!llmStatus.value?.message) return ''
   return llmStatus.value.message
 })
 const llmStatusClass = computed(() => {
+  if (llmRefreshing.value) return 'text-brand'
   if (llmStatus.value?.success) return 'text-brand'
   if (llmStatus.value?.enabled) return 'text-warning'
   return 'text-neutral'
@@ -1011,6 +1026,9 @@ const loadData = async (options = {}) => {
       throw new Error(payload.message || '买点 SOP 接口返回空结果')
     }
     data.value = payload.data
+    if (refreshLlmOnly) {
+      ElMessage.success('解读刷新完成')
+    }
   } catch (error) {
     const message = error?.response?.data?.message || error?.message || '加载买点 SOP 失败'
     loadError.value = message
@@ -1080,6 +1098,54 @@ const refreshLlm = async () => {
   font-size: 13px;
 }
 
+.llm-refresh-banner {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(83, 166, 255, 0.22);
+  background: linear-gradient(135deg, rgba(83, 166, 255, 0.14), rgba(83, 166, 255, 0.05));
+  position: relative;
+  overflow: hidden;
+  animation: llmBannerPulse 1.8s ease-in-out infinite;
+}
+
+.llm-refresh-banner::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 20%, rgba(255, 255, 255, 0.12) 45%, transparent 70%);
+  transform: translateX(-120%);
+  animation: llmBannerSweep 2.2s linear infinite;
+}
+
+.llm-refresh-banner-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9dc2ff;
+  position: relative;
+  z-index: 1;
+}
+
+.llm-refresh-banner strong,
+.llm-refresh-banner-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.llm-refresh-banner strong {
+  color: var(--color-text-main);
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+.llm-refresh-banner-copy {
+  color: var(--color-text-sec);
+  line-height: 1.6;
+  font-size: 13px;
+}
+
 .llm-section {
   gap: 14px;
 }
@@ -1091,6 +1157,44 @@ const refreshLlm = async () => {
   background: rgba(83, 166, 255, 0.08);
   color: var(--color-text-main);
   line-height: 1.75;
+}
+
+.llm-note-main-refreshing,
+.llm-note-card-refreshing {
+  position: relative;
+  overflow: hidden;
+}
+
+.llm-note-main-refreshing::after,
+.llm-note-card-refreshing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 25%, rgba(255, 255, 255, 0.1) 50%, transparent 75%);
+  transform: translateX(-120%);
+  animation: llmBannerSweep 2.4s linear infinite;
+  pointer-events: none;
+}
+
+.llm-note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: #9dc2ff;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.llm-note-refresh-flag {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(83, 166, 255, 0.14);
+  color: #c5dbff;
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
 .llm-note-grid {
@@ -1116,6 +1220,22 @@ const refreshLlm = async () => {
 .llm-note-card strong {
   color: var(--color-text-main);
   line-height: 1.65;
+}
+
+@keyframes llmBannerPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(83, 166, 255, 0.08);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(83, 166, 255, 0.14);
+  }
+}
+
+@keyframes llmBannerSweep {
+  100% {
+    transform: translateX(120%);
+  }
 }
 
 .overview-card {

@@ -20,7 +20,7 @@
               :loading="outcomeRefreshing"
               :disabled="loading || !hasPendingOutcomes"
             >
-              补算收益
+              {{ outcomeRefreshing ? '正在补算收益...' : '补算收益' }}
             </el-button>
             <el-button @click="loadData({ refresh: true })" :loading="loading">刷新</el-button>
           </div>
@@ -32,6 +32,16 @@
         <el-empty v-if="!reviewData?.bucket_stats?.length" description="暂无复盘快照" />
         <template v-else>
           <div class="status-row">
+            <div v-if="outcomeRefreshing" class="status-pill status-pill-refreshing">
+              <div class="status-pill-main">
+                <span class="status-pill-spinner" />
+                <div class="status-pill-copy">
+                  <strong>正在补算历史收益</strong>
+                  <span>当前页面仍展示旧统计，请等待新结果回填后再判断明日优先级。</span>
+                </div>
+              </div>
+              <span class="status-pill-tag">旧结果展示中</span>
+            </div>
             <div v-if="reviewData?.stats_mode === 'pool'" class="status-pill status-pill-warn">
               当前先展示三池统计，买点样本会在后续分析后补齐。
             </div>
@@ -793,6 +803,66 @@ onMounted(() => {
   line-height: 1.5;
 }
 
+.status-pill-refreshing {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(49, 196, 141, 0.12)),
+    rgba(9, 13, 23, 0.9);
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  color: var(--color-text-pri);
+}
+
+.status-pill-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.status-pill-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: #6db6ff;
+  flex-shrink: 0;
+  animation: reviewRefreshSpin 0.8s linear infinite;
+}
+
+.status-pill-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.status-pill-copy strong {
+  font-size: 13px;
+  color: var(--color-text-pri);
+}
+
+.status-pill-copy span {
+  color: rgba(226, 232, 240, 0.82);
+}
+
+.status-pill-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(11, 18, 32, 0.38);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .status-pill-warn {
   background: rgba(255, 196, 64, 0.10);
   border: 1px solid rgba(255, 196, 64, 0.20);
@@ -921,6 +991,12 @@ onMounted(() => {
   line-height: 1.1;
   font-weight: 800;
   color: var(--color-text-pri);
+}
+
+@keyframes reviewRefreshSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .stats-footnote {

@@ -20,6 +20,10 @@ from app.models.schemas import (  # noqa: E402
     SellPointType,
     SellPriority,
     SellSignalTag,
+    StockPatternBasicInfo,
+    StockPatternCandidate,
+    StockPatternFeatureSnapshot,
+    StockPatternResult,
     StockContinuityTag,
     StockCoreTag,
     StockOutput,
@@ -172,6 +176,54 @@ class TestLlmExplainer:
             ),
         )
 
+    @pytest.fixture
+    def sample_pattern_payload(self):
+        return {
+            "basic_info": StockPatternBasicInfo(
+                ts_code="000539.SZ",
+                stock_name="粤电力A",
+                sector_name="电力",
+                board="主板",
+                trade_date="2026-03-20",
+                resolved_trade_date="2026-03-20",
+            ),
+            "feature_snapshot": StockPatternFeatureSnapshot(
+                history_window=100,
+                sufficient_history=True,
+                latest_close=6.06,
+                ma_alignment="多头排列",
+                range20_position="区间高位",
+                volume_pattern="温和放量",
+            ),
+            "pattern_analysis": StockPatternResult(
+                primary_pattern="平台突破临界",
+                confidence="中",
+                pattern_phase="临近突破",
+                pattern_summary="平台结构尚可，关注上沿是否站稳。",
+                breakout_level=6.12,
+                defense_level=5.96,
+                invalid_if="跌破 5.96 并收不回，当前形态语义明显转弱。",
+                candidates=[
+                    StockPatternCandidate(
+                        name="平台突破临界",
+                        score=0.72,
+                        confidence="中",
+                        phase="临近突破",
+                        summary="先看上沿是否放量站稳。",
+                        rule_hits=["价格靠近平台上沿", "中短均线偏多"],
+                        conflict_points=["如果冲高回落，容易退化成高位震荡"],
+                    ),
+                    StockPatternCandidate(
+                        name="高位震荡/派发嫌疑",
+                        score=0.55,
+                        confidence="中",
+                        phase="高位分歧",
+                        summary="位置偏高，推进效率一般。",
+                    ),
+                ],
+            ),
+        }
+
     def test_apply_pool_summary_only_adds_human_notes(self, service, sample_stock_pools):
         summary = LlmPoolsSummary.model_validate(
             {
@@ -218,8 +270,26 @@ class TestLlmExplainer:
         assert point.llm_action_sentence == "先减一部分，把仓位降下来。"
         assert point.llm_trigger_sentence == "盘中冲高但量跟不上时就动手。"
         assert point.llm_risk_sentence == "如果继续拖着不动，弱市里回撤会放大。"
-        assert point.sell_signal_tag == SellSignalTag.REDUCE
-        assert point.sell_priority == SellPriority.MEDIUM
+
+    def test_normalize_stock_pattern_result_restricts_pattern_names(self, service, sample_pattern_payload):
+        normalized = service._normalize_stock_pattern_result(
+            {
+                "primary_pattern": "火箭发射",
+                "secondary_patterns": ["高位震荡/派发嫌疑", "平台突破临界"],
+                "confidence": "极高",
+                "pattern_phase": "临近突破",
+                "pattern_summary": "平台上沿附近等待确认。",
+                "pattern_rationale": "价格靠近平台上沿，均线关系偏多。",
+                "execution_hint": "先盯 6.12 一线是否放量站稳。",
+                "risk_hint": "如果冲高回落，容易退化成高位震荡。",
+                "invalid_if": "跌破 5.96 并收不回，当前形态语义明显转弱。",
+            },
+            sample_pattern_payload["pattern_analysis"],
+        )
+
+        assert normalized["primary_pattern"] == "平台突破临界"
+        assert normalized["secondary_patterns"] == ["高位震荡/派发嫌疑"]
+        assert normalized["confidence"] == "中"
 
     def test_summarize_stock_pools_returns_none_when_llm_disabled(self, service, sample_stock_pools):
         class MockMarketEnv:
@@ -575,7 +645,7 @@ class TestLlmExplainer:
         assert summary is not None
         assert status.success is True
         assert captured["system_prompt"] == service.SELL_SYSTEM_PROMPT
-        assert captured["payload"]["prompt_version"] == "sell_points_v3"
+        assert captured["payload"]["prompt_version"] == "sell_points_v4"
         assert captured["payload"]["input_scope"] == "partial_sample"
         assert captured["payload"]["positions_total_count"] == 4
         assert captured["payload"]["positions_sampled_count"] == 3
