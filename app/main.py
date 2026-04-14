@@ -4,9 +4,6 @@
 import asyncio
 import uuid
 from contextlib import suppress
-from datetime import datetime, time
-from time import monotonic
-from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +12,7 @@ import sys
 
 from app.core.config import settings
 from app.core.security import get_current_user, hash_password
-from app.services.notification_engine import notification_engine
+from app.runtime.notification_refresh import notification_refresh_loop
 from app.services.ths_concept_sync_service import ths_concept_sync_service
 
 # 配置日志
@@ -44,51 +41,6 @@ app.add_middleware(
 )
 
 _notification_refresh_task: asyncio.Task | None = None
-
-_MARKET_TIMEZONE = ZoneInfo(settings.notification_timezone)
-_TRADING_WINDOWS = (
-    (time(9, 25), time(11, 30)),
-    (time(13, 0), time(15, 0)),
-)
-
-
-def _is_market_monitor_window(now: datetime | None = None) -> bool:
-    if now is None:
-        current = datetime.now(_MARKET_TIMEZONE)
-    elif now.tzinfo is None:
-        current = now.replace(tzinfo=_MARKET_TIMEZONE)
-    else:
-        current = now.astimezone(_MARKET_TIMEZONE)
-    if current.weekday() >= 5:
-        return False
-    current_time = current.time().replace(second=0, microsecond=0)
-    return any(start <= current_time <= end for start, end in _TRADING_WINDOWS)
-
-
-async def _notification_refresh_loop() -> None:
-    """后台定时生成通知事件，避免请求路径同步重算。"""
-    interval_seconds = max(10, int(settings.notification_refresh_interval_seconds))
-    initial_delay_seconds = max(0, int(settings.notification_refresh_initial_delay_seconds))
-
-    if initial_delay_seconds > 0:
-        await asyncio.sleep(initial_delay_seconds)
-
-    while True:
-        cycle_started_at = monotonic()
-        try:
-            if _is_market_monitor_window():
-                refreshed_accounts = await notification_engine.refresh_active_accounts()
-                logger.debug("通知后台刷新完成 accounts={}", refreshed_accounts)
-            else:
-                logger.debug("当前不在交易监控时段，跳过本轮通知刷新")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("通知后台刷新失败 error={}", exc)
-
-        elapsed_seconds = monotonic() - cycle_started_at
-        sleep_seconds = max(1.0, interval_seconds - elapsed_seconds)
-        await asyncio.sleep(sleep_seconds)
 
 
 @app.on_event("startup")
@@ -178,7 +130,7 @@ async def startup_event():
 
     global _notification_refresh_task
     if settings.notification_background_refresh_enabled and _notification_refresh_task is None:
-        _notification_refresh_task = asyncio.create_task(_notification_refresh_loop())
+        _notification_refresh_task = asyncio.create_task(notification_refresh_loop())
         logger.info(
             "已启动通知后台刷新 interval={}s initial_delay={}s",
             settings.notification_refresh_interval_seconds,

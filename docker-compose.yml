@@ -43,6 +43,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-aistock}:${POSTGRES_PASSWORD:-aistock123}@postgres:5432/${POSTGRES_DB:-aistock}
       - REDIS_URL=redis://redis:6379/0
+      - NOTIFICATION_BACKGROUND_REFRESH_ENABLED=false
     ports:
       - "8000:8000"
     depends_on:
@@ -55,6 +56,28 @@ services:
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  notification-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: ai-stock-notification-worker
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-aistock}:${POSTGRES_PASSWORD:-aistock123}@postgres:5432/${POSTGRES_DB:-aistock}
+      - REDIS_URL=redis://redis:6379/0
+      - NOTIFICATION_BACKGROUND_REFRESH_ENABLED=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+    command: sh -c "alembic upgrade head && python -m app.workers.notification_worker"
 
   # 前端
   frontend:
