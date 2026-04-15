@@ -150,8 +150,9 @@ final_conclusion / 11）一句话结论
 9. execution_hint 要回答下一步最该盯哪个价位或哪个结构变化，不要泛泛而谈。
 10. risk_hint 要回答最容易误判的点，优先引用输入中的 conflict_points 或数据边界。
 11. invalid_if 只能复用输入已经给出的失效条件或关键价位，不能生成新条件。
-12. 输出必须是 JSON 对象，字段只允许：
-primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary, pattern_rationale, execution_hint, risk_hint, invalid_if
+12. action_advice 要给出当前形态下最具体的操作策略，格式：操作方向（买入/持有/减仓/观望其中之一）+ 触发条件（什么价位或信号下执行）+ 止损/防守价位。必须结合输入的 breakout_level 和 defense_level 给出具体价位，严禁空泛表达。
+13. 输出必须是 JSON 对象，字段只允许：
+primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary, pattern_rationale, execution_hint, risk_hint, invalid_if, action_advice
 """.strip()
 
     async def is_enabled(self) -> bool:
@@ -978,6 +979,7 @@ primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary,
             "execution_hint": str(data.get("execution_hint") or "").strip() or rule_result.execution_hint,
             "risk_hint": str(data.get("risk_hint") or "").strip() or rule_result.risk_hint,
             "invalid_if": str(data.get("invalid_if") or "").strip() or rule_result.invalid_if,
+            "action_advice": str(data.get("action_advice") or "").strip() or rule_result.action_advice,
         }
 
     async def explain_stock_checkup_with_status(

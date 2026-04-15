@@ -2,7 +2,7 @@
 数据模型 - Pydantic schemas
 """
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import date, datetime
 from enum import Enum
 
@@ -1289,6 +1289,8 @@ class StockPatternFeatureSnapshot(BaseModel):
     flag_pullback_pct: Optional[float] = None
     flag_face_high: Optional[float] = None
     flag_face_low: Optional[float] = None
+    flag_pole_end_date: Optional[str] = None
+    flag_pole_start_date: Optional[str] = None
 
 
 class StockPatternCandidate(BaseModel):
@@ -1361,6 +1363,7 @@ class StockPatternResult(BaseModel):
     pattern_rationale: str = ""
     execution_hint: str = ""
     risk_hint: str = ""
+    action_advice: str = ""
     support_levels: List[float] = Field(default_factory=list)
     pressure_levels: List[float] = Field(default_factory=list)
     breakout_level: Optional[float] = None
@@ -1379,6 +1382,9 @@ class StockPatternAnalysisResponse(BaseModel):
     chart_payload: StockPatternChartPayload
     pattern_analysis: StockPatternResult
     llm_status: "LlmCallStatus"
+    latest_price: Optional[float] = None       # 最新价（盘中实时/收盘）
+    latest_change_pct: Optional[float] = None  # 涨跌幅（%）
+    today_candle: Optional[Dict[str, Any]] = None  # 盘中未完成 K 线（含 trade_date/open/high/low/close）
 
 
 class StockCheckupRequest(BaseModel):

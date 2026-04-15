@@ -3,7 +3,10 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from app.models.schemas import (
     LlmCallStatus,
@@ -95,6 +98,15 @@ class PatternAnalysisService:
         if not history_rows:
             history_rows = [self._target_input_to_history_row(target_input, trade_date)]
 
+        # 盘中时段：将今日（可能已被 Tushare 提前写入的不完整日线）从历史序列中剔除，
+        # 确保形态判断完全基于已完结的 K 线。
+        if market_data_gateway._should_use_realtime_quote(trade_date):
+            today_compact = str(trade_date).replace("-", "")[:8]
+            history_rows = [
+                r for r in history_rows
+                if str(r.get("trade_date") or "").replace("-", "")[:8] != today_compact
+            ]
+
         basic_info = self._build_basic_info(
             target_input,
             trade_date,
@@ -120,6 +132,10 @@ class PatternAnalysisService:
         if llm_result:
             rule_result = self._merge_llm_result(rule_result, llm_result)
 
+        today_candle, latest_price, latest_change_pct = self._resolve_today_candle(
+            normalized_code, trade_date, history_rows, target_input=target_input
+        )
+
         return StockPatternAnalysisResponse(
             trade_date=trade_date,
             resolved_trade_date=resolved_trade_date or context.resolved_stock_trade_date or trade_date,
@@ -128,7 +144,97 @@ class PatternAnalysisService:
             chart_payload=chart_payload,
             pattern_analysis=rule_result,
             llm_status=llm_status,
+            latest_price=latest_price,
+            latest_change_pct=latest_change_pct,
+            today_candle=today_candle,
         )
+
+    def _resolve_today_candle(
+        self,
+        ts_code: str,
+        trade_date: str,
+        history_rows: List[Dict],
+        *,
+        target_input=None,
+    ):
+        """
+        返回 (today_candle, latest_price, latest_change_pct)。
+
+        优先从 target_input（已经过实时价格覆盖）读取当日 OHLC：
+        - 若 data_source 包含 "realtime" 或历史序列末尾不含今日日期，则构造虚 K 线。
+        盘后或数据不足则 today_candle=None，latest_price 取最近历史收盘。
+        """
+        # 获取今日日期字符串（YYYY-MM-DD）
+        today_str = self._format_trade_date(str(trade_date).replace("-", "")[:8])
+
+        # 历史序列最新日期
+        last_hist_date = self._format_trade_date(
+            str(history_rows[-1].get("trade_date") or "")
+        ) if history_rows else ""
+
+        try:
+            if market_data_gateway._should_use_realtime_quote(trade_date):
+                # 优先从已做实时覆盖的 target_input 读取（避免重复 API 调用）
+                # 但必须确认 data_source 是实时来源，否则值是历史日线的
+                data_src = str(getattr(target_input, "data_source", "") or "") if target_input else ""
+                ti_is_realtime = "realtime" in data_src
+
+                ohlc: Optional[Dict] = None
+                if ti_is_realtime and target_input is not None:
+                    price = float(target_input.close or 0)
+                    if price > 0:
+                        op = float(target_input.open or price)
+                        hi = float(target_input.high or price)
+                        lo = float(target_input.low or price)
+                        change_pct_raw = float(target_input.change_pct or 0)
+                        ohlc = {
+                            "trade_date": today_str,  # 强制使用今日日期，不依赖接口返回值
+                            "open":  round(op, 2),
+                            "high":  round(hi, 2),
+                            "low":   round(lo, 2),
+                            "close": round(price, 2),
+                            "change_pct": round(change_pct_raw, 2),
+                        }
+                    logger.debug(f"[虚K线] {ts_code} ti_is_realtime={ti_is_realtime} price={price} ohlc={ohlc}")
+
+                # 若 target_input 不是实时数据，直接拉实时报价接口
+                if ohlc is None:
+                    quote_map = market_data_gateway._fetch_realtime_quote_map([ts_code])
+                    q = quote_map.get(ts_code) or {}
+                    price = float(q.get("close") or 0)
+                    logger.debug(f"[虚K线] {ts_code} fallback realtime price={price} q={q}")
+                    if price > 0:
+                        ohlc = {
+                            "trade_date": today_str,  # 强制使用今日日期，不依赖新浪接口的 DATE 字段
+                            "open":  round(float(q.get("open") or price), 2),
+                            "high":  round(float(q.get("high") or price), 2),
+                            "low":   round(float(q.get("low") or price), 2),
+                            "close": round(price, 2),
+                            "change_pct": round(float(q.get("change_pct") or 0), 2),
+                        }
+
+                logger.debug(f"[虚K线] {ts_code} ohlc={ohlc} today_str={today_str} last_hist_date={last_hist_date}")
+                if ohlc and ohlc.get("close", 0) > 0:
+                    change_pct = ohlc["change_pct"]
+                    fmt_date = ohlc["trade_date"]
+                    price = ohlc["close"]
+                    if fmt_date != last_hist_date:
+                        # 今日不在历史序列 → 追加虚 K 线
+                        return ohlc, price, change_pct
+                    else:
+                        # 今日已在历史序列 → 仅返回最新价
+                        return None, price, change_pct
+        except Exception as e:
+            logger.warning(f"[虚K线] {ts_code} exception: {e}", exc_info=True)
+
+        # 盘后/无实时数据：latest_price 取最近历史收盘，不补虚 K 线
+        if history_rows:
+            last = history_rows[-1]
+            close = float(last.get("close") or 0)
+            pre_close = float(last.get("pre_close") or 0)
+            pct = round((close - pre_close) / pre_close * 100, 2) if pre_close else None
+            return None, (round(close, 2) if close else None), pct
+        return None, None, None
 
     def _target_input_to_history_row(self, target_input, trade_date: str) -> Dict:
         return {
@@ -239,6 +345,8 @@ class PatternAnalysisService:
             flag_pullback_pct=flag_info["pullback_pct"] if flag_info else None,
             flag_face_high=round(flag_info["flag_high"], 2) if flag_info else None,
             flag_face_low=round(flag_info["flag_low"], 2) if flag_info else None,
+            flag_pole_end_date=flag_info["pole_end_date"] if flag_info else None,
+            flag_pole_start_date=flag_info["pole_start_date"] if flag_info else None,
         )
 
     def _build_pattern_candidates(
@@ -281,6 +389,39 @@ class PatternAnalysisService:
             abs(swing_lows[-1] - swing_lows[-2]) / max(swing_lows[-2], 0.01) >= 0.012
         )
         triangle_structure = self._triangle_structure(history_rows)
+
+        # ── 提前计算 V 形结构，供后续候选打分使用 ──────────────────────────────
+        # 窄 V（15根）：快节奏短期 V 形
+        _vpre_closes = [self._safe_float(row.get("close")) for row in history_rows[-15:]]
+        _vpre_closes = [c for c in _vpre_closes if c is not None]
+        is_v_shape_early = False
+        if len(_vpre_closes) >= 8:
+            _vpre = _vpre_closes[:-1]
+            _vpre_low = min(_vpre)
+            _vpre_idx = _vpre.index(_vpre_low)
+            if 1 <= _vpre_idx <= len(_vpre) - 2:
+                _vpre_start, _vpre_cur = _vpre_closes[0], _vpre_closes[-1]
+                if _vpre_start > 0 and _vpre_low > 0:
+                    _vpre_drop = (_vpre_start - _vpre_low) / _vpre_start * 100
+                    _vpre_rec = (_vpre_cur - _vpre_low) / _vpre_low * 100
+                    is_v_shape_early = _vpre_drop >= 7 and _vpre_rec >= 6
+        # 宽 V（30根）：大跌后强势反转，起点取低点前最高价
+        is_wide_v_early = False
+        wide_v_drop_early = 0.0
+        if not is_v_shape_early:
+            _wvpre_closes = [self._safe_float(row.get("close")) for row in history_rows[-30:]]
+            _wvpre_closes = [c for c in _wvpre_closes if c is not None]
+            if len(_wvpre_closes) >= 15:
+                _wvpre_search = _wvpre_closes[:-5]
+                _wvpre_low = min(_wvpre_search)
+                _wvpre_idx = _wvpre_search.index(_wvpre_low)
+                if _wvpre_idx >= 3:
+                    _wvpre_peak = max(_wvpre_closes[: _wvpre_idx + 1])
+                    _wvpre_cur = _wvpre_closes[-1]
+                    if _wvpre_peak > 0 and _wvpre_low > 0:
+                        wide_v_drop_early = (_wvpre_peak - _wvpre_low) / _wvpre_peak * 100
+                        _wvpre_rec = (_wvpre_cur - _wvpre_low) / _wvpre_low * 100
+                        is_wide_v_early = wide_v_drop_early >= 10 and _wvpre_rec >= 10
 
         if not feature_snapshot.sufficient_history:
             candidates.append(
@@ -394,18 +535,37 @@ class PatternAnalysisService:
                 )
             )
 
-        if (
-            ma20 is not None
-            and ma60 is not None
+        # 标准多头排列：价格 > MA20 > MA60，均线斜率向上
+        _std_bull = (
+            ma20 is not None and ma60 is not None
             and price >= ma20 >= ma60
+            and ma_slope_20 > 0 and ma_slope_60 >= 0
+        )
+        # 强势突破状态：价格高于 MA20 与 MA60，但两条均线可能尚未完成金叉
+        # （大幅拉升后 MA60 会滞后，MA20 与 MA60 短期可能纠缠）
+        _breakout_bull = (
+            ma20 is not None and ma60 is not None
+            and price >= ma20 and price >= ma60
             and ma_slope_20 > 0
-            and ma_slope_60 >= 0
-        ):
+            and not (ma20 >= ma60)  # MA 排列尚未稳固，否则由标准多头处理
+        )
+        if _std_bull or _breakout_bull:
             score = 0.63
             hits = [
                 "价格位于 MA20 和 MA60 之上",
                 "中期均线仍在上行",
             ]
+            if _breakout_bull:
+                score = 0.60  # 均线尚未完全整理，置信度稍降
+                hits = [
+                    "价格已站上 MA20 与 MA60，但两线尚未完成金叉排列",
+                    "MA20 斜率向上，趋势方向偏多",
+                ]
+                if is_wide_v_early:
+                    # 30日内存在大幅回调后反弹结构（宽 V），"延续"标签具误导性
+                    # 压低分数，让 V形修复 优先排首位
+                    score = 0.48
+                    hits.append(f"注意：30日内峰谷跌幅达 {wide_v_drop_early:.1f}%，趋势曾显著中断")
             if close_quality >= 0.65 and latest_change > 0:
                 score += 0.08
                 hits.append("收盘位置较好，趋势延续性更强")
@@ -415,6 +575,10 @@ class PatternAnalysisService:
                 name = "回踩确认"
                 phase = "回踩后待确认"
                 summary = "趋势没坏，关键看均线附近的承接和次日确认。"
+            elif _breakout_bull:
+                name = "上升趋势延续"
+                phase = "均线整理中"
+                summary = "价格已站上所有主要均线，MA 排列正在完善，整体方向偏多。"
             else:
                 name = "上升趋势延续"
                 phase = "趋势延续"
@@ -568,7 +732,6 @@ class PatternAnalysisService:
 
         if (
             len(swing_low_points) >= 2
-            and feature_snapshot.range60_position != "区间高位"
             and latest_change >= 0
             and (
                 close_quality >= 0.5
@@ -576,36 +739,81 @@ class PatternAnalysisService:
                 or volume_pattern in {"明显放量", "温和放量"}
             )
         ):
-            sl_a, sl_b = swing_low_points[-2], swing_low_points[-1]
-            sl_time_gap = sl_b["index"] - sl_a["index"]
-            if (
-                sl_time_gap >= 10
-                and abs(sl_a["price"] - sl_b["price"]) / max(sl_a["price"], 0.01) <= 0.08
-                and feature_snapshot.neckline_level is not None
-                and feature_snapshot.neckline_level > max(sl_a["price"], sl_b["price"])
-            ):
-                score = 0.56
-                if center_shift >= 2:
-                    score += 0.04
-                if volume_pattern in {"明显放量", "温和放量"}:
-                    score += 0.03
-                candidates.append(
-                    StockPatternCandidate(
-                        name="双底修复",
-                        score=min(score, 0.86),
-                        confidence=self._score_confidence(score),
-                        phase="颈线附近修复",
-                        summary="两个低点接近，当前位置更像双底修复而不是单日反弹。",
-                        rule_hits=[
-                            f"两个波段低点接近：{sl_a['price']:.2f}/{sl_b['price']:.2f}（间隔 {sl_time_gap} 根）",
-                            f"两底之间的中间高点约 {feature_snapshot.neckline_level:.2f}",
-                            "收盘位置和修复动能不差",
-                        ],
-                        conflict_points=["颈线未确认前，仍可能只是弱修复反弹"],
-                    )
+            # 右底固定为最近的波段低点，向左扫描最佳匹配左底
+            # 优先选：① 间隔最长（结构更宏观）② 价格差最小（两底更对称）
+            _sb = swing_low_points[-1]   # 右底：始终取最近的波段低点
+            best_db_pair = None
+            best_db_neck = None
+            best_db_gap = 0.0
+            for _i in range(len(swing_low_points) - 1):
+                _sa = swing_low_points[_i]
+                _gap = _sb["index"] - _sa["index"]
+                if _gap < 10:
+                    continue
+                _price_diff_pct = abs(_sa["price"] - _sb["price"]) / max(_sa["price"], 0.01)
+                if _price_diff_pct > 0.10:   # 允许 10%，兼容右底略低的不对称双底
+                    continue
+                # 计算两底之间的颈线（两底之间最高点）
+                _mid_neck = self._neckline_point_between(
+                    history_rows, _sa["index"], _sb["index"], mode="double_bottom"
                 )
+                if _mid_neck is None:
+                    continue
+                if _mid_neck["price"] <= max(_sa["price"], _sb["price"]):
+                    continue
+                # 用间隔长度 * (1 - 价格差比率) 作为优先级，选择最完整的双底
+                _score_key = _gap * (1 - _price_diff_pct)
+                if _score_key > best_db_gap:
+                    best_db_gap = _score_key
+                    best_db_pair = (_sa, _sb)
+                    best_db_neck = _mid_neck
 
-        # V形结构验证：近15根K线中，低点前有明显下跌，低点后有明显反弹
+            if best_db_pair is not None and best_db_neck is not None:
+                sl_a, sl_b = best_db_pair
+                sl_time_gap = sl_b["index"] - sl_a["index"]
+                _nk = best_db_neck["price"]
+                _above_neckline = price >= _nk * 1.01
+                # 价格在颈线以上（双底突破确认）时允许"区间高位"
+                _range_ok = (
+                    feature_snapshot.range60_position != "区间高位"
+                    or _above_neckline
+                )
+                if _range_ok:
+                    score = 0.56
+                    if center_shift >= 2:
+                        score += 0.04
+                    if volume_pattern in {"明显放量", "温和放量"}:
+                        score += 0.03
+                    if _above_neckline:
+                        score += 0.05
+                    _phase = "颈线突破后" if _above_neckline else "颈线附近修复"
+                    _summary = (
+                        "双底结构已完成，颈线有效突破后进入加速上攻阶段。"
+                        if _above_neckline
+                        else "两个低点接近，当前位置更像双底修复而不是单日反弹。"
+                    )
+                    _conflict = (
+                        ["突破后如快速回落至颈线下方，双底结构会明显削弱"]
+                        if _above_neckline
+                        else ["颈线未确认前，仍可能只是弱修复反弹"]
+                    )
+                    candidates.append(
+                        StockPatternCandidate(
+                            name="双底修复",
+                            score=min(score, 0.86),
+                            confidence=self._score_confidence(score),
+                            phase=_phase,
+                            summary=_summary,
+                            rule_hits=[
+                                f"两个波段低点接近：{sl_a['price']:.2f}/{sl_b['price']:.2f}（间隔 {sl_time_gap} 根）",
+                                f"两底之间颈线约 {_nk:.2f}，当前{'已突破颈线' if _above_neckline else '逼近颈线'}",
+                                "收盘位置和修复动能不差",
+                            ],
+                            conflict_points=_conflict,
+                        )
+                    )
+
+        # ── 窄窗口 V 形（15根）：捕捉快节奏短期 V 形 ──────────────────────────
         _v_closes = [self._safe_float(row.get("close")) for row in history_rows[-15:]]
         _v_closes = [c for c in _v_closes if c is not None]
         is_v_shape = False
@@ -623,6 +831,29 @@ class PatternAnalysisService:
                     v_drop_pct = (_v_start - _v_low) / _v_start * 100
                     v_recovery_pct = (_v_current - _v_low) / _v_low * 100
                     is_v_shape = v_drop_pct >= 7 and v_recovery_pct >= 6
+
+        # ── 宽窗口 V 形（30根）：补充窄窗覆盖不到的大跌后强势反转 ──────────
+        # 起点取低点之前的最高价，而非窗口第一根，以准确量化真实跌幅
+        is_wide_v = False
+        wide_v_drop_pct = 0.0
+        wide_v_recovery_pct = 0.0
+        if not is_v_shape:
+            _wv_closes = [self._safe_float(row.get("close")) for row in history_rows[-30:]]
+            _wv_closes = [c for c in _wv_closes if c is not None]
+            if len(_wv_closes) >= 15:
+                # 在前 25 根中找低点，保留至少 5 根回升空间
+                _wv_search = _wv_closes[:-5]
+                _wv_low = min(_wv_search)
+                _wv_idx = _wv_search.index(_wv_low)
+                # 低点前至少 3 根，才有足够的下跌过程
+                if _wv_idx >= 3:
+                    _wv_peak = max(_wv_closes[: _wv_idx + 1])
+                    _wv_current = _wv_closes[-1]
+                    if _wv_peak > 0 and _wv_low > 0:
+                        wide_v_drop_pct = (_wv_peak - _wv_low) / _wv_peak * 100
+                        wide_v_recovery_pct = (_wv_current - _wv_low) / _wv_low * 100
+                        # 宽 V 要求跌幅更大（≥10%）、回升也要有力（≥10%）
+                        is_wide_v = wide_v_drop_pct >= 10 and wide_v_recovery_pct >= 10
 
         if (
             is_v_shape
@@ -648,6 +879,37 @@ class PatternAnalysisService:
                         f"收盘质量 {close_quality:.2f}，日内承接不差",
                     ],
                     conflict_points=["V 形修复最怕上冲后再次回落，不能把反弹速度直接等同于结构确认"],
+                )
+            )
+
+        if (
+            is_wide_v
+            and not is_v_shape
+            and ma_slope_10 > 0
+            and latest_change >= 0
+            and close_quality >= 0.5
+        ):
+            score = 0.53
+            if volume_pattern in {"明显放量", "温和放量"}:
+                score += 0.06
+            if center_shift >= 2:
+                score += 0.04
+            candidates.append(
+                StockPatternCandidate(
+                    name="V形修复",
+                    score=min(score, 0.82),
+                    confidence=self._score_confidence(score),
+                    phase="大幅回调后强势反转",
+                    summary="经历大幅回调后快速反转，V 形底部已现，修复能否延续是关键。",
+                    rule_hits=[
+                        f"30日内回调峰谷跌幅 {wide_v_drop_pct:.1f}%，随后回升 {wide_v_recovery_pct:.1f}%，大 V 形结构成立",
+                        f"短期均线斜率转正，收盘质量 {close_quality:.2f}",
+                        f"近 20 日重心变化 {center_shift:.2f}%",
+                    ],
+                    conflict_points=[
+                        "大跌后的 V 形反转稳定性偏低，前期下跌压力位密集，需观察能否有效突破",
+                        "V 形回升速度快但结构尚浅，不能把短期反弹速度等同于趋势反转",
+                    ],
                 )
             )
 
@@ -817,15 +1079,18 @@ class PatternAnalysisService:
         rationale = "；".join(primary.rule_hits[:3]) if primary.rule_hits else "以价格位置、均线关系和区间结构做保守判断。"
         execution_hint = self._build_execution_hint(primary.name, breakout_level, defense_level)
         risk_hint = self._build_risk_hint(primary.name, target_scored, primary.conflict_points)
+        confidence_str = primary.confidence or self._score_confidence(primary.score)
+        action_advice = self._build_action_advice(primary.name, breakout_level, defense_level, confidence_str)
         return StockPatternResult(
             primary_pattern=primary.name,
             secondary_patterns=[item.name for item in candidates[1:]],
-            confidence=primary.confidence or self._score_confidence(primary.score),
+            confidence=confidence_str,
             pattern_phase=primary.phase or "待确认",
             pattern_summary=pattern_summary,
             pattern_rationale=rationale,
             execution_hint=execution_hint,
             risk_hint=risk_hint,
+            action_advice=action_advice,
             support_levels=support_levels,
             pressure_levels=pressure_levels,
             breakout_level=breakout_level,
@@ -879,6 +1144,11 @@ class PatternAnalysisService:
                     price=price,
                 )
             )
+        channel_structure = (
+            self._falling_channel_structure(history_rows)
+            if pattern_result.primary_pattern == "下跌通道反抽"
+            else None
+        )
         if pattern_result.primary_pattern == "三角收敛" and triangle_structure is not None:
             price_lines = [
                 StockPatternLine(
@@ -900,9 +1170,31 @@ class PatternAnalysisService:
                     end_price=triangle_structure["projected_lower"],
                 ),
             ]
+        if pattern_result.primary_pattern == "下跌通道反抽" and channel_structure is not None:
+            # 通道上下轨替换默认水平压力/支撑线
+            price_lines = [
+                StockPatternLine(
+                    label="通道上轨",
+                    line_type="pressure",
+                    start_trade_date=channel_structure["upper_start_date"],
+                    end_trade_date=channel_structure["upper_end_date"],
+                    start_price=channel_structure["upper_start_price"],
+                    end_price=channel_structure["upper_end_price"],
+                ),
+                StockPatternLine(
+                    label="通道下轨",
+                    line_type="support",
+                    start_trade_date=channel_structure["lower_start_date"],
+                    end_trade_date=channel_structure["lower_end_date"],
+                    start_price=channel_structure["lower_start_price"],
+                    end_price=channel_structure["lower_end_price"],
+                ),
+            ]
         if pattern_result.breakout_level is not None:
             breakout_exists = any(
-                line.line_type == "pressure" and abs(line.price - pattern_result.breakout_level) <= 0.01
+                line.line_type == "pressure"
+                and line.price is not None
+                and abs(line.price - pattern_result.breakout_level) <= 0.01
                 for line in price_lines
             )
             if not breakout_exists:
@@ -915,7 +1207,9 @@ class PatternAnalysisService:
                 )
         if pattern_result.defense_level is not None:
             defense_exists = any(
-                line.line_type == "support" and abs(line.price - pattern_result.defense_level) <= 0.01
+                line.line_type == "support"
+                and line.price is not None
+                and abs(line.price - pattern_result.defense_level) <= 0.01
                 for line in price_lines
             )
             if not defense_exists:
@@ -937,6 +1231,29 @@ class PatternAnalysisService:
                     high_price=feature_snapshot.platform_upper,
                 )
             )
+        if (
+            pattern_result.primary_pattern == "旗形中继"
+            and feature_snapshot.flag_face_high is not None
+            and feature_snapshot.flag_face_low is not None
+            and feature_snapshot.flag_pole_end_date is not None
+            and candles
+        ):
+            flag_start_date = next(
+                (c.trade_date for c in candles if c.trade_date >= feature_snapshot.flag_pole_end_date),
+                None,
+            )
+            if flag_start_date:
+                zones.append(
+                    StockPatternZone(
+                        label="旗面区",
+                        zone_type="flag_face",
+                        start_trade_date=flag_start_date,
+                        end_trade_date=candles[-1].trade_date,
+                        low_price=feature_snapshot.flag_face_low,
+                        high_price=feature_snapshot.flag_face_high,
+                    )
+                )
+
         if (
             feature_snapshot.neckline_level is not None
             and pattern_result.primary_pattern in {"双顶风险", "双底修复"}
@@ -975,6 +1292,7 @@ class PatternAnalysisService:
         merged.execution_hint = str(llm_result.get("execution_hint") or merged.execution_hint)
         merged.risk_hint = str(llm_result.get("risk_hint") or merged.risk_hint)
         merged.invalid_if = str(llm_result.get("invalid_if") or merged.invalid_if)
+        merged.action_advice = str(llm_result.get("action_advice") or merged.action_advice)
         return merged
 
     def _build_key_annotations(
@@ -1048,33 +1366,118 @@ class PatternAnalysisService:
             )
 
         if pattern_name == "双底修复" and len(swing_low_points) >= 2:
-            left_low, right_low = swing_low_points[-2], swing_low_points[-1]
-            annotations.extend(
-                [
-                    StockPatternAnnotation(
-                        trade_date=left_low["trade_date"],
-                        price=left_low["price"],
-                        label="左底",
-                        annotation_type="left_bottom",
-                    ),
-                    StockPatternAnnotation(
-                        trade_date=right_low["trade_date"],
-                        price=right_low["price"],
-                        label="右底",
-                        annotation_type="right_bottom",
-                    ),
-                ]
-            )
-            neckline_point = self._neckline_point_between(history_rows, left_low["index"], right_low["index"], mode="double_bottom")
-            if neckline_point is not None:
-                annotations.append(
-                    StockPatternAnnotation(
-                        trade_date=neckline_point["trade_date"],
-                        price=neckline_point["price"],
-                        label="颈线",
-                        annotation_type="neckline",
-                    )
+            # 右底固定为最近波段低点，向左扫描最佳匹配左底
+            _dsb = swing_low_points[-1]   # 右底：始终取最近的波段低点
+            _best_ll, _best_rl, _best_nk_pt = None, None, None
+            _best_db_key = 0.0
+            for _di in range(len(swing_low_points) - 1):
+                _dsa = swing_low_points[_di]
+                _dgap = _dsb["index"] - _dsa["index"]
+                if _dgap < 10:
+                    continue
+                _ddiff = abs(_dsa["price"] - _dsb["price"]) / max(_dsa["price"], 0.01)
+                if _ddiff > 0.10:
+                    continue
+                _dnk = self._neckline_point_between(history_rows, _dsa["index"], _dsb["index"], mode="double_bottom")
+                if _dnk is None or _dnk["price"] <= max(_dsa["price"], _dsb["price"]):
+                    continue
+                _dkey = _dgap * (1 - _ddiff)
+                if _dkey > _best_db_key:
+                    _best_db_key = _dkey
+                    _best_ll, _best_rl, _best_nk_pt = _dsa, _dsb, _dnk
+            if _best_ll and _best_rl:
+                left_low, right_low = _best_ll, _best_rl
+                annotations.extend(
+                    [
+                        StockPatternAnnotation(
+                            trade_date=left_low["trade_date"],
+                            price=left_low["price"],
+                            label="左底",
+                            annotation_type="left_bottom",
+                        ),
+                        StockPatternAnnotation(
+                            trade_date=right_low["trade_date"],
+                            price=right_low["price"],
+                            label="右底",
+                            annotation_type="right_bottom",
+                        ),
+                    ]
                 )
+                if _best_nk_pt is not None:
+                    annotations.append(
+                        StockPatternAnnotation(
+                            trade_date=_best_nk_pt["trade_date"],
+                            price=_best_nk_pt["price"],
+                            label="颈线",
+                            annotation_type="neckline",
+                        )
+                    )
+                    # 在颈线 → 右底之间找"右侧二次探底"（比右底还低的超跌点）
+                    # _best_nk_pt 只含 trade_date/price，需按 trade_date 定位 index
+                    _nk_idx = next(
+                        (i for i, r in enumerate(history_rows)
+                         if self._format_trade_date(str(r.get("trade_date") or ""))
+                         == _best_nk_pt["trade_date"]),
+                        None,
+                    )
+                    _retest_rows = (
+                        history_rows[_nk_idx + 1 : right_low["index"]]
+                        if _nk_idx is not None
+                        else []
+                    )
+                    if _retest_rows:
+                        _rt_row = min(
+                            _retest_rows,
+                            key=lambda r: self._safe_float(r.get("low")) or float("inf"),
+                        )
+                        _rt_price = self._safe_float(_rt_row.get("low"))
+                        # 比右底低超过 1%，才值得单独标注
+                        if _rt_price is not None and _rt_price < right_low["price"] * 0.99:
+                            annotations.append(
+                                StockPatternAnnotation(
+                                    trade_date=self._format_trade_date(
+                                        str(_rt_row.get("trade_date") or "")
+                                    ),
+                                    price=round(_rt_price, 2),
+                                    label="二次探底",
+                                    annotation_type="db_retest",
+                                )
+                            )
+        elif pattern_name == "V形修复":
+            # 从最近 30 根 K 线里找 V 形顶点和底部，用于前端连线示意
+            rows_30 = history_rows[-30:]
+            _vc_pairs = [
+                (str(r.get("trade_date") or ""), self._safe_float(r.get("close")))
+                for r in rows_30
+            ]
+            _vc_pairs = [(d, c) for d, c in _vc_pairs if d and c is not None]
+            if len(_vc_pairs) >= 12:
+                _vc_search = _vc_pairs[:-5]          # 前 25 根中找低点，留 5 根回升空间
+                _vc_prices = [c for _, c in _vc_search]
+                _vc_low_price = min(_vc_prices)
+                _vc_low_idx = _vc_prices.index(_vc_low_price)
+                _vc_low_date = self._format_trade_date(_vc_search[_vc_low_idx][0])
+                if _vc_low_idx >= 3:
+                    _vc_peak_price = max(_vc_prices[: _vc_low_idx + 1])
+                    _vc_peak_idx = _vc_prices.index(_vc_peak_price)
+                    _vc_peak_date = self._format_trade_date(_vc_search[_vc_peak_idx][0])
+                    annotations.append(
+                        StockPatternAnnotation(
+                            trade_date=_vc_peak_date,
+                            price=round(_vc_peak_price, 2),
+                            label="V形顶",
+                            annotation_type="v_peak",
+                        )
+                    )
+                    annotations.append(
+                        StockPatternAnnotation(
+                            trade_date=_vc_low_date,
+                            price=round(_vc_low_price, 2),
+                            label="V形底",
+                            annotation_type="v_low",
+                        )
+                    )
+
         elif pattern_name == "双顶风险" and len(swing_high_points) >= 2:
             left_high, right_high = swing_high_points[-2], swing_high_points[-1]
             annotations.extend(
@@ -1103,6 +1506,44 @@ class PatternAnalysisService:
                         annotation_type="neckline",
                     )
                 )
+        elif pattern_name == "旗形中继":
+            # 旗杆起点和旗杆顶点：供前端连线画旗杆
+            _pole_start_date = feature_snapshot.flag_pole_start_date
+            _pole_end_date = feature_snapshot.flag_pole_end_date
+            _pole_start_price = feature_snapshot.flag_pole_start
+            _pole_end_price = feature_snapshot.flag_pole_high
+            if _pole_start_date and _pole_start_price is not None:
+                annotations.append(
+                    StockPatternAnnotation(
+                        trade_date=_pole_start_date,
+                        price=round(_pole_start_price, 2),
+                        label="旗杆起",
+                        annotation_type="flag_pole_start",
+                    )
+                )
+            if _pole_end_date and _pole_end_price is not None:
+                annotations.append(
+                    StockPatternAnnotation(
+                        trade_date=_pole_end_date,
+                        price=round(_pole_end_price, 2),
+                        label="旗杆顶",
+                        annotation_type="flag_pole_top",
+                    )
+                )
+
+        elif pattern_name == "下跌通道反抽":
+            # 反抽低点：最近一个波段低点，供前端连线到当前收盘画反抽示意线
+            _ch = self._falling_channel_structure(history_rows)
+            if _ch and _ch.get("bounce_date") and _ch.get("bounce_price") is not None:
+                annotations.append(
+                    StockPatternAnnotation(
+                        trade_date=_ch["bounce_date"],
+                        price=_ch["bounce_price"],
+                        label="反抽低点",
+                        annotation_type="channel_bounce",
+                    )
+                )
+
         elif pattern_name == "三角收敛":
             triangle_high_points = swing_high_points[-2:]
             triangle_low_points = swing_low_points[-2:]
@@ -1335,6 +1776,89 @@ class PatternAnalysisService:
             return "关键位失守后不要继续脑补新形态。"
         return "关键均线和区间低点失守后，需要重新评估。"
 
+    def _build_action_advice(
+        self,
+        pattern_name: str,
+        breakout_level: Optional[float],
+        defense_level: Optional[float],
+        confidence: str = "",
+    ) -> str:
+        """规则层操作建议（LLM 启用时会被覆盖）。
+        聚焦：操作方向 + 触发条件 + 止损/防守价位。
+        """
+        bl = f"{breakout_level:.2f}" if breakout_level is not None else "突破位"
+        dl = f"{defense_level:.2f}" if defense_level is not None else "防守位"
+
+        mapping: dict[str, str] = {
+            "平台突破临界": (
+                f"可在 {bl} 附近放量突破时轻仓介入，防守 {dl}；"
+                f"若缩量假突破则不追，等回踩 {dl} 再看承接。"
+            ),
+            "回踩确认": (
+                f"回踩 {dl} 附近有效承接可考虑加仓/介入，"
+                f"跌破 {dl} 则止损离场。"
+            ),
+            "旗形中继": (
+                f"旗面整理期间可轻仓持有；"
+                f"放量突破 {bl} 后可加仓追进，止损设 {dl}。"
+            ),
+            "双底修复": (
+                f"颈线 {bl} 放量突破可介入，目标参考旗杆高度；"
+                f"防守 {dl}，破则止损。"
+            ),
+            "双顶风险": (
+                f"当前不适合追多，建议轻仓或观望；"
+                f"若跌破颈线 {dl} 则减仓止损。"
+            ),
+            "V形修复": (
+                f"V 形低点 {dl} 不破可短线持有；"
+                f"但 V 形稳定性偏低，{bl} 以下建议控制仓位。"
+            ),
+            "圆弧底修复": (
+                f"弧顶突破 {bl} 才可加仓，破前轻仓观察；"
+                f"防守 {dl}，破则止损。"
+            ),
+            "上升趋势延续": (
+                f"多头趋势延续，回踩均线（{dl} 附近）可补仓；"
+                f"跌破均线支撑且 {dl} 失守则减仓。"
+            ),
+            "平台整理": (
+                f"区间整理期间观望为主，等待方向突破 {bl} 后再介入；"
+                f"跌破 {dl} 则回避。"
+            ),
+            "箱体震荡": (
+                f"箱体内高抛低吸为主；"
+                f"放量突破 {bl} 可跟进，跌破 {dl} 则止损。"
+            ),
+            "三角收敛": (
+                f"三角收敛等待方向选择；"
+                f"突破上轨 {bl} 后可买入，跌破下轨 {dl} 则止损。"
+            ),
+            "假突破/突破失败": (
+                f"当前形态偏弱，不建议追多；"
+                f"{dl} 守住可观察是否修复，跌破则离场。"
+            ),
+            "下跌通道反抽": (
+                f"反抽行情以观望为主，不建议介入；"
+                f"站回 {bl} 且通道有效突破后再考虑。"
+            ),
+            "弱修复反弹": (
+                f"弱反弹风险高，建议观望；"
+                f"若持仓在 {dl} 失守时减仓。"
+            ),
+            "高位震荡/派发嫌疑": (
+                f"高位派发风险较大，不建议追高；"
+                f"已持仓关注 {dl} 是否失守，破则减仓。"
+            ),
+        }
+        advice = mapping.get(pattern_name)
+        if advice:
+            return advice
+        return (
+            f"当前形态不明确，建议观望；"
+            f"有意介入者需等 {bl} 有效突破，并以 {dl} 作为止损参考。"
+        )
+
     def _build_execution_hint(self, pattern_name: str, breakout_level: Optional[float], defense_level: Optional[float]) -> str:
         if pattern_name == "平台突破临界" and breakout_level is not None:
             return f"先盯 {breakout_level:.2f} 一线是否放量站稳，确认前不要把临界态当成已突破。"
@@ -1528,15 +2052,31 @@ class PatternAnalysisService:
         swing_high_points: List[Dict],
         swing_low_points: List[Dict],
     ) -> Optional[float]:
+        # 双底颈线：右底固定为最近波段低点，向左扫描最佳匹配左底
         if len(swing_low_points) >= 2:
-            neckline_point = self._neckline_point_between(
-                history_rows,
-                swing_low_points[-2]["index"],
-                swing_low_points[-1]["index"],
-                mode="double_bottom",
-            )
-            if neckline_point is not None:
-                return neckline_point["price"]
+            _sb = swing_low_points[-1]   # 右底：始终取最近的波段低点
+            best_neck = None
+            best_key = 0.0
+            for _i in range(len(swing_low_points) - 1):
+                _sa = swing_low_points[_i]
+                _gap = _sb["index"] - _sa["index"]
+                if _gap < 10:
+                    continue
+                _diff_pct = abs(_sa["price"] - _sb["price"]) / max(_sa["price"], 0.01)
+                if _diff_pct > 0.10:
+                    continue
+                _nk_pt = self._neckline_point_between(
+                    history_rows, _sa["index"], _sb["index"], mode="double_bottom"
+                )
+                if _nk_pt is None or _nk_pt["price"] <= max(_sa["price"], _sb["price"]):
+                    continue
+                _key = _gap * (1 - _diff_pct)
+                if _key > best_key:
+                    best_key = _key
+                    best_neck = _nk_pt
+            if best_neck is not None:
+                return best_neck["price"]
+        # 双顶颈线：取最后两个高点之间最低点
         if len(swing_high_points) >= 2:
             neckline_point = self._neckline_point_between(
                 history_rows,
@@ -1547,6 +2087,64 @@ class PatternAnalysisService:
             if neckline_point is not None:
                 return neckline_point["price"]
         return None
+
+    def _falling_channel_structure(self, history_rows: List[Dict]) -> Optional[Dict]:
+        """检测下跌通道结构：找最近两个构成下降趋势的波段高点，构建通道上下轨并投影到当前。"""
+        if len(history_rows) < 20:
+            return None
+        rows = history_rows[-80:]
+        n = len(rows)
+        swing_highs = self._swing_points(rows, mode="high")
+        swing_lows  = self._swing_points(rows, mode="low")
+        if len(swing_highs) < 2:
+            return None
+
+        # 找最近两个价格依次降低的波段高点
+        sh2 = swing_highs[-1]
+        sh1 = None
+        for sh in reversed(swing_highs[:-1]):
+            if sh["price"] > sh2["price"]:
+                sh1 = sh
+                break
+        if sh1 is None:
+            return None
+
+        gap = sh2["index"] - sh1["index"]
+        if gap <= 0:
+            return None
+        slope = (sh2["price"] - sh1["price"]) / gap  # 负斜率
+
+        bars_to_end = (n - 1) - sh2["index"]
+        upper_end_price = sh2["price"] + slope * bars_to_end
+
+        # 下轨：与上轨平行，过 sh1 之后最低的波段低点
+        lows_after_sh1 = [sl for sl in swing_lows if sl["index"] >= sh1["index"]]
+        if not lows_after_sh1:
+            return None
+        lowest_sl = min(lows_after_sh1, key=lambda s: s["price"])
+        upper_at_lowest = sh1["price"] + slope * (lowest_sl["index"] - sh1["index"])
+        channel_width = upper_at_lowest - lowest_sl["price"]
+        if channel_width <= 0:
+            return None
+
+        lower_start_price = sh1["price"] - channel_width
+        lower_end_price   = upper_end_price - channel_width
+
+        # 最近反抽低点（最新波段低点）
+        recent_low = swing_lows[-1] if swing_lows else None
+        current_date = self._format_trade_date(str(rows[-1].get("trade_date") or ""))
+        return {
+            "upper_start_date":  sh1["trade_date"],
+            "upper_start_price": round(sh1["price"], 2),
+            "upper_end_date":    current_date,
+            "upper_end_price":   round(upper_end_price, 2),
+            "lower_start_date":  sh1["trade_date"],
+            "lower_start_price": round(lower_start_price, 2),
+            "lower_end_date":    current_date,
+            "lower_end_price":   round(lower_end_price, 2),
+            "bounce_date":  recent_low["trade_date"] if recent_low else None,
+            "bounce_price": round(recent_low["price"], 2) if recent_low else None,
+        }
 
     def _flag_structure(self, history_rows: List[Dict]) -> Optional[Dict]:
         """检测旗形结构：旗杆（快速集中拉升）+ 旗面（缩幅整理回调）。
@@ -1586,13 +2184,25 @@ class PatternAnalysisService:
             if pole_end < 5 or pole_end >= n - 5:
                 continue
 
-            # 在旗杆顶点之前找最近的波段低点作为旗杆起点（距离 ≤ 20 根）
+            # 在旗杆顶点之前找效率最高的波段低点作为旗杆起点（距离 ≤ 55 根）
+            # 不取最近的低点，而是取涨幅/根数最大的那个，避免漏掉多周期大旗杆
+            # 长旗杆（≥40根）允许更低效率阈值（0.6%/根），因主升段往往是震荡上行
             pole_start_sl = None
+            best_pole_efficiency = 0.0
             for sl in reversed(swing_lows):
                 gap = pole_end - sl["index"]
-                if 3 <= gap <= 20:
-                    pole_start_sl = sl
+                if gap < 3:
+                    continue
+                if gap > 55:
                     break
+                _gain = (pole_end_price - sl["price"]) / max(sl["price"], 0.01) * 100
+                if _gain < 12:
+                    continue
+                _efficiency = _gain / gap
+                _eff_threshold = 0.6 if gap >= 40 else 0.8
+                if _efficiency >= _eff_threshold and _efficiency > best_pole_efficiency:
+                    best_pole_efficiency = _efficiency
+                    pole_start_sl = sl
             if pole_start_sl is None:
                 continue
 
@@ -1603,12 +2213,14 @@ class PatternAnalysisService:
 
             pole_gain_pct = (pole_end_price - pole_start_price) / pole_start_price * 100
 
-            # 约束1：最小旗杆涨幅 15%
-            if pole_gain_pct < 15:
+            # 约束1：最小旗杆涨幅 12%
+            if pole_gain_pct < 12:
                 continue
 
-            # 约束2：旗杆效率 ≥ 1% / 根（拒绝缓慢漂移）
-            if pole_gain_pct / pole_bars < 1.0:
+            # 约束2：旗杆效率阈值随旗杆长度自适应
+            # 短旗杆（<40根）≥ 0.8%/根，长旗杆（≥40根）≥ 0.6%/根（主升段往往震荡上行）
+            _pole_eff_min = 0.6 if pole_bars >= 40 else 0.8
+            if pole_gain_pct / pole_bars < _pole_eff_min:
                 continue
 
             # 旗面段：旗杆顶点之后，直到收盘再次站上旗杆顶或末尾
@@ -1649,6 +2261,8 @@ class PatternAnalysisService:
                     "flag_high": round(flag_high, 2),
                     "flag_low": round(flag_low, 2),
                     "flag_amplitude_pct": round(flag_amplitude_pct, 1),
+                    "pole_end_date": sh["trade_date"],
+                    "pole_start_date": pole_start_sl["trade_date"],
                 }
 
         return best_result

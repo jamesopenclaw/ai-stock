@@ -59,6 +59,10 @@
         </article>
 
         <aside class="decision-rail">
+          <article class="rail-card rail-card-advice">
+            <span class="side-kicker side-kicker-advice">操作建议</span>
+            <strong>{{ analysis.action_advice || '-' }}</strong>
+          </article>
           <article class="rail-card rail-card-action">
             <span class="side-kicker">下一步怎么盯</span>
             <strong>{{ analysis.execution_hint || '-' }}</strong>
@@ -101,14 +105,41 @@
         </article>
 
         <aside class="insight-rail">
+          <article class="insight-card insight-card-primary">
+            <div class="insight-card-head">
+              <span class="section-kicker">当日K线</span>
+              <strong>{{ currentCandleTitle }}</strong>
+            </div>
+            <div class="today-kline-price">
+              <strong>{{ formatPrice(currentClosePrice) }}</strong>
+              <span :class="['today-kline-badge', `today-kline-badge-${currentCandleTone}`]">
+                {{ currentCandleBadge }}
+              </span>
+            </div>
+            <p class="today-kline-note">{{ currentCandleNote }}</p>
+            <div class="today-kline-grid">
+              <div v-for="item in currentCandleMetrics" :key="item.label" class="today-kline-item">
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </div>
+            </div>
+          </article>
+
           <article class="insight-card">
             <div class="insight-card-head">
               <span class="section-kicker">关键价位</span>
               <strong>今天最该盯的线</strong>
             </div>
             <div class="key-level-list">
-              <div v-for="item in keyLevelItems" :key="item.label" class="key-level-row">
-                <span>{{ item.label }}</span>
+              <div
+                v-for="item in keyLevelRows"
+                :key="item.label"
+                :class="['key-level-row', `key-level-row-${item.tone}`]"
+              >
+                <div class="key-level-copy">
+                  <span>{{ item.label }}</span>
+                  <small>{{ item.note }}</small>
+                </div>
                 <strong>{{ item.value }}</strong>
               </div>
             </div>
@@ -266,13 +297,90 @@ const quickSignalCards = computed(() => ([
   },
 ]))
 const chartLegendItems = computed(() => ([
+  { label: 'K线', color: '#ef4444' },
+  { label: 'MA5', color: '#2563eb' },
+  { label: 'MA10', color: '#8b5cf6' },
+  { label: 'MA20', color: '#f59e0b' },
+  { label: 'MA60', color: '#0f766e' },
+  { label: '成交量', color: '#7dd3fc' },
   { label: breakoutLabel.value, color: '#2563eb' },
   { label: '防守线', color: '#dc2626' },
   { label: '支撑线', color: '#16a34a' },
   { label: '波段高低点', color: '#f97316' },
   { label: '平台区', color: 'rgba(245, 158, 11, 0.45)' },
 ]))
-const keyLevelItems = computed(() => patternFeatureItems.value)
+const currentCandleSnapshot = computed(() => {
+  const candles = data.value?.chart_payload?.candles || []
+  const today = data.value?.today_candle
+  const hasHistoricalToday = Boolean(today?.trade_date && candles.some((item) => item.trade_date === today.trade_date))
+  if (today?.trade_date && !hasHistoricalToday) {
+    return { ...today, isPreview: true }
+  }
+  const latest = candles[candles.length - 1]
+  if (latest) {
+    return { ...latest, isPreview: false }
+  }
+  if (today?.trade_date) {
+    return { ...today, isPreview: true }
+  }
+  return null
+})
+const currentClosePrice = computed(() => {
+  const snapshot = currentCandleSnapshot.value
+  if (snapshot?.close !== null && snapshot?.close !== undefined) return Number(snapshot.close)
+  if (data.value?.latest_price !== null && data.value?.latest_price !== undefined) return Number(data.value.latest_price)
+  return null
+})
+const currentCandleChangePct = computed(() => {
+  const snapshot = currentCandleSnapshot.value
+  if (!snapshot) return null
+  if (snapshot.isPreview && data.value?.latest_change_pct !== null && data.value?.latest_change_pct !== undefined) {
+    return Number(data.value.latest_change_pct)
+  }
+  const open = Number(snapshot.open)
+  const close = Number(snapshot.close)
+  if (!Number.isFinite(open) || !Number.isFinite(close) || open === 0) return null
+  return ((close - open) / open) * 100
+})
+const currentCandleTone = computed(() => {
+  const pct = currentCandleChangePct.value
+  if (pct > 0) return 'up'
+  if (pct < 0) return 'down'
+  return currentCandleSnapshot.value?.isPreview ? 'watch' : 'flat'
+})
+const currentCandleTitle = computed(() => currentCandleSnapshot.value?.isPreview ? '盘中未完成K线' : '最新收盘K线')
+const currentCandleBadge = computed(() => {
+  const snapshot = currentCandleSnapshot.value
+  if (!snapshot) return '暂无数据'
+  if (snapshot.isPreview) {
+    if (currentCandleChangePct.value === null) return '实时跟踪'
+    return `${currentCandleChangePct.value > 0 ? '+' : ''}${currentCandleChangePct.value.toFixed(2)}%`
+  }
+  return snapshot.trade_date || data.value?.resolved_trade_date || '最新'
+})
+const currentCandleNote = computed(() => {
+  if (!currentCandleSnapshot.value) return '暂无当日 K 线数据。'
+  if (currentCandleSnapshot.value.isPreview) {
+    return `虚线 K 线代表盘中未完成，优先盯现价与${breakoutLabel.value}、防守线的相对位置。`
+  }
+  return '收盘后优先确认收盘价站位是否仍然守住关键位，再结合量能判断结构是否延续。'
+})
+const currentCandleMetrics = computed(() => {
+  const snapshot = currentCandleSnapshot.value
+  return [
+    { label: '日期', value: snapshot?.trade_date || '-' },
+    { label: '开盘', value: formatPrice(snapshot?.open) },
+    { label: '最高', value: formatPrice(snapshot?.high) },
+    { label: '最低', value: formatPrice(snapshot?.low) },
+    { label: snapshot?.isPreview ? '现价' : '收盘', value: formatPrice(snapshot?.close) },
+    { label: '涨跌', value: formatSignedPct(currentCandleChangePct.value) },
+  ]
+})
+const keyLevelRows = computed(() => patternFeatureItems.value.map((item) => ({
+  ...item,
+  tone: resolveLevelTone(item.label),
+  note: buildLevelNote(item.value, currentClosePrice.value),
+})))
 const featureSummaryItems = computed(() => ([
   { label: '均线关系', value: features.value.ma_alignment || '-' },
   { label: 'K线偏向', value: features.value.candle_bias || '-' },
@@ -339,10 +447,38 @@ const buildChartOption = () => {
   const categories = candles.map((item) => item.trade_date)
   const candleValues = candles.map((item) => [item.open, item.close, item.low, item.high])
   const volumes = candles.map((item) => item.volume ?? 0)
+
+  // 盘中未完成 K 线：若日期不在历史序列中则追加到最右侧
+  const todayCandle = data.value?.today_candle
+  if (todayCandle && todayCandle.trade_date && !categories.includes(todayCandle.trade_date)) {
+    const tc = todayCandle
+    const isUp = tc.close >= tc.open
+    categories.push(tc.trade_date)
+    candleValues.push({
+      value: [tc.open, tc.close, tc.low, tc.high],
+      itemStyle: {
+        color:        isUp ? 'rgba(239,68,68,0.30)'   : 'rgba(16,185,129,0.30)',
+        color0:       isUp ? 'rgba(239,68,68,0.30)'   : 'rgba(16,185,129,0.30)',
+        borderColor:  isUp ? '#ef4444' : '#10b981',
+        borderColor0: isUp ? '#ef4444' : '#10b981',
+        borderWidth:  1.2,
+        borderType:   'dashed',
+      },
+    })
+    volumes.push(0)
+  }
+
   const movingAverages = chartPayload.moving_averages || {}
   const priceLines = chartPayload.price_lines || []
   const zones = chartPayload.zones || []
   const annotations = chartPayload.annotations || []
+  // 按 zone_type 给阴影区配色
+  const zoneColor = (zoneType) => {
+    if (zoneType === 'neckline') return 'rgba(37, 99, 235, 0.07)'
+    if (zoneType === 'flag_face') return 'rgba(245, 158, 11, 0.13)'
+    return 'rgba(245, 158, 11, 0.10)'
+  }
+
   const markLines = priceLines.map((item) => {
     if (item.start_trade_date && item.end_trade_date && item.start_price !== null && item.end_price !== null) {
       return [
@@ -362,13 +498,16 @@ const buildChartOption = () => {
         {
           coord: [item.end_trade_date, item.end_price],
           label: {
+            show: true,
             formatter: item.label,
-            color: lineColor(item.line_type),
             position: 'end',
-            distance: 10,
-            backgroundColor: 'rgba(255,255,255,0.92)',
-            borderRadius: 10,
-            padding: [3, 8],
+            distance: 8,
+            color: lineColor(item.line_type),
+            fontSize: 11,
+            fontWeight: 700,
+            backgroundColor: 'rgba(255,255,255,0.86)',
+            borderRadius: 4,
+            padding: [1, 4],
           },
         },
       ]
@@ -383,16 +522,19 @@ const buildChartOption = () => {
         opacity: item.line_type === 'breakout' ? 0.58 : 1,
       },
       label: {
+        show: true,
         formatter: item.label,
-        color: lineColor(item.line_type),
         position: 'end',
-        distance: 10,
-        backgroundColor: 'rgba(255,255,255,0.92)',
-        borderRadius: 10,
-        padding: item.line_type === 'breakout' ? [2, 6] : [3, 8],
+        distance: 8,
+        color: lineColor(item.line_type),
+        fontSize: 11,
+        fontWeight: 700,
+        backgroundColor: 'rgba(255,255,255,0.86)',
+        borderRadius: 4,
+        padding: [1, 4],
       },
     }
-  }).flat()
+  })
   const markPoints = annotations
     .map((item) => {
       const index = categories.indexOf(item.trade_date)
@@ -406,10 +548,11 @@ const buildChartOption = () => {
           formatter: item.label,
           color: annotationColor(item.annotation_type),
           fontWeight: 700,
+          fontSize: ['breakout', 'defense'].includes(item.annotation_type) ? 10 : 11,
           position: annotationLabelPosition(item.annotation_type),
           backgroundColor: 'rgba(255,255,255,0.96)',
-          borderRadius: 8,
-          padding: item.annotation_type === 'neckline' ? [1, 4] : [3, 6],
+          borderRadius: ['breakout', 'defense'].includes(item.annotation_type) ? 5 : 8,
+          padding: item.annotation_type === 'neckline' ? [1, 4] : ['breakout', 'defense'].includes(item.annotation_type) ? [0, 3] : [3, 6],
         },
         itemStyle: {
           color: annotationColor(item.annotation_type),
@@ -418,13 +561,165 @@ const buildChartOption = () => {
     })
     .filter(Boolean)
 
+  // 形态示意连线：双底 W 形 / 双顶 M 形
+  const patternShapeLines = []
+  const annoMap = annotations.reduce((m, a) => {
+    m[a.annotation_type] = m[a.annotation_type] || []
+    m[a.annotation_type].push(a)
+    return m
+  }, {})
+  const leftBottom = annoMap['left_bottom']?.[0]
+  const rightBottom = annoMap['right_bottom']?.[0]
+  const leftTop = annoMap['left_top']?.[0]
+  const rightTop = annoMap['right_top']?.[0]
+
+  if (leftBottom && rightBottom) {
+    const midNeck = annotations.find(
+      (a) => a.annotation_type === 'neckline' &&
+        a.trade_date >= leftBottom.trade_date &&
+        a.trade_date <= rightBottom.trade_date,
+    )
+    if (midNeck) {
+      const s  = { width: 1.5, type: 'solid', color: '#2563eb', opacity: 0.55 }
+      const sr = { width: 1.5, type: 'solid', color: '#10b981', opacity: 0.65 }
+      // W 形左半：左底 → 颈线 → 右底
+      patternShapeLines.push(
+        [{ coord: [leftBottom.trade_date, leftBottom.price], lineStyle: s, label: { show: false } },
+         { coord: [midNeck.trade_date, midNeck.price] }],
+        [{ coord: [midNeck.trade_date, midNeck.price], lineStyle: s, label: { show: false } },
+         { coord: [rightBottom.trade_date, rightBottom.price] }],
+      )
+      // W 形右半：右底 → 当前收盘（绿色，表示修复/突破）
+      if (candles.length > 0) {
+        const lastCandle = candles[candles.length - 1]
+        patternShapeLines.push(
+          [{ coord: [rightBottom.trade_date, rightBottom.price], lineStyle: sr, label: { show: false } },
+           { coord: [lastCandle.trade_date, lastCandle.close] }],
+        )
+        // 颈线水平虚线延伸到当前（突破参考）
+        const snk = { width: 1, type: 'dashed', color: '#2563eb', opacity: 0.35 }
+        patternShapeLines.push(
+          [{ coord: [midNeck.trade_date, midNeck.price], lineStyle: snk, label: { show: false } },
+           { coord: [lastCandle.trade_date, midNeck.price] }],
+        )
+      }
+    }
+  }
+  if (leftTop && rightTop) {
+    const midNeck = annotations.find(
+      (a) => a.annotation_type === 'neckline' &&
+        a.trade_date >= leftTop.trade_date &&
+        a.trade_date <= rightTop.trade_date,
+    )
+    if (midNeck) {
+      const s  = { width: 1.5, type: 'solid', color: '#dc2626', opacity: 0.55 }
+      const sd = { width: 1.5, type: 'solid', color: '#f97316', opacity: 0.60 }
+      // M 形左半：左顶 → 颈线 → 右顶
+      patternShapeLines.push(
+        [{ coord: [leftTop.trade_date, leftTop.price], lineStyle: s, label: { show: false } },
+         { coord: [midNeck.trade_date, midNeck.price] }],
+        [{ coord: [midNeck.trade_date, midNeck.price], lineStyle: s, label: { show: false } },
+         { coord: [rightTop.trade_date, rightTop.price] }],
+      )
+      // M 形右半：右顶 → 当前收盘（橙色，表示回落风险）
+      if (candles.length > 0) {
+        const lastCandle = candles[candles.length - 1]
+        patternShapeLines.push(
+          [{ coord: [rightTop.trade_date, rightTop.price], lineStyle: sd, label: { show: false } },
+           { coord: [lastCandle.trade_date, lastCandle.close] }],
+        )
+        // 颈线水平虚线延伸到当前（跌破参考）
+        const snk = { width: 1, type: 'dashed', color: '#dc2626', opacity: 0.35 }
+        patternShapeLines.push(
+          [{ coord: [midNeck.trade_date, midNeck.price], lineStyle: snk, label: { show: false } },
+           { coord: [lastCandle.trade_date, midNeck.price] }],
+        )
+      }
+    }
+  }
+  // 形态示意连线：V形修复  ── 顶点→底部→当前收盘
+  const vPeak = annoMap['v_peak']?.[0]
+  const vLow  = annoMap['v_low']?.[0]
+  if (vPeak && vLow && candles.length > 0) {
+    const lastCandle = candles[candles.length - 1]
+    const sv = { width: 1.8, type: 'solid', color: '#10b981', opacity: 0.65 }
+    patternShapeLines.push(
+      [{ coord: [vPeak.trade_date, vPeak.price], lineStyle: sv, label: { show: false } },
+       { coord: [vLow.trade_date,  vLow.price]  }],
+      [{ coord: [vLow.trade_date,  vLow.price],  lineStyle: sv, label: { show: false } },
+       { coord: [lastCandle.trade_date, lastCandle.close] }],
+    )
+  }
+
+  // 形态示意连线：旗形中继  ── 旗杆线 + 旗面上下轨
+  const flagPoleStart = annoMap['flag_pole_start']?.[0]
+  const flagPoleTop   = annoMap['flag_pole_top']?.[0]
+  if (flagPoleStart && flagPoleTop && candles.length > 0) {
+    const lastCandle = candles[candles.length - 1]
+    // 旗杆线：金色粗线，从旗杆起点到旗杆顶
+    const sPole = { width: 2.2, type: 'solid', color: '#f59e0b', opacity: 0.80 }
+    patternShapeLines.push(
+      [{ coord: [flagPoleStart.trade_date, flagPoleStart.price], lineStyle: sPole, label: { show: false } },
+       { coord: [flagPoleTop.trade_date,   flagPoleTop.price]   }],
+    )
+    // 旗面上下轨：从旗杆顶延伸到最后一根 K 线，蓝色虚线
+    const flagFaceHigh = data.value?.feature_snapshot?.flag_face_high
+    const flagFaceLow  = data.value?.feature_snapshot?.flag_face_low
+    if (flagFaceHigh && flagFaceLow) {
+      const sRail = { width: 1, type: 'dashed', color: '#3b82f6', opacity: 0.45 }
+      patternShapeLines.push(
+        [{ coord: [flagPoleTop.trade_date, flagFaceHigh], lineStyle: sRail, label: { show: false } },
+         { coord: [lastCandle.trade_date,  flagFaceHigh] }],
+        [{ coord: [flagPoleTop.trade_date, flagFaceLow],  lineStyle: sRail, label: { show: false } },
+         { coord: [lastCandle.trade_date,  flagFaceLow]  }],
+      )
+    }
+  }
+
+  // 形态示意连线：下跌通道反抽  ── 从反抽低点到当前收盘画绿色弹升线
+  const channelBounce = annoMap['channel_bounce']?.[0]
+  if (channelBounce && candles.length > 0) {
+    const lastCandle = candles[candles.length - 1]
+    const sBounce = { width: 1.8, type: 'solid', color: '#10b981', opacity: 0.70 }
+    patternShapeLines.push(
+      [{ coord: [channelBounce.trade_date, channelBounce.price], lineStyle: sBounce, label: { show: false } },
+       { coord: [lastCandle.trade_date,    lastCandle.close] }],
+    )
+  }
+
+  // 现价参考线：仅在盘后（无虚 K 线）时显示水平参考线
+  const latestPrice = data.value?.latest_price
+  const latestChangePct = data.value?.latest_change_pct
+  const latestPriceLines = []
+  const hasTodayCandle = !!(todayCandle && todayCandle.trade_date && categories.includes(todayCandle.trade_date))
+  if (!hasTodayCandle && latestPrice != null) {
+    const lineColor = latestChangePct > 0 ? '#ef4444' : (latestChangePct < 0 ? '#10b981' : '#94a3b8')
+    const pctStr = latestChangePct != null
+      ? ` ${latestChangePct > 0 ? '+' : ''}${latestChangePct.toFixed(2)}%`
+      : ''
+    latestPriceLines.push({
+      yAxis: latestPrice,
+      name: '现价',
+      lineStyle: { width: 1, type: 'dashed', color: lineColor, opacity: 0.80 },
+      label: {
+        show: true,
+        position: 'insideEndTop',
+        formatter: `现价 ${latestPrice.toFixed(2)}${pctStr}`,
+        color: '#fff',
+        backgroundColor: lineColor,
+        borderRadius: 3,
+        padding: [2, 6],
+        fontSize: 11,
+      },
+    })
+  }
+
+  const allMarkLines = [...markLines, ...patternShapeLines, ...latestPriceLines]
+
   const option = {
     animation: false,
     backgroundColor: 'transparent',
-    legend: {
-      top: 4,
-      textStyle: { color: '#475569' },
-    },
+    legend: { show: false },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'cross' },
@@ -433,8 +728,8 @@ const buildChartOption = () => {
       link: [{ xAxisIndex: 'all' }],
     },
     grid: [
-      { left: 56, right: 92, top: 56, height: '58%' },
-      { left: 56, right: 92, top: '74%', height: '14%' },
+      { left: 56, right: 76, top: 26, height: '62%' },
+      { left: 56, right: 76, top: '76%', height: '12%' },
     ],
     xAxis: [
       {
@@ -494,7 +789,7 @@ const buildChartOption = () => {
           borderColor: '#ef4444',
           borderColor0: '#10b981',
         },
-        markLine: markLines.length ? { symbol: 'none', data: markLines } : undefined,
+        markLine: allMarkLines.length ? { symbol: 'none', data: allMarkLines } : undefined,
         markPoint: markPoints.length ? { data: markPoints } : undefined,
       },
       {
@@ -539,12 +834,9 @@ const buildChartOption = () => {
     const startIndex = categories.indexOf(zone.start_trade_date)
     const endIndex = categories.indexOf(zone.end_trade_date)
     if (startIndex === -1 || endIndex === -1) return
-    option.series[0].markArea = option.series[0].markArea || {
-      itemStyle: { color: 'rgba(245, 158, 11, 0.10)' },
-      data: [],
-    }
+    option.series[0].markArea = option.series[0].markArea || { data: [] }
     option.series[0].markArea.data.push([
-      { xAxis: categories[startIndex], yAxis: zone.low_price, name: zone.label },
+      { xAxis: categories[startIndex], yAxis: zone.low_price, name: zone.label, itemStyle: { color: zoneColor(zone.zone_type) } },
       { xAxis: categories[endIndex], yAxis: zone.high_price },
     ])
   })
@@ -622,28 +914,53 @@ function lineColor(type) {
   return '#f59e0b'
 }
 
+function resolveLevelTone(label) {
+  if (String(label).includes('防守')) return 'defense'
+  if (String(label).includes('支撑') || String(label).includes('下沿') || String(label).includes('低')) return 'support'
+  if (String(label).includes('压力')) return 'pressure'
+  if (String(label).includes('突破') || String(label).includes('颈线') || String(label).includes('上沿') || String(label).includes('高')) return 'breakout'
+  return 'neutral'
+}
+
+function buildLevelNote(value, currentPrice) {
+  const price = Number(value)
+  if (!Number.isFinite(price)) return '区间参考'
+  if (!Number.isFinite(currentPrice) || currentPrice === 0) return '关键跟踪位'
+  const deltaPct = ((price - currentPrice) / currentPrice) * 100
+  if (Math.abs(deltaPct) < 0.35) return '接近现价'
+  return deltaPct > 0 ? `高于现价 ${deltaPct.toFixed(2)}%` : `低于现价 ${Math.abs(deltaPct).toFixed(2)}%`
+}
+
 function annotationColor(type) {
   if (type === 'neckline' || type === 'breakout') return '#2563eb'
   if (type === 'defense') return '#dc2626'
   if (type === 'left_bottom' || type === 'right_bottom' || type === 'swing_low') return '#16a34a'
   if (type === 'left_top' || type === 'right_top' || type === 'swing_high') return '#f97316'
+  if (type === 'db_retest') return '#ef4444'
+  if (type === 'channel_bounce') return '#10b981'
   return '#475569'
 }
 
 function annotationSymbol(type) {
   if (type === 'neckline') return 'rect'
   if (type === 'breakout' || type === 'defense') return 'roundRect'
+  if (type === 'db_retest') return 'circle'
+  if (type === 'channel_bounce') return 'circle'
   return 'circle'
 }
 
 function annotationSymbolSize(type) {
   if (type === 'neckline') return [18, 2]
-  if (type === 'breakout' || type === 'defense') return [52, 22]
+  if (type === 'breakout' || type === 'defense') return [14, 9]
+  if (type === 'db_retest') return 12
+  if (type === 'channel_bounce') return 12
   return 16
 }
 
 function annotationLabelPosition(type) {
   if (type === 'left_bottom' || type === 'right_bottom' || type === 'swing_low') return 'bottom'
+  if (type === 'db_retest') return 'bottom'
+  if (type === 'channel_bounce') return 'bottom'
   return 'top'
 }
 
@@ -785,6 +1102,10 @@ function getLocalDate() {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: #6b7280;
+}
+
+.side-kicker-advice {
+  color: #f59e0b;
 }
 
 .pattern-kicker {
@@ -945,6 +1266,16 @@ function getLocalDate() {
   padding: 20px;
 }
 
+.rail-card-advice {
+  background: linear-gradient(180deg, rgba(254, 243, 199, 0.18), rgba(255, 255, 255, 0.08));
+  border-color: rgba(245, 158, 11, 0.45);
+  border-left-width: 3px;
+}
+
+.rail-card-advice strong {
+  color: #fbbf24 !important;
+}
+
 .rail-card-action {
   background:
     linear-gradient(180deg, rgba(255, 251, 235, 0.96), rgba(255, 255, 255, 0.92));
@@ -1076,6 +1407,13 @@ function getLocalDate() {
   padding: 18px;
 }
 
+.insight-card-primary {
+  background:
+    radial-gradient(circle at top left, rgba(96, 165, 250, 0.22), transparent 30%),
+    linear-gradient(135deg, #eff6ff 0%, #dbeafe 48%, #f8fafc 100%);
+  border-color: rgba(59, 130, 246, 0.2);
+}
+
 .key-level-list,
 .mini-signal-list,
 .candidate-list,
@@ -1098,6 +1436,74 @@ function getLocalDate() {
   background: rgba(15, 23, 42, 0.04);
 }
 
+.today-kline-price {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.today-kline-price strong {
+  color: #0f172a;
+  font-size: 32px;
+  line-height: 1;
+}
+
+.today-kline-badge {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.today-kline-badge-up {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.today-kline-badge-down {
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+}
+
+.today-kline-badge-flat,
+.today-kline-badge-watch {
+  background: rgba(148, 163, 184, 0.14);
+  color: #475569;
+}
+
+.today-kline-note {
+  margin: 0 0 14px;
+  color: #475569;
+  line-height: 1.7;
+  font-size: 13px;
+}
+
+.today-kline-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.today-kline-item {
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.today-kline-item span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.today-kline-item strong {
+  display: block;
+  margin-top: 6px;
+  color: #0f172a;
+  font-size: 16px;
+}
+
 .key-level-row span,
 .mini-signal-item span,
 .annotation-item span,
@@ -1106,12 +1512,56 @@ function getLocalDate() {
   font-size: 12px;
 }
 
+.key-level-copy {
+  min-width: 0;
+}
+
+.key-level-copy span,
+.key-level-copy small {
+  display: block;
+}
+
+.key-level-copy small {
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .key-level-row strong,
 .mini-signal-item strong,
 .annotation-item strong,
 .feature-item strong {
   color: #0f172a;
   font-size: 17px;
+}
+
+.key-level-row {
+  border-left: 4px solid transparent;
+}
+
+.key-level-row-breakout {
+  border-left-color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.key-level-row-defense {
+  border-left-color: #dc2626;
+  background: rgba(220, 38, 38, 0.06);
+}
+
+.key-level-row-support {
+  border-left-color: #16a34a;
+  background: rgba(22, 163, 74, 0.06);
+}
+
+.key-level-row-pressure {
+  border-left-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.key-level-row-neutral {
+  border-left-color: #94a3b8;
 }
 
 .feature-notes {
@@ -1238,7 +1688,8 @@ function getLocalDate() {
 
   .signal-ribbon,
   .thesis-points,
-  .feature-grid {
+  .feature-grid,
+  .today-kline-grid {
     grid-template-columns: 1fr;
   }
 
