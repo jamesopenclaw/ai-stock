@@ -141,16 +141,19 @@ def _triangle_history():
 
 
 def _v_repair_history():
+    """大跌后强势拉回；近 30/15 根内各有一段「中段低点」以匹配形态规则的索引约束。"""
     rows = []
-    price = 11.8
     for index in range(80):
-        if index < 45:
-            price = round(11.8 - 0.06 * index, 2)
-        elif index < 60:
-            price = round(9.1 + 0.03 * (index - 45), 2)
+        if index < 38:
+            close = round(14.2 - 0.15 * index, 2)
+        elif index < 48:
+            close = round(8.5 + 0.02 * (index - 38), 2)
+        elif index < 62:
+            close = round(8.7 + 0.12 * (index - 48), 2)
+        elif index < 70:
+            close = round(10.38 - 0.16 * (index - 62), 2)
         else:
-            price = round(9.55 + 0.14 * (index - 60), 2)
-        close = price
+            close = round(9.1 + 0.38 * (index - 70), 2)
         rows.append(
             {
                 "trade_date": f"202604{(index % 28) + 1:02d}",
@@ -330,3 +333,15 @@ def test_double_bottom_uses_intervening_high_as_neckline_and_marks_wave_points()
     assert result.breakout_level == features.neckline_level
     assert result.breakout_level > max(features.swing_lows[-2:])
     assert {"左底", "右底", "颈线"}.issubset(labels)
+
+
+def test_uptrend_swing_low_chain_extracts_higher_lows():
+    pts = [
+        {"trade_date": "2026-01-01", "price": 8.0, "index": 0},
+        {"trade_date": "2026-01-15", "price": 8.6, "index": 10},
+        {"trade_date": "2026-02-01", "price": 9.1, "index": 20},
+    ]
+    chain = pattern_analysis_service._uptrend_swing_low_chain(pts)
+    assert len(chain) >= 2
+    assert chain[0]["price"] < chain[-1]["price"]
+    assert {item["trade_date"] for item in chain}.issubset({p["trade_date"] for p in pts})

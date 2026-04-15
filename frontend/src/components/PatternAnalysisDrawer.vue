@@ -145,19 +145,32 @@
             </div>
           </article>
 
-          <article class="insight-card">
-            <div class="insight-card-head">
-              <span class="section-kicker">结构信号</span>
-              <strong>先看这几项</strong>
-            </div>
-            <div class="mini-signal-list">
-              <div v-for="item in featureSummaryItems" :key="item.label" class="mini-signal-item">
-                <span>{{ item.label }}</span>
-                <strong>{{ item.value }}</strong>
+          <article class="insight-card insight-card-structure">
+            <div
+              class="insight-card-head insight-card-head-toggle"
+              role="button"
+              tabindex="0"
+              :aria-expanded="structureSignalsOpen"
+              @click="structureSignalsOpen = !structureSignalsOpen"
+              @keydown.enter.prevent="structureSignalsOpen = !structureSignalsOpen"
+              @keydown.space.prevent="structureSignalsOpen = !structureSignalsOpen"
+            >
+              <div>
+                <span class="section-kicker">结构信号</span>
+                <strong>先看这几项</strong>
               </div>
+              <span class="insight-toggle-hint">{{ structureSignalsOpen ? '收起' : '展开' }}</span>
             </div>
-            <div v-if="features.notes?.length" class="feature-notes">
-              {{ features.notes.join(' ') }}
+            <div v-show="structureSignalsOpen" class="insight-structure-body">
+              <div class="mini-signal-list">
+                <div v-for="item in featureSummaryItems" :key="item.label" class="mini-signal-item">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                </div>
+              </div>
+              <div v-if="features.notes?.length" class="feature-notes">
+                {{ features.notes.join(' ') }}
+              </div>
             </div>
           </article>
         </aside>
@@ -190,11 +203,16 @@
         </article>
 
         <article class="content-card content-card-features">
-          <div class="content-card-head">
-            <span class="section-kicker">规则证据</span>
-            <strong>机器实际看到了什么</strong>
+          <div class="content-card-head content-card-head-row">
+            <div>
+              <span class="section-kicker">规则证据</span>
+              <strong>机器实际看到了什么</strong>
+            </div>
+            <el-button text type="primary" size="small" @click="machineEvidenceOpen = !machineEvidenceOpen">
+              {{ machineEvidenceOpen ? '收起指标表' : '展开指标表' }}
+            </el-button>
           </div>
-          <div class="feature-grid">
+          <div v-show="machineEvidenceOpen" class="feature-grid">
             <div v-for="item in detailedFeatureItems" :key="item.label" class="feature-item">
               <span>{{ item.label }}</span>
               <strong>{{ item.value }}</strong>
@@ -233,6 +251,10 @@ const emit = defineEmits(['update:modelValue'])
 const loading = ref(false)
 const llmRefreshing = ref(false)
 const data = ref(null)
+/** 主图右侧「结构信号」卡默认收起，减轻侧栏密度 */
+const structureSignalsOpen = ref(false)
+/** 底部「规则证据」指标表默认收起，首屏突出左侧形态反驳 */
+const machineEvidenceOpen = ref(false)
 const chartRef = ref(null)
 let chartInstance = null
 let latestRequestId = 0
@@ -307,6 +329,9 @@ const chartLegendItems = computed(() => ([
   { label: '防守线', color: '#dc2626' },
   { label: '支撑线', color: '#16a34a' },
   { label: '波段高低点', color: '#f97316' },
+  ...(analysis.value.primary_pattern === '上升趋势延续'
+    ? [{ label: '抬升趋势线', color: '#0d9488' }]
+    : []),
   { label: '平台区', color: 'rgba(245, 158, 11, 0.45)' },
 ]))
 const currentCandleSnapshot = computed(() => {
@@ -465,7 +490,17 @@ const buildChartOption = () => {
         borderType:   'dashed',
       },
     })
-    volumes.push(0)
+    const tcVol = tc.volume > 0 ? tc.volume : 0
+    const tcIsUp = tc.close >= tc.open
+    volumes.push({
+      value: tcVol,
+      itemStyle: {
+        color:   tcIsUp ? 'rgba(239,68,68,0.30)' : 'rgba(16,185,129,0.30)',
+        borderColor: tcIsUp ? '#ef4444' : '#10b981',
+        borderWidth: 1,
+        borderType: 'dashed',
+      },
+    })
   }
 
   const movingAverages = chartPayload.moving_averages || {}
@@ -687,6 +722,33 @@ const buildChartOption = () => {
     )
   }
 
+  // 形态示意连线：上升趋势延续  ── 依次抬高的波段低点连线 + 趋势线外延（虚线）
+  const uptrendLows = annoMap['uptrend_low'] || []
+  if (uptrendLows.length >= 2 && categories.length > 0) {
+    const sTrend = { width: 1.65, type: 'solid', color: '#0d9488', opacity: 0.68 }
+    for (let i = 0; i < uptrendLows.length - 1; i += 1) {
+      patternShapeLines.push(
+        [{ coord: [uptrendLows[i].trade_date, uptrendLows[i].price], lineStyle: sTrend, label: { show: false } },
+         { coord: [uptrendLows[i + 1].trade_date, uptrendLows[i + 1].price] }],
+      )
+    }
+    const xEnd = categories[categories.length - 1]
+    const penult = uptrendLows[uptrendLows.length - 2]
+    const lastLow = uptrendLows[uptrendLows.length - 1]
+    const i0 = categories.indexOf(penult.trade_date)
+    const i1 = categories.indexOf(lastLow.trade_date)
+    const i2 = categories.length - 1
+    if (i0 >= 0 && i1 > i0 && i2 > i1) {
+      const slope = (lastLow.price - penult.price) / (i1 - i0)
+      const yExt = lastLow.price + slope * (i2 - i1)
+      const sExt = { width: 1, type: 'dashed', color: '#0d9488', opacity: 0.42 }
+      patternShapeLines.push(
+        [{ coord: [lastLow.trade_date, lastLow.price], lineStyle: sExt, label: { show: false } },
+         { coord: [xEnd, Math.round(yExt * 100) / 100] }],
+      )
+    }
+  }
+
   // 现价参考线：仅在盘后（无虚 K 线）时显示水平参考线
   const latestPrice = data.value?.latest_price
   const latestChangePct = data.value?.latest_change_pct
@@ -694,23 +756,11 @@ const buildChartOption = () => {
   const hasTodayCandle = !!(todayCandle && todayCandle.trade_date && categories.includes(todayCandle.trade_date))
   if (!hasTodayCandle && latestPrice != null) {
     const lineColor = latestChangePct > 0 ? '#ef4444' : (latestChangePct < 0 ? '#10b981' : '#94a3b8')
-    const pctStr = latestChangePct != null
-      ? ` ${latestChangePct > 0 ? '+' : ''}${latestChangePct.toFixed(2)}%`
-      : ''
     latestPriceLines.push({
       yAxis: latestPrice,
       name: '现价',
       lineStyle: { width: 1, type: 'dashed', color: lineColor, opacity: 0.80 },
-      label: {
-        show: true,
-        position: 'insideEndTop',
-        formatter: `现价 ${latestPrice.toFixed(2)}${pctStr}`,
-        color: '#fff',
-        backgroundColor: lineColor,
-        borderRadius: 3,
-        padding: [2, 6],
-        fontSize: 11,
-      },
+      label: { show: false },
     })
   }
 
@@ -825,7 +875,16 @@ const buildChartOption = () => {
         type: 'bar',
         xAxisIndex: 1,
         yAxisIndex: 1,
-        data: volumes.map((value, index) => [index, candleValues[index]?.[1] >= candleValues[index]?.[0] ? 1 : -1, value]),
+        data: volumes.map((v, index) => {
+          const raw = candleValues[index]
+          const rawVal = raw?.value ?? raw
+          const dir = (rawVal?.[1] ?? rawVal?.[0] ?? 0) >= (rawVal?.[0] ?? 0) ? 1 : -1
+          const isObj = v !== null && typeof v === 'object' && !Array.isArray(v)
+          const volNum = isObj ? (v.value ?? 0) : (v ?? 0)
+          const item = { value: [index, dir, volNum] }
+          if (isObj && v.itemStyle) item.itemStyle = v.itemStyle
+          return item
+        }),
         encode: { x: 0, y: 2 },
       },
     ],
@@ -934,6 +993,7 @@ function buildLevelNote(value, currentPrice) {
 function annotationColor(type) {
   if (type === 'neckline' || type === 'breakout') return '#2563eb'
   if (type === 'defense') return '#dc2626'
+  if (type === 'uptrend_low') return '#0d9488'
   if (type === 'left_bottom' || type === 'right_bottom' || type === 'swing_low') return '#16a34a'
   if (type === 'left_top' || type === 'right_top' || type === 'swing_high') return '#f97316'
   if (type === 'db_retest') return '#ef4444'
@@ -952,13 +1012,14 @@ function annotationSymbol(type) {
 function annotationSymbolSize(type) {
   if (type === 'neckline') return [18, 2]
   if (type === 'breakout' || type === 'defense') return [14, 9]
+  if (type === 'uptrend_low') return 13
   if (type === 'db_retest') return 12
   if (type === 'channel_bounce') return 12
   return 16
 }
 
 function annotationLabelPosition(type) {
-  if (type === 'left_bottom' || type === 'right_bottom' || type === 'swing_low') return 'bottom'
+  if (type === 'left_bottom' || type === 'right_bottom' || type === 'swing_low' || type === 'uptrend_low') return 'bottom'
   if (type === 'db_retest') return 'bottom'
   if (type === 'channel_bounce') return 'bottom'
   return 'top'
@@ -1019,6 +1080,17 @@ function buildPatternFeatureItems(patternName, annotations, analysisState) {
       pick('突破线', analysisState.breakout_level),
       pick('防守线', analysisState.defense_level),
     ]
+  }
+  if (patternName === '上升趋势延续') {
+    return [
+      pick('抬升低①'),
+      pick('抬升低②'),
+      pick('抬升低③'),
+      pick(breakoutLabel.value, analysisState.breakout_level),
+      pick('防守线', analysisState.defense_level),
+      { label: '压力区', value: joinPrices(analysisState.pressure_levels) },
+      { label: '支撑区', value: joinPrices(analysisState.support_levels) },
+    ].filter((item) => item.value !== '-')
   }
   return [
     pick(breakoutLabel.value, analysisState.breakout_level),
@@ -1412,6 +1484,38 @@ function getLocalDate() {
     radial-gradient(circle at top left, rgba(96, 165, 250, 0.22), transparent 30%),
     linear-gradient(135deg, #eff6ff 0%, #dbeafe 48%, #f8fafc 100%);
   border-color: rgba(59, 130, 246, 0.2);
+}
+
+.insight-card-head-toggle {
+  cursor: pointer;
+  user-select: none;
+  width: 100%;
+}
+
+.insight-card-head-toggle:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.45);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.insight-toggle-hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+}
+
+.insight-structure-body {
+  margin-top: 4px;
+}
+
+.content-card-head-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.content-card-features .feature-grid {
+  margin-bottom: 4px;
 }
 
 .key-level-list,

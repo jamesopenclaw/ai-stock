@@ -187,13 +187,16 @@ class PatternAnalysisService:
                         hi = float(target_input.high or price)
                         lo = float(target_input.low or price)
                         change_pct_raw = float(target_input.change_pct or 0)
+                        vol_raw = float(getattr(target_input, "volume", 0) or 0)
+                        vol_lots = vol_raw / 100  # 实时接口返回股数，转为手
                         ohlc = {
-                            "trade_date": today_str,  # 强制使用今日日期，不依赖接口返回值
-                            "open":  round(op, 2),
-                            "high":  round(hi, 2),
-                            "low":   round(lo, 2),
-                            "close": round(price, 2),
+                            "trade_date": today_str,
+                            "open":   round(op, 2),
+                            "high":   round(hi, 2),
+                            "low":    round(lo, 2),
+                            "close":  round(price, 2),
                             "change_pct": round(change_pct_raw, 2),
+                            "volume": round(vol_lots, 2),
                         }
                     logger.debug(f"[虚K线] {ts_code} ti_is_realtime={ti_is_realtime} price={price} ohlc={ohlc}")
 
@@ -204,13 +207,16 @@ class PatternAnalysisService:
                     price = float(q.get("close") or 0)
                     logger.debug(f"[虚K线] {ts_code} fallback realtime price={price} q={q}")
                     if price > 0:
+                        vol_raw = float(q.get("volume") or 0)
+                        vol_lots = vol_raw / 100  # 实时接口返回股数，转为手
                         ohlc = {
-                            "trade_date": today_str,  # 强制使用今日日期，不依赖新浪接口的 DATE 字段
-                            "open":  round(float(q.get("open") or price), 2),
-                            "high":  round(float(q.get("high") or price), 2),
-                            "low":   round(float(q.get("low") or price), 2),
-                            "close": round(price, 2),
+                            "trade_date": today_str,
+                            "open":   round(float(q.get("open") or price), 2),
+                            "high":   round(float(q.get("high") or price), 2),
+                            "low":    round(float(q.get("low") or price), 2),
+                            "close":  round(price, 2),
                             "change_pct": round(float(q.get("change_pct") or 0), 2),
+                            "volume": round(vol_lots, 2),
                         }
 
                 logger.debug(f"[虚K线] {ts_code} ohlc={ohlc} today_str={today_str} last_hist_date={last_hist_date}")
@@ -609,7 +615,12 @@ class PatternAnalysisService:
             and feature_snapshot.ma_slope_60 < 0
         )
 
-        if flag_pole_high is not None and flag_face_low is not None and not flag_large_struct_broken:
+        if (
+            flag_pole_high is not None
+            and flag_face_low is not None
+            and not flag_large_struct_broken
+            and feature_snapshot.ma_alignment != "均线压制"
+        ):
             score = 0.65
             hits = [
                 f"旗杆：从 {flag_pole_start:.2f} 涨至 {flag_pole_high:.2f}（+{flag_pole_gain_pct:.1f}%）",
@@ -1589,6 +1600,19 @@ class PatternAnalysisService:
                         ),
                     ]
                 )
+        elif pattern_name == "上升趋势延续":
+            ext_lows = self._swing_points(history_rows, mode="low", tail=15)
+            chain = self._uptrend_swing_low_chain(ext_lows)
+            labels = ("抬升低①", "抬升低②", "抬升低③")
+            for idx, pt in enumerate(chain):
+                annotations.append(
+                    StockPatternAnnotation(
+                        trade_date=pt["trade_date"],
+                        price=pt["price"],
+                        label=labels[idx] if idx < len(labels) else f"抬升低{idx + 1}",
+                        annotation_type="uptrend_low",
+                    )
+                )
         else:
             if swing_high_points:
                 last_high = swing_high_points[-1]
@@ -1612,7 +1636,7 @@ class PatternAnalysisService:
                 )
         if (
             feature_snapshot.neckline_level is not None
-            and pattern_name not in {"双底修复", "双顶风险"}
+            and pattern_name not in {"双底修复", "双顶风险", "上升趋势延续"}
         ):
             annotations.append(
                 StockPatternAnnotation(
@@ -1968,7 +1992,13 @@ class PatternAnalysisService:
             return "冲高回落"
         return "中性K线"
 
-    def _swing_points(self, history_rows: List[Dict], *, mode: str) -> List[Dict]:
+    def _swing_points(
+        self,
+        history_rows: List[Dict],
+        *,
+        mode: str,
+        tail: Optional[int] = 5,
+    ) -> List[Dict]:
         if len(history_rows) < 5:
             return []
         field = "high" if mode == "high" else "low"
@@ -1997,7 +2027,32 @@ class PatternAnalysisService:
                     "price": rounded,
                 }
             )
-        return points[-5:]
+        if tail is None:
+            return points
+        if tail <= 0:
+            return []
+        return points[-tail:]
+
+    def _uptrend_swing_low_chain(self, swing_lows: List[Dict]) -> List[Dict]:
+        """
+        从波段低点序列中提取 2～3 个「依次抬高」的低点（时间越晚价格越高），
+        用于「上升趋势延续」在 K 线图上的示意连线。
+        """
+        if not swing_lows:
+            return []
+        if len(swing_lows) == 1:
+            return [swing_lows[-1]]
+        # 从最右侧波段低点向左回溯：仅保留价格严格低于右侧点的更早低点，形成低点抬高链
+        chain: List[Dict] = [swing_lows[-1]]
+        for i in range(len(swing_lows) - 2, -1, -1):
+            prev = swing_lows[i]
+            if prev["price"] < chain[0]["price"] * 0.998:
+                chain.insert(0, prev)
+            if len(chain) >= 3:
+                break
+        if len(chain) < 2:
+            return swing_lows[-2:]
+        return chain
 
     def _swing_levels(self, values: List[float], *, mode: str) -> List[float]:
         if len(values) < 5:
@@ -2147,15 +2202,17 @@ class PatternAnalysisService:
         }
 
     def _flag_structure(self, history_rows: List[Dict]) -> Optional[Dict]:
-        """检测旗形结构：旗杆（快速集中拉升）+ 旗面（缩幅整理回调）。
+        """检测旗形结构：旗杆（快速集中拉升）+ 旗面（缩幅、下倾整理）。
 
-        核心约束：
+        核心约束（偏严以降低误报）：
         1. 旗杆顶点必须是波段高点（swing high），不接受任意 K 线
-        2. 旗杆起点必须是旗杆顶之前的波段低点（swing low），且距离 ≤ 20 根
-        3. 旗杆效率：平均每根 K 线涨幅 ≥ 1%（避免缓慢漂移被误判）
-        4. 旗杆最小涨幅 15%（提高门槛）
-        5. 旗面回调 ≤ 旗杆涨幅的 55%（收敛整理，不是深度回调）
-        6. 旗面振幅 < 旗杆涨幅的 80%（振幅收敛）
+        2. 旗杆起点为旗杆顶之前的波段低点，间距 3～55 根
+        3. 旗杆效率：短杆 ≥0.85%/根，长杆(≥40根) ≥0.65%/根
+        4. 旗杆最小涨幅 14%
+        5. 旗面仅用杆顶之后 K 线，至少 5 根；高低价与杆顶同用 OHLC，不用收盘混用
+        6. 旗面高点整体下移、低点整体下移（典型上升旗形的下倾通道）
+        7. 旗面最高价不明显突破杆顶（避免「顶横宽震」当旗形）
+        8. 旗面回调 ≤ 旗杆涨幅的 48%；旗面振幅 < 旗杆涨幅的 65%
         """
         if len(history_rows) < 30:
             return None
@@ -2170,8 +2227,8 @@ class PatternAnalysisService:
         n = len(sc)
         current_price = sc[-1]
 
-        swing_highs = self._swing_points(tail_rows, mode="high")
-        swing_lows = self._swing_points(tail_rows, mode="low")
+        swing_highs = self._swing_points(tail_rows, mode="high", tail=None)
+        swing_lows = self._swing_points(tail_rows, mode="low", tail=None)
 
         best_result = None
         best_score = 0.0
@@ -2185,8 +2242,6 @@ class PatternAnalysisService:
                 continue
 
             # 在旗杆顶点之前找效率最高的波段低点作为旗杆起点（距离 ≤ 55 根）
-            # 不取最近的低点，而是取涨幅/根数最大的那个，避免漏掉多周期大旗杆
-            # 长旗杆（≥40根）允许更低效率阈值（0.6%/根），因主升段往往是震荡上行
             pole_start_sl = None
             best_pole_efficiency = 0.0
             for sl in reversed(swing_lows):
@@ -2196,10 +2251,10 @@ class PatternAnalysisService:
                 if gap > 55:
                     break
                 _gain = (pole_end_price - sl["price"]) / max(sl["price"], 0.01) * 100
-                if _gain < 12:
+                if _gain < 14:
                     continue
                 _efficiency = _gain / gap
-                _eff_threshold = 0.6 if gap >= 40 else 0.8
+                _eff_threshold = 0.65 if gap >= 40 else 0.85
                 if _efficiency >= _eff_threshold and _efficiency > best_pole_efficiency:
                     best_pole_efficiency = _efficiency
                     pole_start_sl = sl
@@ -2213,41 +2268,63 @@ class PatternAnalysisService:
 
             pole_gain_pct = (pole_end_price - pole_start_price) / pole_start_price * 100
 
-            # 约束1：最小旗杆涨幅 12%
-            if pole_gain_pct < 12:
+            if pole_gain_pct < 14:
                 continue
 
-            # 约束2：旗杆效率阈值随旗杆长度自适应
-            # 短旗杆（<40根）≥ 0.8%/根，长旗杆（≥40根）≥ 0.6%/根（主升段往往震荡上行）
-            _pole_eff_min = 0.6 if pole_bars >= 40 else 0.8
+            _pole_eff_min = 0.65 if pole_bars >= 40 else 0.85
             if pole_gain_pct / pole_bars < _pole_eff_min:
                 continue
 
-            # 旗面段：旗杆顶点之后，直到收盘再次站上旗杆顶或末尾
+            # 旗面：杆顶日之后，直到收盘再次站上杆顶（略放宽）或序列末尾；不含杆顶日本身
             flag_face_end = n
             for j in range(pole_end + 1, n):
                 if sc[j] >= pole_end_price * 1.005:
                     flag_face_end = j
                     break
-            flag_segment = sc[pole_end:flag_face_end]
-            if len(flag_segment) < 3:
+            flag_rows = tail_rows[pole_end + 1 : flag_face_end]
+            if len(flag_rows) < 5:
+                continue
+            highs_seg: List[float] = []
+            lows_seg: List[float] = []
+            for row in flag_rows:
+                h = self._safe_float(row.get("high"))
+                lo = self._safe_float(row.get("low"))
+                if h is None or lo is None:
+                    highs_seg = []
+                    break
+                highs_seg.append(h)
+                lows_seg.append(lo)
+            if len(highs_seg) < 5:
                 continue
 
-            flag_low = min(flag_segment)
-            flag_high = max(flag_segment)
+            flag_high = max(highs_seg)
+            flag_low = min(lows_seg)
 
-            # 约束3：旗面回调 ≤ 旗杆涨幅的 55%
+            # 旗面不应反复创出高于杆顶太多的上影（宽顶横盘误报）
+            if flag_high > pole_end_price * 1.012:
+                continue
+
+            half = len(highs_seg) // 2
+            if half < 2:
+                continue
+            h_first = max(highs_seg[:half])
+            h_second = max(highs_seg[half:])
+            l_first = min(lows_seg[:half])
+            l_second = min(lows_seg[half:])
+            if h_first < h_second * 1.005:
+                continue
+            if l_first <= l_second * 1.002:
+                continue
+
             pullback_pct = (pole_end_price - flag_low) / pole_end_price * 100
-            if pullback_pct > pole_gain_pct * 0.55:
+            if pullback_pct > pole_gain_pct * 0.48:
                 continue
 
-            # 约束4：当前价未跌回旗杆起点
             if current_price < pole_start_price * 0.97:
                 continue
 
-            # 约束5：旗面振幅 < 旗杆涨幅的 80%
             flag_amplitude_pct = (flag_high - flag_low) / max(flag_low, 0.01) * 100
-            if flag_amplitude_pct >= pole_gain_pct * 0.80:
+            if flag_amplitude_pct >= pole_gain_pct * 0.65:
                 continue
 
             score = pole_gain_pct - pullback_pct * 0.4
