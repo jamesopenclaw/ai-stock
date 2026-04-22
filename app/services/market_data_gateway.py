@@ -172,6 +172,19 @@ class MarketDataGateway:
             daily_basic_df=daily_basic_df,
         )
 
+    def get_daily_basic_df(
+        self,
+        *,
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        fields: Optional[str] = None,
+    ):
+        return tushare_client._cached_pro_daily_basic(
+            ts_code=normalize_ts_code(ts_code) if ts_code else None,
+            trade_date=str(trade_date).replace("-", "") if trade_date else None,
+            fields=fields,
+        )
+
     @property
     def pro(self):
         return getattr(tushare_client, "pro", None)

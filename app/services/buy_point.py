@@ -153,6 +153,8 @@ class BuyPointService:
         account: Optional[AccountInput] = None,
         market_env=None,
         sector_scan=None,
+        selection_trade_date: Optional[str] = None,
+        realtime_sector_scan=None,
         scored_stocks: Optional[List[StockOutput]] = None,
         stock_pools: Optional[StockPoolsOutput] = None,
         review_bias_profile: Optional[Dict] = None,
@@ -198,6 +200,20 @@ class BuyPointService:
         for stock in stock_pools.holding_process_pool:
             pool_tag_by_code[stock.ts_code] = StockPoolTag.HOLDING_PROCESS
         direction_context = self._build_direction_context(sector_scan=sector_scan, stock_pools=stock_pools)
+        confirmation_required = bool(
+            selection_trade_date
+            and str(selection_trade_date).strip()
+            and str(selection_trade_date).strip() != str(trade_date).strip()
+            and realtime_sector_scan is not None
+        )
+        realtime_direction_context = (
+            self._build_direction_context(sector_scan=realtime_sector_scan)
+            if confirmation_required else None
+        )
+        confirmation_message = (
+            f"晚间候选基于 {selection_trade_date} 的稳定主线；今日执行前已按 {trade_date} 实时主线做二次确认。"
+            if confirmation_required else None
+        )
 
         # 分析每个股票的买点
         available = []   # 可买
@@ -217,6 +233,13 @@ class BuyPointService:
 
             buy_point = self._analyze_stock_buy_point(stock, market_env, account, review_bias_profile)
             buy_point = self._attach_direction_match(buy_point, stock, direction_context)
+            if confirmation_required and realtime_direction_context is not None:
+                buy_point = self._apply_execution_confirmation(
+                    buy_point,
+                    stock,
+                    stable_direction_context=direction_context,
+                    realtime_direction_context=realtime_direction_context,
+                )
             buy_point = self._apply_display_quote(buy_point, stock, display_quote_map)
             buy_point = self._invalidate_broken_buy_point(buy_point)
             buy_point = self._downgrade_far_from_trigger_available(buy_point, stock)
@@ -245,6 +268,10 @@ class BuyPointService:
 
         return BuyPointResponse(
             trade_date=trade_date,
+            selection_trade_date=selection_trade_date,
+            confirmation_trade_date=trade_date if confirmation_required else None,
+            confirmation_required=confirmation_required,
+            confirmation_message=confirmation_message,
             market_env_tag=market_env.market_env_tag,
             theme_leaders=self._summarize_sector_list(direction_context.get("theme_leaders", []), 3),
             industry_leaders=self._summarize_sector_list(direction_context.get("industry_leaders", []), 3),
@@ -253,6 +280,77 @@ class BuyPointService:
             not_buy_points=not_buy[:self.strategy.max_not_buy],
             total_count=analyzed_count
         )
+
+    def _apply_execution_confirmation(
+        self,
+        buy_point: BuyPointOutput,
+        stock: StockOutput,
+        *,
+        stable_direction_context: Dict[str, List[object]],
+        realtime_direction_context: Dict[str, List[object]],
+    ) -> BuyPointOutput:
+        stable_match = self._resolve_direction_match(stock, stable_direction_context)
+        realtime_match = self._resolve_direction_match(stock, realtime_direction_context)
+        stable_name = stable_match.get("direction_match_name")
+        stable_role = stable_match.get("direction_match_role")
+        realtime_name = realtime_match.get("direction_match_name")
+        realtime_role = realtime_match.get("direction_match_role")
+
+        buy_point.execution_confirmation_direction_name = realtime_name
+        buy_point.execution_confirmation_direction_role = realtime_role
+
+        if realtime_name and stable_name and realtime_name == stable_name:
+            buy_point.execution_confirmation_status = "已确认"
+            buy_point.execution_confirmation_note = f"实时主线仍命中 {realtime_name}，昨晚候选逻辑继续有效。"
+            return buy_point
+
+        if realtime_name and stable_name and realtime_name != stable_name:
+            buy_point.execution_confirmation_status = "主线切换"
+            buy_point.execution_confirmation_note = (
+                f"昨晚命中 {stable_name}，但今日实时主线更偏 {realtime_name}；"
+                "旧计划先降级，避免按昨晚主线机械执行。"
+            )
+            return self._downgrade_buy_point_after_confirmation(
+                buy_point,
+                target_signal=BuySignalTag.OBSERVE,
+            )
+
+        if realtime_name and not stable_name:
+            buy_point.execution_confirmation_status = "盘中转强"
+            buy_point.execution_confirmation_note = f"实时主线开始命中 {realtime_name}，但这不是昨晚的稳定候选方向。"
+            return self._downgrade_buy_point_after_confirmation(
+                buy_point,
+                target_signal=BuySignalTag.OBSERVE,
+            )
+
+        stable_label = stable_name or stable_role or stock.sector_name or stock.stock_name
+        buy_point.execution_confirmation_status = "失去共振"
+        buy_point.execution_confirmation_note = (
+            f"昨晚候选方向 {stable_label} 今日未在实时主线前排确认，"
+            "开盘后先视为失效，不按原计划直接出手。"
+        )
+        return self._downgrade_buy_point_after_confirmation(
+            buy_point,
+            target_signal=BuySignalTag.NOT_BUY,
+        )
+
+    def _downgrade_buy_point_after_confirmation(
+        self,
+        buy_point: BuyPointOutput,
+        *,
+        target_signal: BuySignalTag,
+    ) -> BuyPointOutput:
+        if buy_point.buy_signal_tag == BuySignalTag.NOT_BUY:
+            return buy_point
+        buy_point.buy_signal_tag = target_signal
+        if target_signal != BuySignalTag.CAN_BUY:
+            buy_point.recommended_order_pct = None
+            buy_point.recommended_order_amount = None
+            buy_point.recommended_shares = None
+            buy_point.recommended_lots = None
+            buy_point.sizing_reference_price = None
+            buy_point.sizing_note = None
+        return buy_point
 
     def _build_display_quote_map(
         self,

@@ -270,7 +270,7 @@ class SectorScanService:
                 SectorMainlineTag.SUB_MAINLINE,
             }
         ]
-        rows.sort(key=self._leader_sort_key, reverse=True)
+        rows.sort(key=self._display_leader_sort_key, reverse=True)
         return rows[:limit]
 
     def _select_industry_leaders(
@@ -286,7 +286,7 @@ class SectorScanService:
                 SectorMainlineTag.SUB_MAINLINE,
             }
         ]
-        rows.sort(key=self._leader_sort_key, reverse=True)
+        rows.sort(key=self._display_leader_sort_key, reverse=True)
         return rows[:limit]
 
     def _leader_sort_key(self, sector: SectorOutput) -> tuple:
@@ -303,6 +303,38 @@ class SectorScanService:
             float(sector.sector_turnover or 0),
             int(sector.sector_continuity_days or 0),
         )
+
+    def _display_leader_sort_key(self, sector: SectorOutput) -> tuple:
+        """主线展示优先看可执行性和扩散度，避免单票题材抢掉执行主线。"""
+        return (
+            self._leader_action_priority(sector),
+            self._leader_tier_priority(sector),
+            int(getattr(sector, "stock_count", None) or getattr(sector, "sector_stock_count", 0) or 0),
+            int(getattr(sector, "front_runner_count", 0) or 0),
+            *self._leader_sort_key(sector),
+        )
+
+    def _leader_action_priority(self, sector: SectorOutput) -> int:
+        action_hint = getattr(sector, "sector_action_hint", None)
+        if action_hint == SectorActionHint.EXECUTABLE:
+            return 3
+
+        tradeability = getattr(sector, "sector_tradeability_tag", None)
+        if tradeability == SectorTradeabilityTag.TRADABLE:
+            return 2
+        if action_hint == SectorActionHint.OBSERVE or tradeability == SectorTradeabilityTag.CAUTION:
+            return 1
+        return 0
+
+    def _leader_tier_priority(self, sector: SectorOutput) -> int:
+        tier = getattr(sector, "sector_tier", None)
+        if tier == SectorTierTag.A:
+            return 3
+        if tier == SectorTierTag.B:
+            return 2
+        if tier == SectorTierTag.C:
+            return 1
+        return 0
 
     def build_sector_top_stocks_from_scan(
         self,
@@ -478,17 +510,11 @@ class SectorScanService:
                 return []
 
             stock_meta_map = self.client._get_stock_basic_snapshot_map()
-            daily_basic_df = None
-            daily_basic = getattr(getattr(self.client, "pro", None), "daily_basic", None)
-            if callable(daily_basic):
-                data_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
-                try:
-                    daily_basic_df = daily_basic(
-                        trade_date=data_trade_date,
-                        fields="ts_code,turnover_rate,volume_ratio",
-                    )
-                except TypeError:
-                    daily_basic_df = daily_basic(trade_date=data_trade_date)
+            data_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
+            daily_basic_df = self.client.get_daily_basic_df(
+                trade_date=data_trade_date,
+                fields="ts_code,turnover_rate,volume_ratio",
+            )
 
             work = self.client._build_daily_stock_source_df(
                 df,
@@ -897,17 +923,11 @@ class SectorScanService:
                 return []
 
             stock_meta_map = self.client._get_stock_basic_snapshot_map()
-            daily_basic_df = None
-            daily_basic = getattr(getattr(self.client, "pro", None), "daily_basic", None)
-            if callable(daily_basic):
-                data_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
-                try:
-                    daily_basic_df = daily_basic(
-                        trade_date=data_trade_date,
-                        fields="ts_code,turnover_rate,volume_ratio",
-                    )
-                except TypeError:
-                    daily_basic_df = daily_basic(trade_date=data_trade_date)
+            data_trade_date = str(payload.get("data_trade_date") or compact_trade_date)
+            daily_basic_df = self.client.get_daily_basic_df(
+                trade_date=data_trade_date,
+                fields="ts_code,turnover_rate,volume_ratio",
+            )
 
             work = self.client._build_daily_stock_source_df(
                 df,

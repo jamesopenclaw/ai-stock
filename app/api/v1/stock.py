@@ -4,6 +4,7 @@
 import asyncio
 import time
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.exc import IntegrityError
 from typing import Optional
 from datetime import datetime
 import logging
@@ -11,6 +12,8 @@ import logging
 from app.models.schemas import (
     ApiResponse,
     LlmCallStatus,
+    ManualWatchAddRequest,
+    StockCheckupLlmRequest,
     StockCheckupTarget,
 )
 from app.services.stock_filter import (
@@ -24,6 +27,12 @@ from app.services.pattern_analysis import pattern_analysis_service
 from app.services.buy_point_sop import buy_point_sop_service
 from app.services.sell_point_sop import sell_point_sop_service
 from app.services.llm_explainer import llm_explainer_service
+from app.services.manual_watch_service import (
+    add_ts_code as manual_watch_add,
+    build_manual_watch_view,
+    list_ts_codes as manual_watch_list_codes,
+    remove_ts_code as manual_watch_remove,
+)
 from app.services.review_snapshot import review_snapshot_service
 from app.services.sector_scan_snapshot import resolve_snapshot_lookup_trade_date
 from app.services.notification_engine import notification_engine
@@ -751,6 +760,26 @@ async def get_stock_detail(
         return ApiResponse(code=500, message=f"获取个股详情失败: {str(e)}")
 
 
+@router.post("/checkup-llm", response_model=ApiResponse)
+async def post_stock_checkup_llm(
+    payload: StockCheckupLlmRequest,
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
+    """基于首轮返回的 rule_snapshot 单独生成 LLM 解读（异步第二阶段）。"""
+    try:
+        account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
+        overlay = await stock_checkup_service.checkup_llm_overlay(
+            payload.rule_snapshot,
+            payload.trade_date,
+            payload.checkup_target,
+            account_id=account_id,
+            force_llm_refresh=payload.force_llm_refresh,
+        )
+        return ApiResponse(data=overlay.model_dump(mode="json"))
+    except Exception as e:
+        return ApiResponse(code=500, message=f"获取个股体检 LLM 解读失败: {str(e)}")
+
+
 @router.get("/checkup/{ts_code}", response_model=ApiResponse)
 async def get_stock_checkup(
     ts_code: str,
@@ -760,6 +789,10 @@ async def get_stock_checkup(
         description="体检目标：观察型 / 持仓型 / 交易型",
     ),
     force_llm_refresh: bool = Query(False, description="是否强制刷新 LLM 缓存"),
+    include_llm: bool = Query(
+        True,
+        description="为 false 时只返回规则快照，LLM 由 POST /stock/checkup-llm 异步补齐",
+    ),
     current_account: AuthenticatedAccount = Depends(get_current_account),
 ) -> ApiResponse:
     """获取单只股票的全面体检结果。"""
@@ -774,6 +807,7 @@ async def get_stock_checkup(
             checkup_target,
             account_id=account_id,
             force_llm_refresh=force_llm_refresh,
+            include_llm=include_llm,
         )
         return ApiResponse(data=result.model_dump(mode="json"))
     except Exception as e:
@@ -856,3 +890,72 @@ async def get_stock_sell_analysis(
         return ApiResponse(data=result.model_dump(mode="json"))
     except Exception as e:
         return ApiResponse(code=500, message=f"获取卖点分析失败: {str(e)}")
+
+
+@router.get("/manual-watch", response_model=ApiResponse)
+async def get_manual_watch(
+    trade_date: Optional[str] = Query(None, description="用于补全行情的交易日，YYYY-MM-DD，默认今天"),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
+    """按当前交易账户返回手动跟踪列表（含当日行情与规则评分，不入自动三池结论）。"""
+    if not trade_date:
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+    try:
+        account_key = current_account.id
+        entries = await manual_watch_list_codes(account_key)
+        context_account_id = _resolve_account_id(current_account) if settings.auth_enabled else None
+        items = await build_manual_watch_view(trade_date, context_account_id, entries)
+        return ApiResponse(
+            data={
+                "trade_date": trade_date,
+                "items": items,
+                "total": len(items),
+            }
+        )
+    except Exception as e:
+        return ApiResponse(code=500, message=f"获取手动跟踪列表失败: {str(e)}")
+
+
+@router.post("/manual-watch", response_model=ApiResponse)
+async def post_manual_watch(
+    body: ManualWatchAddRequest,
+    trade_date: Optional[str] = Query(None, description="校验行情用的交易日，YYYY-MM-DD，默认今天"),
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
+    """向当前账户的手动跟踪池添加一只股票。"""
+    if not trade_date:
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+    raw = str(body.ts_code or "").strip()
+    if not raw:
+        return ApiResponse(code=400, message="股票代码不能为空")
+    try:
+        decision_context_service.build_single_stock_input(
+            raw,
+            trade_date,
+            candidate_source_tag="手动跟踪",
+        )
+    except Exception as exc:
+        return ApiResponse(code=400, message=f"无法解析该代码或暂无有效行情：{exc}")
+    account_key = current_account.id
+    try:
+        await manual_watch_add(account_key, raw)
+    except IntegrityError:
+        return ApiResponse(code=409, message="该代码已在手动跟踪列表中")
+    except Exception as e:
+        return ApiResponse(code=500, message=f"添加失败: {str(e)}")
+    return ApiResponse(data={"ok": True})
+
+
+@router.delete("/manual-watch/{ts_code:path}", response_model=ApiResponse)
+async def delete_manual_watch(
+    ts_code: str,
+    current_account: AuthenticatedAccount = Depends(get_current_account),
+) -> ApiResponse:
+    """从当前账户的手动跟踪池移除一只股票。"""
+    try:
+        removed = await manual_watch_remove(current_account.id, ts_code)
+    except Exception as e:
+        return ApiResponse(code=500, message=f"删除失败: {str(e)}")
+    if not removed:
+        return ApiResponse(code=404, message="该代码不在手动跟踪列表中")
+    return ApiResponse(data={"ok": True, "removed": removed})

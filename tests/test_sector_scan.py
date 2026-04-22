@@ -844,6 +844,51 @@ class TestSectorScan:
         assert result.industry_leaders[0].sector_name == "通用设备"
         assert result.industry_leaders[0].sector_source_type == "industry"
 
+    def test_theme_leader_prefers_executable_a_mainline_over_single_stock_theme(self, service):
+        single_stock_theme = SectorOutput(
+            sector_name="2025三季报预增",
+            sector_source_type="concept",
+            sector_change_pct=9.98,
+            sector_score=100,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.CAUTION,
+            sector_continuity_days=2,
+            sector_turnover=67896.12,
+            sector_stock_count=1,
+            sector_reason_tags=["题材集中度高", "B类", "只观察"],
+            sector_comment="主线板块，谨慎参与，强化中",
+            sector_tier=SectorTierTag.B,
+            sector_action_hint=SectorActionHint.OBSERVE,
+            sector_rotation_tag=SectorRotationTag.STRENGTHENING,
+            sector_summary_reason="联动尚可，资金承接强，持续性较好，抗分化较强，强化中",
+        )
+        executable_mainline = SectorOutput(
+            sector_name="算力租赁",
+            sector_source_type="concept",
+            sector_change_pct=4.20,
+            sector_score=100,
+            sector_strength_rank=2,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.OBSERVABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=1,
+            sector_turnover=2376736.76,
+            sector_stock_count=14,
+            sector_reason_tags=["成分扩散较好", "A类", "可执行"],
+            sector_comment="主线板块，可交易，强化中",
+            sector_tier=SectorTierTag.A,
+            sector_action_hint=SectorActionHint.EXECUTABLE,
+            sector_rotation_tag=SectorRotationTag.STRENGTHENING,
+            sector_summary_reason="联动强，资金承接强，延续性待确认，抗分化较强，强化中",
+        )
+
+        leaders = service._select_theme_leaders([single_stock_theme, executable_mainline])
+
+        assert leaders[0].sector_name == "算力租赁"
+        assert leaders[1].sector_name == "2025三季报预增"
+
     def test_build_sector_top_stocks_from_scan(self, service, monkeypatch):
         scan_result = SectorScanResponse(
             trade_date="2026-03-23",

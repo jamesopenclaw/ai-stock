@@ -587,6 +587,10 @@ class BuyPointOutput(BaseModel):
     direction_match_source_type: Optional[str] = Field(None, description="命中的方向来源类型")
     direction_match_role: Optional[str] = Field(None, description="命中的方向角色")
     direction_match_note: Optional[str] = Field(None, description="方向匹配说明")
+    execution_confirmation_status: Optional[str] = Field(None, description="次日执行确认状态")
+    execution_confirmation_note: Optional[str] = Field(None, description="次日执行确认说明")
+    execution_confirmation_direction_name: Optional[str] = Field(None, description="实时确认命中的方向名称")
+    execution_confirmation_direction_role: Optional[str] = Field(None, description="实时确认命中的方向角色")
     candidate_source_tag: str = Field(default="", description="候选来源标签")
     candidate_bucket_tag: str = Field(default="", description="候选分层标签")
     stock_pool_tag: str = Field(default="", description="来源池标签")
@@ -648,6 +652,10 @@ class BuyPointRequest(BaseModel):
 class BuyPointResponse(BaseModel):
     """买点分析响应"""
     trade_date: str
+    selection_trade_date: Optional[str] = Field(None, description="晚间候选使用的稳定交易日")
+    confirmation_trade_date: Optional[str] = Field(None, description="盘中确认使用的交易日")
+    confirmation_required: bool = Field(False, description="是否需要次日执行确认")
+    confirmation_message: Optional[str] = Field(None, description="次日执行确认说明")
     market_env_tag: MarketEnvTag
     theme_leaders: List[SectorOutput] = Field(default_factory=list, description="主线题材")
     industry_leaders: List[SectorOutput] = Field(default_factory=list, description="承接行业")
@@ -1361,6 +1369,14 @@ class StockPatternResult(BaseModel):
     pattern_phase: str = ""
     pattern_summary: str = ""
     pattern_rationale: str = ""
+    direction_bias: str = Field(
+        default="",
+        description="LLM：基于形态与特征快照的后续方向判断（看多/看空/中性），规则引擎留空。",
+    )
+    direction_rationale: str = Field(
+        default="",
+        description="LLM：对 direction_bias 的简要推理，须与输入中的 K 线/形态事实一致。",
+    )
     execution_hint: str = ""
     risk_hint: str = ""
     action_advice: str = ""
@@ -1396,6 +1412,25 @@ class StockCheckupRequest(BaseModel):
         description="体检目标",
     )
     force_llm_refresh: bool = Field(False, description="是否强制刷新 LLM 缓存")
+
+
+class StockCheckupLlmRequest(BaseModel):
+    """仅生成个股体检 LLM 解读（与 GET checkup include_llm=false 配套）。"""
+
+    rule_snapshot: StockCheckupRuleSnapshot = Field(..., description="与首轮体检一致的规则快照")
+    trade_date: str = Field(..., description="交易日 YYYY-MM-DD")
+    checkup_target: StockCheckupTarget = Field(
+        default=StockCheckupTarget.OBSERVE,
+        description="体检目标",
+    )
+    force_llm_refresh: bool = Field(False, description="是否强制刷新 LLM 缓存")
+
+
+class StockCheckupLlmOverlay(BaseModel):
+    """异步 LLM 层返回体，用于合并进 StockCheckupResponse。"""
+
+    llm_report: Optional[LlmStockCheckupReport] = None
+    llm_status: "LlmCallStatus"
 
 
 class StockCheckupResponse(BaseModel):
@@ -1538,6 +1573,11 @@ class NotificationSettingsPayload(BaseModel):
         return self
 
 
+class ManualWatchAddRequest(BaseModel):
+    """手动跟踪池添加请求"""
+    ts_code: str = Field(..., min_length=6, max_length=32, description="Tushare 格式代码，如 000001.SZ")
+
+
 # ========== 通用响应 ==========
 
 class ApiResponse(BaseModel):
@@ -1548,4 +1588,5 @@ class ApiResponse(BaseModel):
 
 
 StockCheckupResponse.model_rebuild()
+StockCheckupLlmOverlay.model_rebuild()
 StockPatternAnalysisResponse.model_rebuild()

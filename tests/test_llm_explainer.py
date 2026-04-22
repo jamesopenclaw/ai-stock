@@ -283,6 +283,8 @@ class TestLlmExplainer:
                 "execution_hint": "先盯 6.12 一线是否放量站稳。",
                 "risk_hint": "如果冲高回落，容易退化成高位震荡。",
                 "invalid_if": "跌破 5.96 并收不回，当前形态语义明显转弱。",
+                "direction_bias": "强烈看多",
+                "direction_rationale": "平台临近突破且均线偏多，量能温和。",
             },
             sample_pattern_payload["pattern_analysis"],
         )
@@ -290,6 +292,35 @@ class TestLlmExplainer:
         assert normalized["primary_pattern"] == "平台突破临界"
         assert normalized["secondary_patterns"] == ["高位震荡/派发嫌疑"]
         assert normalized["confidence"] == "中"
+        assert normalized["direction_bias"] == ""
+        assert normalized["direction_rationale"] == "平台临近突破且均线偏多，量能温和。"
+
+        normalized_ok = service._normalize_stock_pattern_result(
+            {
+                "primary_pattern": "平台突破临界",
+                "secondary_patterns": [],
+                "confidence": "中",
+                "pattern_phase": "临近突破",
+                "pattern_summary": "平台上沿附近等待确认。",
+                "pattern_rationale": "价格靠近平台上沿，均线关系偏多。",
+                "execution_hint": "先盯 6.12 一线是否放量站稳。",
+                "risk_hint": "如果冲高回落，容易退化成高位震荡。",
+                "invalid_if": "跌破 5.96 并收不回，当前形态语义明显转弱。",
+                "direction_bias": "看多",
+                "direction_rationale": "平台突破临界叠加均线多头排列，区间位置偏高需谨慎。",
+            },
+            sample_pattern_payload["pattern_analysis"],
+        )
+        assert normalized_ok["direction_bias"] == "看多"
+        assert "均线多头" in normalized_ok["direction_rationale"]
+
+    def test_sanitize_pattern_display_chinese_strips_snake_case_tokens(self, service):
+        raw = "因为primary_pattern是「上升趋势延续」，且feature_snapshot中均线多头排列"
+        out = service._sanitize_pattern_display_chinese(raw)
+        assert "primary_pattern" not in out.lower()
+        assert "feature_snapshot" not in out.lower()
+        assert "主形态" in out
+        assert "规则特征快照" in out
 
     def test_summarize_stock_pools_returns_none_when_llm_disabled(self, service, sample_stock_pools):
         class MockMarketEnv:
@@ -806,7 +837,7 @@ class TestLlmExplainer:
         assert calls["model"] == 1
         assert calls["cache_write"] == 1
 
-    def test_explain_stock_checkup_retries_with_compact_and_ultra_payloads_after_timeout(
+    def test_explain_stock_checkup_retries_ultra_then_full_after_compact_timeout(
         self,
         service,
         sample_checkup_snapshot,
@@ -839,7 +870,7 @@ class TestLlmExplainer:
                             "enabled": True,
                             "success": False,
                             "status": "timeout",
-                            "message": "模型请求超时",
+                            "message": "模型请求超时 [stock_checkup_compact]",
                         },
                     )(),
                 )
@@ -853,7 +884,7 @@ class TestLlmExplainer:
                             "enabled": True,
                             "success": False,
                             "status": "timeout",
-                            "message": "模型请求超时 [stock_checkup_compact_retry]",
+                            "message": "模型请求超时 [stock_checkup_ultra_compact_retry]",
                         },
                     )(),
                 )
@@ -901,11 +932,12 @@ class TestLlmExplainer:
         assert len(report.llm_report_sections) == 11
         assert status.success is True
         assert len(calls) == 3
-        assert calls[0].get("payload_mode") is None
-        assert calls[1].get("payload_mode") == "compact_retry"
-        assert calls[2].get("payload_mode") == "ultra_compact_retry"
+        assert calls[0].get("payload_mode") == "compact_retry"
+        assert calls[1].get("payload_mode") == "ultra_compact_retry"
+        assert calls[2].get("payload_mode") is None
         assert calls[0]["prompt_version"] == service.CHECKUP_PROMPT_VERSION
         assert calls[1]["prompt_version"] == service.CHECKUP_PROMPT_VERSION
         assert calls[2]["prompt_version"] == service.CHECKUP_PROMPT_VERSION
-        assert len(calls[1]["rule_snapshot"]["peer_comparison"]["peers"]) <= 2
-        assert "peer_comparison" not in calls[2]["rule_snapshot"]
+        assert len(calls[0]["rule_snapshot"]["peer_comparison"]["peers"]) <= 2
+        assert "peer_comparison" not in calls[1]["rule_snapshot"]
+        assert "peer_comparison" in calls[2]["rule_snapshot"]

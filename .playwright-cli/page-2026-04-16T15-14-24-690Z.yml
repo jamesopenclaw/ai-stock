@@ -1,0 +1,97 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e6]:
+      - heading "轻舟交易系统" [level=3] [ref=e7]
+      - generic [ref=e8]: 交易工作台
+    - menubar [ref=e9]:
+      - listitem [ref=e10]:
+        - generic [ref=e11]: 交易决策
+        - list [ref=e12]:
+          - menuitem "今日指令" [ref=e13] [cursor=pointer]:
+            - img [ref=e15]
+            - generic [ref=e17]: 今日指令
+          - menuitem "市场环境" [ref=e18] [cursor=pointer]:
+            - img [ref=e20]
+            - generic [ref=e22]: 市场环境
+          - menuitem "板块扫描" [ref=e23] [cursor=pointer]:
+            - img [ref=e25]
+            - generic [ref=e27]: 板块扫描
+          - menuitem "三池分类" [ref=e28] [cursor=pointer]:
+            - img [ref=e30]
+            - generic [ref=e32]: 三池分类
+          - menuitem "买点分析" [ref=e33] [cursor=pointer]:
+            - img [ref=e35]
+            - generic [ref=e37]: 买点分析
+          - menuitem "卖点分析" [ref=e38] [cursor=pointer]:
+            - img [ref=e40]
+            - generic [ref=e42]: 卖点分析
+          - menuitem "账户管理" [ref=e43] [cursor=pointer]:
+            - img [ref=e45]
+            - generic [ref=e49]: 账户管理
+          - menuitem "复盘统计" [ref=e50] [cursor=pointer]:
+            - img [ref=e52]
+            - generic [ref=e54]: 复盘统计
+      - listitem [ref=e55]:
+        - generic [ref=e56]: 系统管理
+        - list [ref=e57]:
+          - menuitem "LLM调用记录" [ref=e58] [cursor=pointer]:
+            - img [ref=e60]
+            - generic [ref=e62]: LLM调用记录
+          - menuitem "系统设置" [ref=e63] [cursor=pointer]:
+            - img [ref=e65]
+            - generic [ref=e67]: 系统设置
+          - menuitem "任务调度" [ref=e68] [cursor=pointer]:
+            - img [ref=e70]
+            - generic [ref=e72]: 任务调度
+          - menuitem "用户管理" [ref=e73] [cursor=pointer]:
+            - img [ref=e75]
+            - generic [ref=e77]: 用户管理
+          - menuitem "交易账户" [ref=e78] [cursor=pointer]:
+            - img [ref=e80]
+            - generic [ref=e82]: 交易账户
+  - generic [ref=e83]:
+    - generic [ref=e84]:
+      - generic [ref=e85]:
+        - generic [ref=e87]: 交易决策
+        - generic [ref=e88]: 三池分类
+      - generic [ref=e89]:
+        - generic [ref=e90]:
+          - generic [ref=e92]: 系统管理员
+          - generic [ref=e94]: 管理员
+          - generic [ref=e95]:
+            - generic [ref=e96]: 当前账户
+            - generic [ref=e98]: 默认账户
+        - button [ref=e100] [cursor=pointer]:
+          - img [ref=e103]
+        - generic [ref=e108]: 2026-04-16
+        - button "退出登录" [ref=e109] [cursor=pointer]:
+          - generic [ref=e110]: 退出登录
+    - main [ref=e111]:
+      - generic [ref=e115]:
+        - generic [ref=e116]:
+          - generic [ref=e117]: 三池分类
+          - generic [ref=e118]: 2026-04-16
+        - generic [ref=e119]:
+          - radiogroup "radio-group" [ref=e120]:
+            - generic [ref=e121]:
+              - radio "稳定模式" [checked] [ref=e122]
+              - generic [ref=e123] [cursor=pointer]: 稳定模式
+            - generic [ref=e124]:
+              - radio "实时雷达" [ref=e125]
+              - generic [ref=e126] [cursor=pointer]: 实时雷达
+          - generic [ref=e127]:
+            - generic [ref=e128]: 候选风格
+            - radiogroup "radio-group" [ref=e129]:
+              - generic [ref=e130]:
+                - radio "均衡" [checked] [ref=e131]
+                - generic [ref=e132] [cursor=pointer]: 均衡
+              - generic [ref=e133]:
+                - radio "偏左侧" [ref=e134]
+                - generic [ref=e135] [cursor=pointer]: 偏左侧
+              - generic [ref=e136]:
+                - radio "偏右侧" [ref=e137]
+                - generic [ref=e138] [cursor=pointer]: 偏右侧
+          - button "刷新" [disabled]:
+            - generic:
+              - img
+            - generic: 刷新

@@ -46,6 +46,7 @@ class DecisionFlowService:
         include_holdings: bool,
         account_id: Optional[str] = None,
         shared_context: Optional[SharedDecisionContext] = None,
+        enrich_execution_proximity: bool = True,
     ) -> CandidateAnalysisBundle:
         if shared_context is None:
             context = await decision_context_service.build_context(
@@ -86,14 +87,15 @@ class DecisionFlowService:
             scored_stocks=scored_stocks,
             review_bias_profile=review_bias_profile,
         )
-        await buy_point_sop_service.enrich_execution_proximity(
-            [
-                *list(stock_pools.account_executable_pool or []),
-                *list(stock_pools.market_watch_pool or []),
-            ],
-            trade_date,
-            account_id=account_id,
-        )
+        if enrich_execution_proximity:
+            await buy_point_sop_service.enrich_execution_proximity(
+                [
+                    *list(stock_pools.account_executable_pool or []),
+                    *list(stock_pools.market_watch_pool or []),
+                ],
+                trade_date,
+                account_id=account_id,
+            )
         return CandidateAnalysisBundle(
             context=context,
             review_bias_profile=review_bias_profile,
@@ -122,6 +124,8 @@ class DecisionFlowService:
             candidate_bundle.context.account,
             market_env=candidate_bundle.context.market_env,
             sector_scan=candidate_bundle.context.sector_scan,
+            selection_trade_date=candidate_bundle.context.shared_context.selection_trade_date,
+            realtime_sector_scan=candidate_bundle.context.realtime_sector_scan,
             scored_stocks=candidate_bundle.scored_stocks,
             stock_pools=candidate_bundle.stock_pools,
             review_bias_profile=candidate_bundle.review_bias_profile,

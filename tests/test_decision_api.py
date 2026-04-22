@@ -290,7 +290,7 @@ async def test_buy_point_page_saves_review_snapshot(monkeypatch):
     assert snapshot_calls[0]["stock_pools"] is pools
     assert snapshot_calls[0]["buy_analysis"] is buy_result
     assert len(page_snapshot_calls) == 1
-    assert page_snapshot_calls[0]["candidate_limit"] == 100
+    assert page_snapshot_calls[0]["candidate_limit"] == 60
 
 
 @pytest.mark.asyncio
@@ -409,13 +409,7 @@ async def test_buy_point_prefers_cached_stock_pools_snapshot(monkeypatch):
 
     assert response.code == 200
     assert response.data["total_count"] == 1
-    assert enrich_calls == [
-        {
-            "trade_date": "2026-03-24",
-            "account_id": None,
-            "codes": ["000001.SZ"],
-        }
-    ]
+    assert enrich_calls == []
     assert saved_snapshots == [
         {
             "trade_date": "2026-03-24",
@@ -566,6 +560,7 @@ async def test_buy_point_refresh_bypasses_cached_stock_pools_snapshot(monkeypatc
 
     assert response.code == 200
     assert build_calls
+    assert build_calls[0]["enrich_execution_proximity"] is False
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ import pandas as pd
 
 from app.services.market_data_gateway import market_data_gateway
 from app.models.schemas import (
+    LlmCallStatus,
     StockCheckupBasicInfo,
     StockCheckupBuyView,
     StockCheckupDailyStructure,
@@ -23,6 +24,7 @@ from app.models.schemas import (
     StockCheckupMarketContext,
     StockCheckupPeerComparison,
     StockCheckupPeerItem,
+    StockCheckupLlmOverlay,
     StockCheckupResponse,
     StockCheckupRuleSnapshot,
     StockCheckupSellView,
@@ -65,6 +67,7 @@ class StockCheckupService:
         *,
         account_id: Optional[str] = None,
         force_llm_refresh: bool = False,
+        include_llm: bool = True,
     ) -> StockCheckupResponse:
         normalized_code = market_data_gateway.normalize_ts_code(ts_code)
         context = await decision_context_service.build_context(
@@ -171,13 +174,30 @@ class StockCheckupService:
             buy_view=buy_view,
             sell_view=sell_view,
         )
-        llm_report, llm_status = await llm_explainer_service.explain_stock_checkup_with_status(
-            rule_snapshot,
-            trade_date=trade_date,
-            checkup_target=checkup_target,
-            account_id=account_id,
-            force_refresh=force_llm_refresh,
-        )
+        if include_llm:
+            llm_report, llm_status = await llm_explainer_service.explain_stock_checkup_with_status(
+                rule_snapshot,
+                trade_date=trade_date,
+                checkup_target=checkup_target,
+                account_id=account_id,
+                force_refresh=force_llm_refresh,
+            )
+        elif await llm_explainer_service.is_enabled():
+            llm_report = None
+            llm_status = LlmCallStatus(
+                enabled=True,
+                success=False,
+                status="pending",
+                message="规则已就绪，LLM 解读异步加载中",
+            )
+        else:
+            llm_report = None
+            llm_status = LlmCallStatus(
+                enabled=False,
+                success=False,
+                status="disabled",
+                message="LLM 未启用或配置不完整",
+            )
         return StockCheckupResponse(
             trade_date=trade_date,
             resolved_trade_date=resolved_trade_date or context.resolved_stock_trade_date,
@@ -187,6 +207,24 @@ class StockCheckupService:
             llm_report=llm_report,
             llm_status=llm_status,
         )
+
+    async def checkup_llm_overlay(
+        self,
+        rule_snapshot: StockCheckupRuleSnapshot,
+        trade_date: str,
+        checkup_target: StockCheckupTarget,
+        *,
+        account_id: Optional[str] = None,
+        force_llm_refresh: bool = False,
+    ) -> StockCheckupLlmOverlay:
+        llm_report, llm_status = await llm_explainer_service.explain_stock_checkup_with_status(
+            rule_snapshot,
+            trade_date=trade_date,
+            checkup_target=checkup_target,
+            account_id=account_id,
+            force_refresh=force_llm_refresh,
+        )
+        return StockCheckupLlmOverlay(llm_report=llm_report, llm_status=llm_status)
 
     def _resolve_target_input(self, stocks, ts_code: str):
         for stock in stocks:

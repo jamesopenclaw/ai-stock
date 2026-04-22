@@ -37,6 +37,7 @@ class SharedDecisionContext:
     stocks: List[StockInput]
     candidate_data_status: Optional[str] = None
     candidate_data_message: Optional[str] = None
+    realtime_sector_scan: object = None
 
 
 @dataclass
@@ -69,6 +70,7 @@ class DecisionContext:
     account: AccountInput
     shared_context: SharedDecisionContext
     account_context: AccountDecisionContext
+    realtime_sector_scan: object = None
 
 
 class DecisionContextService:
@@ -83,6 +85,19 @@ class DecisionContextService:
     async def _resolve_selection_trade_date(self, trade_date: str) -> str:
         """三池/选股默认跟随板块页的稳定快照日。"""
         return await resolve_snapshot_lookup_trade_date(trade_date)
+
+    def _should_build_realtime_confirmation_context(
+        self,
+        trade_date: str,
+        selection_trade_date: str,
+    ) -> bool:
+        today = datetime.now().strftime("%Y-%m-%d")
+        return bool(
+            trade_date
+            and selection_trade_date
+            and trade_date == today
+            and selection_trade_date != trade_date
+        )
 
     def _enrich_holding_time_fields(
         self,
@@ -319,17 +334,11 @@ class DecisionContextService:
             return []
 
         stock_meta_map = market_data_gateway.get_stock_basic_snapshot_map()
-        daily_basic_df = None
-        daily_basic = getattr(market_data_gateway.pro, "daily_basic", None)
         data_trade_date = str(payload.get("data_trade_date") or str(trade_date).replace("-", ""))
-        if callable(daily_basic):
-            try:
-                daily_basic_df = daily_basic(
-                    trade_date=data_trade_date,
-                    fields="ts_code,turnover_rate,volume_ratio",
-                )
-            except TypeError:
-                daily_basic_df = daily_basic(trade_date=data_trade_date)
+        daily_basic_df = market_data_gateway.get_daily_basic_df(
+            trade_date=data_trade_date,
+            fields="ts_code,turnover_rate,volume_ratio",
+        )
 
         source_df = market_data_gateway.build_daily_stock_source_df(
             df,
@@ -553,6 +562,21 @@ class DecisionContextService:
                 limit_output=False,
                 market_env=market_env,
             )
+        realtime_sector_scan = sector_scan
+        if self._should_build_realtime_confirmation_context(trade_date, selection_trade_date):
+            try:
+                realtime_sector_scan = sector_scan_service.scan(
+                    trade_date,
+                    limit_output=False,
+                    market_env=realtime_market_env,
+                    prefer_today=True,
+                )
+            except TypeError:
+                realtime_sector_scan = sector_scan_service.scan(
+                    trade_date,
+                    limit_output=False,
+                    market_env=realtime_market_env,
+                )
         candidate_payload = self.get_candidate_stocks(
             selection_trade_date,
             top_gainers=top_gainers,
@@ -577,6 +601,7 @@ class DecisionContextService:
             market_env=market_env,
             realtime_market_env=realtime_market_env,
             sector_scan=sector_scan,
+            realtime_sector_scan=realtime_sector_scan,
             stocks=stocks,
         )
 
@@ -627,6 +652,7 @@ class DecisionContextService:
             market_env=shared_context.market_env,
             realtime_market_env=shared_context.realtime_market_env,
             sector_scan=shared_context.sector_scan,
+            realtime_sector_scan=shared_context.realtime_sector_scan,
             stocks=stocks,
             holdings_list=account_context.holdings_list,
             holdings=account_context.holdings,

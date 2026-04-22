@@ -1289,6 +1289,86 @@
               </article>
             </div>
           </el-tab-pane>
+
+          <el-tab-pane name="manual">
+            <template #label>
+              <span>自选跟踪 <em class="tab-count">{{ manualWatchCount }}</em></span>
+            </template>
+            <el-alert
+              type="info"
+              show-icon
+              :closable="false"
+              class="page-alert manual-watch-alert"
+              title="自选跟踪仅人工维护，用于盯自己关心的代码；不会写入自动三池分类结论，也不改变总闸门与买点资格口径。"
+            />
+            <div class="manual-watch-toolbar">
+              <el-input
+                v-model="manualAddCode"
+                clearable
+                placeholder="输入代码，如 000001.SZ"
+                class="manual-watch-input"
+                @keyup.enter="handleManualWatchAdd"
+              />
+              <el-button type="primary" :loading="manualAddLoading" @click="handleManualWatchAdd">
+                添加
+              </el-button>
+              <el-button text :loading="manualWatchLoading" @click="loadManualWatch">刷新列表</el-button>
+            </div>
+            <el-skeleton v-if="manualWatchLoading && !manualWatchItems.length" :rows="4" animated />
+            <el-empty v-else-if="!manualWatchCount" description="暂无自选，可在上方输入代码添加" />
+            <div v-else class="signal-grid">
+              <article
+                v-for="stock in manualWatchItems"
+                :key="stock.ts_code"
+                class="signal-card signal-card-manual"
+              >
+                <div class="signal-card-header">
+                  <div>
+                    <div class="signal-stock">{{ stock.stock_name }}</div>
+                    <div class="signal-code">{{ stock.ts_code }}</div>
+                  </div>
+                  <div class="signal-badges">
+                    <el-tag size="small" type="info">{{ stock.candidate_source_tag || '手动跟踪' }}</el-tag>
+                    <el-tag v-if="stock.manual_watch_added_at" size="small" type="info" effect="plain">
+                      添加于 {{ stock.manual_watch_added_at }}
+                    </el-tag>
+                  </div>
+                </div>
+                <div class="signal-meta">
+                  <span>{{ stock.sector_name || '无板块信息' }}</span>
+                  <span>{{ stock.pool_entry_reason || '自选跟踪' }}</span>
+                </div>
+                <div class="quote-strip">
+                  <div class="quote-main">
+                    <span class="quote-label">最新价</span>
+                    <strong class="quote-price">{{ formatPrice(stock.close) }}</strong>
+                    <span :class="['quote-change', pctClass(stock.change_pct)]">
+                      {{ formatSignedPct(stock.change_pct) }}
+                    </span>
+                    <span class="quote-source" :class="{ 'quote-source-live': isRealtimeSource(stock.data_source) }">
+                      {{ quoteMetaLine(stock.data_source, stock.quote_time, displayDate) }}
+                    </span>
+                  </div>
+                  <div class="quote-side">
+                    <span class="quote-pair">
+                      市场分
+                      <strong>{{ formatScore(stock.market_strength_score) }}</strong>
+                    </span>
+                    <span class="quote-pair">
+                      执行分
+                      <strong>{{ formatScore(stock.execution_opportunity_score) }}</strong>
+                    </span>
+                  </div>
+                </div>
+                <div class="signal-footer">
+                  <el-button type="danger" link size="small" @click="handleManualWatchRemove(stock.ts_code)">从列表移除</el-button>
+                  <el-button class="buy-analysis-btn" size="small" @click="openBuyAnalysis(stock)">买点详解</el-button>
+                  <el-button type="primary" link size="small" @click="openCheckup(stock, '观察型')">全面体检</el-button>
+                  <el-button type="warning" link size="small" @click="openPatternAnalysis(stock)">形态分析</el-button>
+                </div>
+              </article>
+            </div>
+          </el-tab-pane>
         </el-tabs>
         </el-card>
       </template>
@@ -1443,7 +1523,7 @@
 import { computed, ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { stockApi, decisionApi } from '../api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import StockCheckupDrawer from '../components/StockCheckupDrawer.vue'
 import BuyAnalysisDrawer from '../components/BuyAnalysisDrawer.vue'
 import SellAnalysisDrawer from '../components/SellAnalysisDrawer.vue'
@@ -1482,6 +1562,10 @@ const buyAnalysisVisible = ref(false)
 const buyAnalysisStock = ref({ tsCode: '', stockName: '', sourcePoolTag: '', currentPrice: null, currentChangePct: null })
 const sellAnalysisVisible = ref(false)
 const sellAnalysisStock = ref({ tsCode: '', stockName: '', currentPrice: null, currentPnlPct: null })
+const manualWatchItems = ref([])
+const manualWatchLoading = ref(false)
+const manualAddCode = ref('')
+const manualAddLoading = ref(false)
 const reviewStatsData = ref(null)
 const buyPointCrossData = ref({
   available_buy_points: [],
@@ -1622,6 +1706,7 @@ const marketWatchCandidateCount = computed(() => (
 ))
 const accountCount = computed(() => poolsData.value.account_executable_pool?.length || 0)
 const holdingCount = computed(() => poolsData.value.holding_process_pool?.length || 0)
+const manualWatchCount = computed(() => manualWatchItems.value.length)
 const globalTradeGate = computed(() => poolsData.value.global_trade_gate || {
   status: '允许试错',
   allow_new_positions: true,
@@ -3125,6 +3210,77 @@ const loadAccountCrossAnalysis = async (tradeDate, options = {}) => {
   }
 }
 
+const loadManualWatch = async () => {
+  const tradeDate = displayDate.value || getLocalDate()
+  manualWatchLoading.value = true
+  try {
+    const res = await stockApi.manualWatch(tradeDate, { timeout: POOLS_TIMEOUT })
+    const body = res.data || {}
+    if (body.code !== 200) {
+      manualWatchItems.value = []
+      return
+    }
+    manualWatchItems.value = body.data?.items || []
+  } catch (error) {
+    manualWatchItems.value = []
+    ElMessage.error(`自选跟踪加载失败：${error?.response?.data?.message || error?.message || '未知错误'}`)
+  } finally {
+    manualWatchLoading.value = false
+  }
+}
+
+const handleManualWatchAdd = async () => {
+  const code = String(manualAddCode.value || '').trim()
+  if (!code) {
+    ElMessage.warning('请输入股票代码')
+    return
+  }
+  const tradeDate = displayDate.value || getLocalDate()
+  manualAddLoading.value = true
+  try {
+    const res = await stockApi.manualWatchAdd(code, tradeDate, { timeout: 30000 })
+    const body = res.data || {}
+    if (body.code !== 200) {
+      ElMessage.error(body.message || '添加失败')
+      return
+    }
+    ElMessage.success('已加入自选跟踪')
+    manualAddCode.value = ''
+    await loadManualWatch()
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || error?.message || '添加失败')
+  } finally {
+    manualAddLoading.value = false
+  }
+}
+
+const handleManualWatchRemove = async (tsCode) => {
+  try {
+    await ElMessageBox.confirm(`确定从自选跟踪中移除 ${tsCode} ？`, '确认移除', {
+      type: 'warning',
+      confirmButtonText: '移除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  manualWatchLoading.value = true
+  try {
+    const res = await stockApi.manualWatchDelete(tsCode, { timeout: 30000 })
+    const body = res.data || {}
+    if (body.code !== 200) {
+      ElMessage.error(body.message || '移除失败')
+      return
+    }
+    ElMessage.success('已移除')
+    await loadManualWatch()
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.message || error?.message || '移除失败')
+  } finally {
+    manualWatchLoading.value = false
+  }
+}
+
 const loadData = async (options = {}) => {
   if (!options.polling) {
     loading.value = true
@@ -3176,7 +3332,9 @@ const loadData = async (options = {}) => {
     if (!isRadarMode.value) {
       watchCandidatesExpanded.value = false
     }
-    activeTab.value = resolveDefaultTab()
+    const prevTab = activeTab.value
+    activeTab.value = prevTab === 'manual' ? 'manual' : resolveDefaultTab()
+    loadManualWatch()
     if (payload.refresh_in_progress) {
       scheduleRefreshPolling()
     } else {
@@ -3256,7 +3414,8 @@ onUnmounted(() => {
 })
 
 watch(reviewSourceFilter, () => {
-  activeTab.value = resolveDefaultTab()
+  const prev = activeTab.value
+  activeTab.value = prev === 'manual' ? 'manual' : resolveDefaultTab()
 })
 
 watch(
@@ -3305,6 +3464,26 @@ onUnmounted(() => {
 
 .page-alert {
   margin-bottom: 16px;
+}
+
+.manual-watch-alert {
+  margin-bottom: 12px;
+}
+
+.manual-watch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.manual-watch-input {
+  max-width: 280px;
+}
+
+.signal-card-manual {
+  border-color: rgba(41, 98, 255, 0.35);
 }
 
 .candidate-freshness-alert {

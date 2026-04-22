@@ -53,6 +53,7 @@ class TushareClient:
     SH_TZ = ZoneInfo("Asia/Shanghai")
     REALTIME_SESSION_START = time(9, 15)
     REALTIME_SESSION_END = time(15, 0)
+    DAILY_BASIC_READY_TIME = time(17, 0)
     EOD_DATA_READY_TIME = time(19, 0)
     REALTIME_CHUNK_SIZE = 50
     REALTIME_SOURCE = "sina"
@@ -200,6 +201,29 @@ class TushareClient:
             compact_trade_date == now.strftime("%Y%m%d")
             and now.weekday() < 5
             and now.time() < self.EOD_DATA_READY_TIME
+        ):
+            recent_dates = self._recent_open_dates(effective_trade_date, count=2)
+            if len(recent_dates) >= 2:
+                return recent_dates[1]
+
+        return effective_trade_date
+
+    def _resolve_daily_basic_trade_date(self, trade_date: str) -> str:
+        """
+        获取适合 daily_basic 的交易日。
+
+        daily_basic 每个交易日约 15:00~17:00 更新完成，因此：
+        - 请求今天且当前早于 17:00：回退到上一交易日
+        - 其他情况：沿用最近开市日
+        """
+        compact_trade_date = str(trade_date).replace("-", "").strip()[:8]
+        effective_trade_date = self._resolve_trade_date(compact_trade_date) if self.token else compact_trade_date
+
+        now = self._now_sh()
+        if (
+            compact_trade_date == now.strftime("%Y%m%d")
+            and now.weekday() < 5
+            and now.time() < self.DAILY_BASIC_READY_TIME
         ):
             recent_dates = self._recent_open_dates(effective_trade_date, count=2)
             if len(recent_dates) >= 2:
@@ -1045,8 +1069,12 @@ class TushareClient:
         trade_date: Optional[str] = None,
         fields: Optional[str] = None,
     ):
-        cache_trade_date = trade_date or ""
-        cache_key = f"{normalize_ts_code(ts_code or '')}:{trade_date or ''}:{fields or ''}"
+        requested_trade_date = str(trade_date).replace("-", "").strip()[:8] if trade_date else ""
+        cache_trade_date = (
+            self._resolve_daily_basic_trade_date(requested_trade_date)
+            if requested_trade_date else ""
+        )
+        cache_key = f"{normalize_ts_code(ts_code or '')}:{cache_trade_date}:{fields or ''}"
         cached = self._get_cached_tabular_api_payload("_daily_basic_api_cache", cache_key)
         if cached is not None:
             return cached
@@ -1061,14 +1089,21 @@ class TushareClient:
         try:
             df = daily_basic(
                 ts_code=ts_code,
-                trade_date=trade_date,
+                trade_date=cache_trade_date or None,
                 fields=fields,
             )
         except TypeError:
-            df = daily_basic(
-                ts_code=ts_code,
-                trade_date=trade_date,
-            )
+            try:
+                df = daily_basic(
+                    ts_code=ts_code,
+                    trade_date=cache_trade_date or None,
+                )
+            except Exception as exc:
+                logger.warning(f"调用 daily_basic 失败，已降级为空结果: {exc}")
+                return None
+        except Exception as exc:
+            logger.warning(f"调用 daily_basic 失败，已降级为空结果: {exc}")
+            return None
         return self._cache_tabular_api_payload(
             "_daily_basic_api_cache",
             cache_key,
@@ -3730,16 +3765,10 @@ class TushareClient:
                 return result
 
             stock_meta_map = self._get_stock_basic_snapshot_map()
-            daily_basic_df = None
-            daily_basic = getattr(self.pro, "daily_basic", None)
-            if callable(daily_basic):
-                try:
-                    daily_basic_df = daily_basic(
-                        trade_date=effective_trade_date,
-                        fields="ts_code,turnover_rate,volume_ratio",
-                    )
-                except TypeError:
-                    daily_basic_df = daily_basic(trade_date=effective_trade_date)
+            daily_basic_df = self._cached_pro_daily_basic(
+                trade_date=effective_trade_date,
+                fields="ts_code,turnover_rate,volume_ratio",
+            )
 
             source_df = self._build_daily_stock_source_df(
                 df,

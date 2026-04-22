@@ -1,0 +1,30 @@
+- generic [ref=e3]:
+  - link "跳过导航，到主内容" [ref=e4] [cursor=pointer]:
+    - /url: "#main-content"
+  - banner [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e8]:
+        - generic [ref=e9]: 中铁物资集团有限公司
+        - generic [ref=e10]: 智慧协同门户 · 演示环境 · 三门户联邦壳
+      - generic [ref=e11]:
+        - generic [ref=e12]: 门户切换
+        - navigation "门户切换" [ref=e13]:
+          - link "办公门户" [ref=e14] [cursor=pointer]:
+            - /url: /office/employee
+          - link "信息门户" [ref=e15] [cursor=pointer]:
+            - /url: /info
+          - link "数据门户" [ref=e16] [cursor=pointer]:
+            - /url: /data
+      - generic "快捷工具" [ref=e17]:
+        - button "我的文稿" [disabled] [ref=e18]
+        - button "搜索" [disabled] [ref=e19]:
+          - generic [ref=e20]: ⌕
+          - generic [ref=e21]: 搜索
+        - button "消息" [disabled] [ref=e22]:
+          - generic [ref=e23]: ✉
+          - generic [ref=e24]: 消息
+        - generic "当前会话（演示）" [ref=e25]:
+          - generic [ref=e27]: 工作台
+  - main [ref=e28]:
+    - status [ref=e30]:
+      - generic [ref=e31]: 正在拉取工作台、聚合待办与消息摘要…

@@ -148,7 +148,7 @@ async def get_market_stats(
                 "limit_up_count": stats_payload.get("stats", {}).get("limit_up_count", 0),
                 "limit_down_count": stats_payload.get("stats", {}).get("limit_down_count", 0),
                 "broken_board_rate": stats_payload.get("stats", {}).get("broken_board_rate", 0),
-                "market_turnover": turnover_payload.get("market_turnover", 0),
+                "market_turnover": float(turnover_payload.get("market_turnover") or 0),
                 "up_down_ratio": up_down_payload.get("up_down_ratio", {}),
                 "limit_stats_data_source": stats_payload.get("data_source", "limit_list_d"),
                 "limit_stats_quote_time": stats_payload.get("quote_time"),

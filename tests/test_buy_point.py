@@ -1293,6 +1293,152 @@ class TestBuyPoint:
         assert response.available_buy_points[1].direction_match_role == "industry"
         assert response.available_buy_points[1].direction_match_name == "电力"
 
+    def test_analyze_keeps_available_point_when_realtime_direction_confirms(self, service):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        stock = StockOutput(
+            ts_code="002031.SZ",
+            stock_name="巨轮智能",
+            sector_name="通用设备",
+            concept_names=["机器人"],
+            change_pct=7.2,
+            close=10.2,
+            open=9.7,
+            high=10.4,
+            low=9.6,
+            pre_close=9.51,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+        )
+        theme_leader = SectorOutput(
+            sector_name="机器人",
+            sector_source_type="concept",
+            sector_change_pct=6.4,
+            sector_score=99.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+        )
+        stable_pools = StockPoolsOutput(
+            trade_date="2026-04-16",
+            theme_leaders=[theme_leader],
+            market_watch_pool=[],
+            account_executable_pool=[stock],
+            holding_process_pool=[],
+            total_count=1,
+        )
+        realtime_scan = StockPoolsOutput(
+            trade_date="2026-04-17",
+            theme_leaders=[theme_leader],
+            market_watch_pool=[],
+            account_executable_pool=[],
+            holding_process_pool=[],
+            total_count=0,
+        )
+
+        response = service.analyze(
+            "2026-04-17",
+            stocks=[],
+            market_env=MockMarketEnv(),
+            selection_trade_date="2026-04-16",
+            realtime_sector_scan=realtime_scan,
+            scored_stocks=[stock],
+            stock_pools=stable_pools,
+        )
+
+        assert response.confirmation_required is True
+        assert response.selection_trade_date == "2026-04-16"
+        assert len(response.available_buy_points) == 1
+        assert response.available_buy_points[0].execution_confirmation_status == "已确认"
+        assert "继续有效" in (response.available_buy_points[0].execution_confirmation_note or "")
+
+    def test_analyze_downgrades_available_point_when_realtime_direction_switches(self, service):
+        class MockMarketEnv:
+            market_env_tag = MarketEnvTag.ATTACK
+            breakout_allowed = True
+            risk_level = RiskLevel.LOW
+
+        stock = StockOutput(
+            ts_code="002031.SZ",
+            stock_name="巨轮智能",
+            sector_name="通用设备",
+            concept_names=["机器人"],
+            change_pct=7.2,
+            close=10.2,
+            open=9.7,
+            high=10.4,
+            low=9.6,
+            pre_close=9.51,
+            stock_strength_tag=StockStrengthTag.STRONG,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.CORE,
+            stock_pool_tag=StockPoolTag.ACCOUNT_EXECUTABLE,
+        )
+        stable_theme_leader = SectorOutput(
+            sector_name="机器人",
+            sector_source_type="concept",
+            sector_change_pct=6.4,
+            sector_score=99.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=3,
+        )
+        switched_theme_leader = SectorOutput(
+            sector_name="算力",
+            sector_source_type="concept",
+            sector_change_pct=5.8,
+            sector_score=98.0,
+            sector_strength_rank=1,
+            sector_mainline_tag=SectorMainlineTag.MAINLINE,
+            sector_continuity_tag=SectorContinuityTag.SUSTAINABLE,
+            sector_tradeability_tag=SectorTradeabilityTag.TRADABLE,
+            sector_continuity_days=2,
+        )
+        stable_pools = StockPoolsOutput(
+            trade_date="2026-04-16",
+            theme_leaders=[stable_theme_leader],
+            market_watch_pool=[],
+            account_executable_pool=[stock],
+            holding_process_pool=[],
+            total_count=1,
+        )
+        realtime_scan = StockPoolsOutput(
+            trade_date="2026-04-17",
+            theme_leaders=[switched_theme_leader],
+            market_watch_pool=[],
+            account_executable_pool=[],
+            holding_process_pool=[],
+            total_count=0,
+        )
+
+        response = service.analyze(
+            "2026-04-17",
+            stocks=[],
+            market_env=MockMarketEnv(),
+            selection_trade_date="2026-04-16",
+            realtime_sector_scan=realtime_scan,
+            scored_stocks=[stock],
+            stock_pools=stable_pools,
+        )
+
+        assert response.confirmation_required is True
+        assert response.available_buy_points == []
+        assert len(response.not_buy_points) == 1
+        assert response.not_buy_points[0].buy_signal_tag == BuySignalTag.NOT_BUY
+        assert response.not_buy_points[0].execution_confirmation_status == "失去共振"
+        assert "不按原计划直接出手" in (response.not_buy_points[0].execution_confirmation_note or "")
+
 
 class TestBuyPointPRDRequirements:
     """PRD 验收要求测试"""

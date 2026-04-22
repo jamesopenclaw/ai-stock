@@ -46,6 +46,11 @@ class MarketEnvService:
         ratio = (value - left) / (right - left)
         return out_left + ratio * (out_right - out_left)
 
+    @staticmethod
+    def _normalize_market_turnover(value: Optional[float]) -> float:
+        """Normalize nullable turnover payloads before building the Pydantic model."""
+        return float(value or 0.0)
+
     def __init__(self):
         self.client = market_data_gateway
         self._env_cache = {}
@@ -143,7 +148,7 @@ class MarketEnvService:
 
         index_quotes = index_payload.get("rows", [])
         limit_stats = limit_payload.get("stats", {})
-        market_turnover = turnover_payload.get("market_turnover", 0)
+        market_turnover = self._normalize_market_turnover(turnover_payload.get("market_turnover"))
         up_down_ratio = up_down_payload.get("up_down_ratio", {})
 
         resolved_candidates = [

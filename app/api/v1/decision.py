@@ -138,6 +138,24 @@ def _cache_sell_point_payload(cache_key: str, payload: dict) -> None:
     }
 
 
+def _is_unresolved_dependency_placeholder(value) -> bool:
+    return bool(
+        value is not None
+        and value.__class__.__module__.startswith("fastapi")
+        and value.__class__.__name__ == "Depends"
+    )
+
+
+def _should_build_realtime_confirmation(selection_trade_date: Optional[str], trade_date: str) -> bool:
+    today = datetime.now().strftime("%Y-%m-%d")
+    return bool(
+        selection_trade_date
+        and trade_date
+        and selection_trade_date != trade_date
+        and trade_date == today
+    )
+
+
 async def _enrich_buy_point_pool_execution_references(
     stock_pools,
     trade_date: str,
@@ -148,9 +166,7 @@ async def _enrich_buy_point_pool_execution_references(
         return
 
     deduped_stocks = OrderedDict()
-    for stock in list(getattr(stock_pools, "account_executable_pool", []) or []) + list(
-        getattr(stock_pools, "market_watch_pool", []) or []
-    ):
+    for stock in list(getattr(stock_pools, "account_executable_pool", []) or []):
         code = normalize_ts_code(getattr(stock, "ts_code", "") or "")
         if (
             code
@@ -686,13 +702,14 @@ async def analyze_buy_point(
         candidate_limit = _resolve_buy_point_candidate_limit(limit)
         refresh_requested = refresh if isinstance(refresh, bool) else False
         normalized_strategy_style = _normalize_strategy_style(strategy_style)
+        allow_short_cache = not _is_unresolved_dependency_placeholder(current_account)
         cache_key = _buy_point_cache_key(
             trade_date,
             account_id,
             limit,
             normalized_strategy_style,
         )
-        if not refresh_requested:
+        if not refresh_requested and allow_short_cache:
             cached_payload = _get_cached_buy_point_payload(cache_key)
             if cached_payload is not None:
                 return ApiResponse(data=cached_payload)
@@ -721,9 +738,18 @@ async def analyze_buy_point(
             )
             scored_stocks = _collect_buy_point_source_stocks(cached_stock_pools)
             stock_pools = cached_stock_pools
+            selection_trade_date = stock_pools.sector_scan_trade_date or expected_sector_scan_trade_date
             market_env = market_env_service.get_current_env(
-                stock_pools.sector_scan_trade_date or expected_sector_scan_trade_date
+                selection_trade_date
             )
+            realtime_sector_scan = None
+            if _should_build_realtime_confirmation(selection_trade_date, trade_date):
+                realtime_sector_scan = sector_scan_service.scan(
+                    trade_date,
+                    limit_output=False,
+                    market_env=market_env_service.get_current_env(trade_date),
+                    prefer_today=True,
+                )
             bundle_context_stocks = scored_stocks
             bundle_context_account = account_context.account
             bundle_context_market_env = market_env
@@ -743,6 +769,12 @@ async def analyze_buy_point(
             bundle_context_account = bundle["context"].account
             bundle_context_market_env = bundle["context"].market_env
             bundle_context_sector_scan = bundle["context"].sector_scan
+            shared_context = getattr(bundle["context"], "shared_context", None)
+            selection_trade_date = (
+                getattr(shared_context, "selection_trade_date", None)
+                or trade_date
+            )
+            realtime_sector_scan = getattr(bundle["context"], "realtime_sector_scan", None)
             should_persist_snapshots = False
         else:
             bundle = await decision_flow_service.build_candidate_analysis(
@@ -750,6 +782,7 @@ async def analyze_buy_point(
                 top_gainers=candidate_limit,
                 include_holdings=False,
                 account_id=account_id,
+                enrich_execution_proximity=False,
             )
             scored_stocks = bundle.scored_stocks
             stock_pools = bundle.stock_pools
@@ -758,6 +791,12 @@ async def analyze_buy_point(
             bundle_context_account = bundle.context.account
             bundle_context_market_env = bundle.context.market_env
             bundle_context_sector_scan = bundle.context.sector_scan
+            shared_context = getattr(bundle.context, "shared_context", None)
+            selection_trade_date = (
+                getattr(shared_context, "selection_trade_date", None)
+                or trade_date
+            )
+            realtime_sector_scan = getattr(bundle.context, "realtime_sector_scan", None)
             should_persist_snapshots = True
 
         await _enrich_buy_point_pool_execution_references(
@@ -772,6 +811,8 @@ async def analyze_buy_point(
             bundle_context_account,
             market_env=bundle_context_market_env,
             sector_scan=bundle_context_sector_scan,
+            selection_trade_date=selection_trade_date,
+            realtime_sector_scan=realtime_sector_scan,
             scored_stocks=scored_stocks,
             stock_pools=stock_pools,
             review_bias_profile=review_bias_profile,
@@ -793,6 +834,10 @@ async def analyze_buy_point(
 
         payload = {
             "trade_date": result.trade_date,
+            "selection_trade_date": result.selection_trade_date,
+            "confirmation_trade_date": result.confirmation_trade_date,
+            "confirmation_required": result.confirmation_required,
+            "confirmation_message": result.confirmation_message,
             "strategy_style": normalized_strategy_style,
             "market_env_tag": result.market_env_tag.value,
             "market_env_profile": getattr(bundle_context_market_env, "market_env_profile", "") or result.market_env_tag.value,
@@ -806,7 +851,7 @@ async def analyze_buy_point(
             "not_buy_points": [bp.model_dump() for bp in result.not_buy_points],
             "total_count": result.total_count,
         }
-        if not refresh_requested:
+        if not refresh_requested and allow_short_cache:
             _cache_buy_point_payload(cache_key, payload)
         return ApiResponse(data=payload)
     except Exception as e:

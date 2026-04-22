@@ -314,6 +314,8 @@ const llmRefreshing = ref(false)
 const activeTarget = ref('观察型')
 const data = ref(null)
 const CHECKUP_TIMEOUT = 120000
+/** 防止切换标的/目标后，较晚返回的 LLM 请求覆盖当前页面 */
+const checkupRequestSeq = ref(0)
 
 const rule = computed(() => data.value?.rule_snapshot || null)
 const llm = computed(() => data.value?.llm_report || null)
@@ -344,9 +346,11 @@ const activeRefreshMode = computed(() => {
   return ''
 })
 const refreshStateVisible = computed(() => Boolean(activeRefreshMode.value))
-const refreshBannerTitle = computed(() => (
-  activeRefreshMode.value === 'llm' ? '正在刷新最新解读' : '正在刷新最新体检'
-))
+const refreshBannerTitle = computed(() => {
+  if (activeRefreshMode.value !== 'llm') return '正在刷新最新体检'
+  if (llmStatus.value?.status === 'pending' && !llm.value) return '正在加载 LLM 解读'
+  return '正在刷新最新解读'
+})
 const refreshBannerText = computed(() => (
   activeRefreshMode.value === 'llm'
     ? '当前规则快照仍可阅读，但页面里的解读文案不是最新结果。'
@@ -363,6 +367,9 @@ const llmStatusClass = computed(() => {
   return 'status-muted'
 })
 const llmStatusText = computed(() => {
+  if (llmRefreshing.value && llmStatus.value?.status === 'pending') {
+    return '正在加载 LLM 解读，可先阅读上方规则结论与证据。'
+  }
   if (llmRefreshing.value) return '正在刷新最新 LLM 解读，当前文案仍是上一版结果。'
   if (!llmStatus.value) return ''
   return llmStatus.value.message || (llmStatus.value.success ? 'LLM 体检已生效' : 'LLM 当前未生效')
@@ -653,23 +660,67 @@ const getLocalDate = () => {
   return `${y}-${m}-${d}`
 }
 
+const fetchCheckupLlm = async ({ forceLlmRefresh = false, seq } = {}) => {
+  if (!data.value?.rule_snapshot) return
+  const res = await stockApi.checkupLlm(
+    {
+      rule_snapshot: data.value.rule_snapshot,
+      trade_date: displayTradeDate.value,
+      checkup_target: activeTarget.value,
+      force_llm_refresh: forceLlmRefresh
+    },
+    { timeout: CHECKUP_TIMEOUT }
+  )
+  const payload = res.data || {}
+  if (payload.code && payload.code !== 200) {
+    throw new Error(payload.message || '加载 LLM 解读失败')
+  }
+  if (seq !== undefined && seq !== checkupRequestSeq.value) return
+  const inner = payload.data || {}
+  data.value = {
+    ...data.value,
+    llm_report: inner.llm_report ?? data.value.llm_report,
+    llm_status: inner.llm_status ?? data.value.llm_status
+  }
+}
+
 const loadData = async (options = {}) => {
   if (!props.tsCode) return
+  const mySeq = ++checkupRequestSeq.value
   const forceLlmRefresh = Boolean(options.forceLlmRefresh)
   const hadData = Boolean(data.value)
-  if (forceLlmRefresh) llmRefreshing.value = true
-  else loading.value = true
+
+  if (forceLlmRefresh) {
+    if (!data.value?.rule_snapshot) {
+      ElMessage.warning('暂无规则快照，无法单独刷新解读')
+      return
+    }
+    llmRefreshing.value = true
+    try {
+      await fetchCheckupLlm({ forceLlmRefresh: true, seq: mySeq })
+    } catch (error) {
+      const isTimeout = error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')
+      const fallbackMessage = isTimeout ? '解读请求超时，请稍后重试' : (error?.message || '刷新解读失败')
+      ElMessage.error(fallbackMessage)
+    } finally {
+      llmRefreshing.value = false
+    }
+    return
+  }
+
+  loading.value = true
   try {
     const res = await stockApi.checkup(
       props.tsCode,
       displayTradeDate.value,
       activeTarget.value,
-      { forceLlmRefresh, timeout: CHECKUP_TIMEOUT }
+      { includeLlm: false, forceLlmRefresh: false, timeout: CHECKUP_TIMEOUT }
     )
     const payload = res.data || {}
     if (payload.code && payload.code !== 200) {
       throw new Error(payload.message || '加载个股体检失败')
     }
+    if (mySeq !== checkupRequestSeq.value) return
     data.value = payload.data || null
   } catch (error) {
     if (!hadData) data.value = null
@@ -678,14 +729,42 @@ const loadData = async (options = {}) => {
     ElMessage.error(hadData ? `刷新失败，当前仍显示上一版结果。${fallbackMessage}` : fallbackMessage)
   } finally {
     loading.value = false
+  }
+
+  if (mySeq !== checkupRequestSeq.value) return
+  if (!data.value?.rule_snapshot) return
+  const st = data.value.llm_status
+  if (st?.status !== 'pending') return
+
+  llmRefreshing.value = true
+  try {
+    await fetchCheckupLlm({ forceLlmRefresh: false, seq: mySeq })
+  } catch (error) {
+    const isTimeout = error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')
+    const fallbackMessage = isTimeout ? '解读请求超时，可稍后点击「刷新解读」重试' : (error?.message || '加载 LLM 解读失败')
+    ElMessage.warning(fallbackMessage)
+  } finally {
     llmRefreshing.value = false
   }
 }
 
 const refreshLlm = async () => {
-  await loadData({ forceLlmRefresh: true })
-  if (data.value) {
-    ElMessage.success('解读刷新完成')
+  const mySeq = ++checkupRequestSeq.value
+  if (!data.value?.rule_snapshot) {
+    ElMessage.warning('暂无规则快照，无法刷新解读')
+    return
+  }
+  llmRefreshing.value = true
+  try {
+    await fetchCheckupLlm({ forceLlmRefresh: true, seq: mySeq })
+    if (mySeq !== checkupRequestSeq.value) return
+    if (data.value) ElMessage.success('解读刷新完成')
+  } catch (error) {
+    const isTimeout = error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')
+    const fallbackMessage = isTimeout ? '解读请求超时，请稍后重试' : (error?.message || '刷新解读失败')
+    ElMessage.error(fallbackMessage)
+  } finally {
+    llmRefreshing.value = false
   }
 }
 

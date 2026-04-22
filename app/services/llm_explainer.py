@@ -5,7 +5,8 @@ LLM 解释增强服务
 """
 import hashlib
 import json
-from typing import Dict, List, Optional
+import re
+from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -32,6 +33,59 @@ from app.services.llm_cache_service import llm_cache_service
 
 class LlmExplainerService:
     """面向页面的人话解释增强。"""
+
+    # 形态分析人读文案：常见英文字段名 → 中文（按英文键长度从长到短，避免短键误伤长键）
+    _PATTERN_EN_TO_ZH: Tuple[Tuple[str, str], ...] = (
+        ("secondary_patterns", "次要形态"),
+        ("primary_pattern", "主形态"),
+        ("pattern_rationale", "形态依据"),
+        ("pattern_summary", "形态摘要"),
+        ("direction_rationale", "方向理由"),
+        ("execution_hint", "执行提示"),
+        ("feature_snapshot", "规则特征快照"),
+        ("candidate_patterns", "候选形态"),
+        ("latest_turnover_rate", "换手率"),
+        ("center_shift_20d_pct", "20日重心偏移"),
+        ("amplitude_20d_pct", "20日振幅"),
+        ("amplitude_60d_pct", "60日振幅"),
+        ("range20_position", "近20日区间位置"),
+        ("range60_position", "近60日区间位置"),
+        ("breakout_level", "突破参考价"),
+        ("defense_level", "防守参考价"),
+        ("neckline_level", "颈线参考价"),
+        ("latest_vol_ratio", "量比"),
+        ("support_levels", "支撑位"),
+        ("pressure_levels", "压力位"),
+        ("key_annotations", "关键标注"),
+        ("pattern_phase", "形态阶段"),
+        ("conflict_points", "分歧点"),
+        ("volume_pattern", "量能形态"),
+        ("ma_alignment", "均线排列"),
+        ("close_quality", "收盘质量"),
+        ("sufficient_history", "历史样本是否充足"),
+        ("history_window", "历史窗口长度"),
+        ("rule_hits", "命中规则"),
+        ("candle_bias", "日线强弱描述"),
+        ("risk_hint", "风险提示"),
+        ("action_advice", "操作建议"),
+        ("invalid_if", "失效条件"),
+        ("direction_bias", "方向偏好"),
+        ("ma_slope_10", "10日均线斜率"),
+        ("ma_slope_20", "20日均线斜率"),
+        ("ma_slope_60", "60日均线斜率"),
+    )
+
+    def _sanitize_pattern_display_chinese(self, text: str) -> str:
+        """去除形态分析人读字段里常见的英文字段名泄漏。"""
+        raw = str(text or "").strip()
+        if not raw:
+            return raw
+        out = raw
+        for eng, chn in self._PATTERN_EN_TO_ZH:
+            if eng not in out and eng.lower() not in out.lower():
+                continue
+            out = re.sub(re.escape(eng), chn, out, flags=re.IGNORECASE)
+        return out.strip()
 
     CHECKUP_PROMPT_VERSION = "stock_checkup_v2"
     CHECKUP_SECTIONS = (
@@ -148,11 +202,14 @@ final_conclusion / 11）一句话结论
 7. pattern_summary 要直接回答“当前最像什么，关键看哪里”。
 8. pattern_rationale 必须吸收至少 2 个输入中的具体结构事实，说明为什么像、又为什么还不能完全下结论。
 9. execution_hint 要回答下一步最该盯哪个价位或哪个结构变化，不要泛泛而谈。
-10. risk_hint 要回答最容易误判的点，优先引用输入中的 conflict_points 或数据边界。
+10. risk_hint 要回答最容易误判的点，优先引用输入中的「分歧点」或数据边界。
 11. invalid_if 只能复用输入已经给出的失效条件或关键价位，不能生成新条件。
-12. action_advice 要给出当前形态下最具体的操作策略，格式：操作方向（买入/持有/减仓/观望其中之一）+ 触发条件（什么价位或信号下执行）+ 止损/防守价位。必须结合输入的 breakout_level 和 defense_level 给出具体价位，严禁空泛表达。
-13. 输出必须是 JSON 对象，字段只允许：
-primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary, pattern_rationale, execution_hint, risk_hint, invalid_if, action_advice
+12. action_advice 要给出当前形态下最具体的操作策略，格式：操作方向（买入/持有/减仓/观望其中之一）+ 触发条件（什么价位或信号下执行）+ 止损/防守价位。必须结合输入里给出的突破参考价与防守参考价写具体价位，严禁空泛表达；叙述中不要写出英文字段名。
+13. direction_bias 只能输出：看多 / 看空 / 中性。须综合「主形态」「形态阶段」、规则特征里的日线强弱、均线与区间位置、量能等已有事实做短线倾向判断；不得臆造输入中不存在的价格或技术位。
+14. direction_rationale 用 2～4 句中文说明为何给出该方向判断，须显式引用输入里至少 2 项具体事实（如形态名、日线强弱描述、区间位置、量能形态、关键标注文字等），且须与主形态、形态摘要不自相矛盾。
+15. 写入 JSON 的各字符串值（形态阶段、形态摘要、形态依据、执行提示、风险提示、失效条件、操作建议、方向理由）必须是通顺中文，不得出现英文字段名、蛇形命名、代码式前缀（如「某某是 primary…」这类），也不得夹杂英文单词或缩写来指代输入结构；引用输入概念时一律用中文说法，例如：主形态、规则特征、均线关系、日线强弱、候选形态、分歧点、突破参考价、防守参考价。
+16. 输出必须是 JSON 对象，字段只允许：
+primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary, pattern_rationale, execution_hint, risk_hint, invalid_if, action_advice, direction_bias, direction_rationale
 """.strip()
 
     async def is_enabled(self) -> bool:
@@ -923,6 +980,7 @@ primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary,
             "notes": feature_snapshot.notes,
         }
         return {
+            "payload_version": 3,
             "trade_date": trade_date,
             "basic_info": basic_info.model_dump(mode="json"),
             "feature_snapshot": compressed_features,
@@ -969,17 +1027,45 @@ primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary,
         confidence = str(data.get("confidence") or "").strip()
         if confidence not in {"高", "中", "低"}:
             confidence = rule_result.confidence or "中"
+        direction_raw = str(data.get("direction_bias") or "").strip()
+        direction_bias = direction_raw if direction_raw in {"看多", "看空", "中性"} else ""
+        direction_rationale = self._sanitize_pattern_display_chinese(
+            str(data.get("direction_rationale") or "").strip()
+        )
+        pattern_phase = self._sanitize_pattern_display_chinese(
+            str(data.get("pattern_phase") or "").strip() or rule_result.pattern_phase
+        )
+        pattern_summary = self._sanitize_pattern_display_chinese(
+            str(data.get("pattern_summary") or "").strip() or rule_result.pattern_summary
+        )
+        pattern_rationale = self._sanitize_pattern_display_chinese(
+            str(data.get("pattern_rationale") or "").strip() or rule_result.pattern_rationale
+        )
+        execution_hint = self._sanitize_pattern_display_chinese(
+            str(data.get("execution_hint") or "").strip() or rule_result.execution_hint
+        )
+        risk_hint = self._sanitize_pattern_display_chinese(
+            str(data.get("risk_hint") or "").strip() or rule_result.risk_hint
+        )
+        invalid_if = self._sanitize_pattern_display_chinese(
+            str(data.get("invalid_if") or "").strip() or rule_result.invalid_if
+        )
+        action_advice = self._sanitize_pattern_display_chinese(
+            str(data.get("action_advice") or "").strip() or rule_result.action_advice
+        )
         return {
             "primary_pattern": primary_pattern,
             "secondary_patterns": secondary_patterns or rule_result.secondary_patterns,
             "confidence": confidence,
-            "pattern_phase": str(data.get("pattern_phase") or "").strip() or rule_result.pattern_phase,
-            "pattern_summary": str(data.get("pattern_summary") or "").strip() or rule_result.pattern_summary,
-            "pattern_rationale": str(data.get("pattern_rationale") or "").strip() or rule_result.pattern_rationale,
-            "execution_hint": str(data.get("execution_hint") or "").strip() or rule_result.execution_hint,
-            "risk_hint": str(data.get("risk_hint") or "").strip() or rule_result.risk_hint,
-            "invalid_if": str(data.get("invalid_if") or "").strip() or rule_result.invalid_if,
-            "action_advice": str(data.get("action_advice") or "").strip() or rule_result.action_advice,
+            "pattern_phase": pattern_phase,
+            "pattern_summary": pattern_summary,
+            "pattern_rationale": pattern_rationale,
+            "execution_hint": execution_hint,
+            "risk_hint": risk_hint,
+            "invalid_if": invalid_if,
+            "action_advice": action_advice,
+            "direction_bias": direction_bias,
+            "direction_rationale": direction_rationale,
         }
 
     async def explain_stock_checkup_with_status(
@@ -1013,10 +1099,12 @@ primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary,
             float(settings.llm_stock_checkup_min_timeout_seconds),
         )
 
-        payload = self._build_checkup_payload(
+        # 缓存键始终基于完整规则快照，与历史缓存一致；实际请求优先 compact，减少大 JSON 导致的超时与「full 等满再 compact」的双段延迟。
+        full_payload = self._build_checkup_payload(
             rule_snapshot,
             checkup_target,
             trade_date,
+            mode="full",
         )
         cache_key = self._cache_key(
             scene="stock_checkup",
@@ -1024,7 +1112,7 @@ primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary,
             trade_date=trade_date,
             provider=str(runtime.get("provider") or ""),
             model=str(runtime.get("model") or ""),
-            payload=payload,
+            payload=full_payload,
         )
         if not force_refresh:
             cache_kwargs = {"account_id": account_id} if account_id else {}
@@ -1045,31 +1133,21 @@ primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary,
                     logger.warning(f"LLM 个股体检缓存校验失败: {exc}")
 
         llm_kwargs = {"account_id": account_id} if account_id else {}
+        compact_payload = self._build_checkup_payload(
+            rule_snapshot,
+            checkup_target,
+            trade_date,
+            mode="compact",
+        )
         data, status = await llm_client.chat_json_with_status(
             self.STOCK_CHECKUP_SYSTEM_PROMPT,
-            payload,
+            compact_payload,
             scene="stock_checkup",
             trade_date=trade_date,
-            request_label="stock_checkup_full",
+            request_label="stock_checkup_compact",
             timeout_seconds=checkup_http_timeout,
             **llm_kwargs,
         )
-        if not data and status.status == "timeout":
-            fallback_payload = self._build_checkup_payload(
-                rule_snapshot,
-                checkup_target,
-                trade_date,
-                mode="compact",
-            )
-            data, status = await llm_client.chat_json_with_status(
-                self.STOCK_CHECKUP_SYSTEM_PROMPT,
-                fallback_payload,
-                scene="stock_checkup",
-                trade_date=trade_date,
-                request_label="stock_checkup_compact_retry",
-                timeout_seconds=checkup_http_timeout,
-                **llm_kwargs,
-            )
         if not data and status.status == "timeout":
             ultra_payload = self._build_checkup_payload(
                 rule_snapshot,
@@ -1086,6 +1164,16 @@ primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary,
                 timeout_seconds=checkup_http_timeout,
                 **llm_kwargs,
             )
+        if not data and status.status == "timeout":
+            data, status = await llm_client.chat_json_with_status(
+                self.STOCK_CHECKUP_SYSTEM_PROMPT,
+                full_payload,
+                scene="stock_checkup",
+                trade_date=trade_date,
+                request_label="stock_checkup_full",
+                timeout_seconds=checkup_http_timeout,
+                **llm_kwargs,
+            )
         if not data:
             return None, status
 
@@ -1097,7 +1185,7 @@ primary_pattern, secondary_patterns, confidence, pattern_phase, pattern_summary,
                 trade_date=trade_date,
                 provider=str(runtime.get("provider") or ""),
                 model=str(runtime.get("model") or ""),
-                payload=payload,
+                payload=full_payload,
                 response=report.model_dump(),
                 **llm_kwargs,
             )

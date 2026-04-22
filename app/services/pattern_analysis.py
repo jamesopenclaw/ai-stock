@@ -994,6 +994,36 @@ class PatternAnalysisService:
                 )
             )
 
+        # 规则全未命中但大结构仍偏多时：避免「大阳线旗杆 + 深幅整理」等落在规则缝隙里变成赤裸的未识别
+        if not candidates:
+            if (
+                ma20 is not None
+                and ma60 is not None
+                and float(price) >= float(ma60) * 0.985
+                and ma_slope_20 is not None
+                and ma_slope_20 > -0.25
+                and feature_snapshot.range20_position in {"区间中位", "区间低位"}
+                and amplitude20 >= 8
+            ):
+                candidates.append(
+                    StockPatternCandidate(
+                        name="上升趋势延续",
+                        score=0.52,
+                        confidence=self._score_confidence(0.52),
+                        phase="整理后再选方向",
+                        summary="未命中细分旗形/平台等硬规则，但价仍在长期均线之上、更像趋势中的整理段。",
+                        rule_hits=[
+                            "核心形态规则未触发（常见于旗形阈值过严或 K 线冲高回落）",
+                            f"当前 20 日区间位置：{feature_snapshot.range20_position}，收盘质量 {close_quality:.2f}",
+                            f"MA20 斜率未明显走坏，价格相对 MA60 仍处 {float(price) / float(ma60) * 100:.1f}% 水位",
+                        ],
+                        conflict_points=[
+                            "若有效跌破 MA60 或重心持续下移，需降级为观望",
+                            "若放量突破前高并站稳，可再对照旗形中继规则复核",
+                        ],
+                    )
+                )
+
         if not candidates:
             fallback_score = 0.38 if amplitude60 > 0 else 0.28
             candidates.append(
@@ -1304,6 +1334,12 @@ class PatternAnalysisService:
         merged.risk_hint = str(llm_result.get("risk_hint") or merged.risk_hint)
         merged.invalid_if = str(llm_result.get("invalid_if") or merged.invalid_if)
         merged.action_advice = str(llm_result.get("action_advice") or merged.action_advice)
+        bias = str(llm_result.get("direction_bias") or "").strip()
+        if bias in {"看多", "看空", "中性"}:
+            merged.direction_bias = bias
+        rationale = str(llm_result.get("direction_rationale") or "").strip()
+        if rationale:
+            merged.direction_rationale = rationale
         return merged
 
     def _build_key_annotations(
@@ -2210,9 +2246,9 @@ class PatternAnalysisService:
         3. 旗杆效率：短杆 ≥0.85%/根，长杆(≥40根) ≥0.65%/根
         4. 旗杆最小涨幅 14%
         5. 旗面仅用杆顶之后 K 线，至少 5 根；高低价与杆顶同用 OHLC，不用收盘混用
-        6. 旗面高点整体下移、低点整体下移（典型上升旗形的下倾通道）
+        6. 旗面高点整体下移、低点整体下移（略放宽以容忍噪声与深幅整理）
         7. 旗面最高价不明显突破杆顶（避免「顶横宽震」当旗形）
-        8. 旗面回调 ≤ 旗杆涨幅的 48%；旗面振幅 < 旗杆涨幅的 65%
+        8. 旗面回调相对旗杆涨幅：基础 48%，旗杆≥22%/28%/35% 时分别放宽至 54%/60%/68%；旗面振幅上限随旗杆放大略放宽
         """
         if len(history_rows) < 30:
             return None
@@ -2311,20 +2347,31 @@ class PatternAnalysisService:
             h_second = max(highs_seg[half:])
             l_first = min(lows_seg[:half])
             l_second = min(lows_seg[half:])
-            if h_first < h_second * 1.005:
+            # 略放宽：旗面上影噪声、深幅整理时两半段边界不必过严
+            if h_first < h_second * 0.992:
                 continue
-            if l_first <= l_second * 1.002:
+            if l_second >= l_first * 0.998:
                 continue
 
             pullback_pct = (pole_end_price - flag_low) / pole_end_price * 100
-            if pullback_pct > pole_gain_pct * 0.48:
+            _pullback_cap = 0.48
+            if pole_gain_pct >= 35:
+                _pullback_cap = 0.68
+            elif pole_gain_pct >= 28:
+                _pullback_cap = 0.60
+            elif pole_gain_pct >= 22:
+                _pullback_cap = 0.54
+            if pullback_pct > pole_gain_pct * _pullback_cap:
                 continue
 
             if current_price < pole_start_price * 0.97:
                 continue
 
             flag_amplitude_pct = (flag_high - flag_low) / max(flag_low, 0.01) * 100
-            if flag_amplitude_pct >= pole_gain_pct * 0.65:
+            _face_amp_cap = 0.65
+            if pole_gain_pct >= 30:
+                _face_amp_cap = 0.80
+            if flag_amplitude_pct >= pole_gain_pct * _face_amp_cap:
                 continue
 
             score = pole_gain_pct - pullback_pct * 0.4

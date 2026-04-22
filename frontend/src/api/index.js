@@ -306,9 +306,13 @@ export const stockApi = {
     params: {
       trade_date: tradeDate,
       checkup_target: checkupTarget,
-      force_llm_refresh: Boolean(options.forceLlmRefresh)
+      force_llm_refresh: Boolean(options.forceLlmRefresh),
+      include_llm: options.includeLlm !== undefined ? Boolean(options.includeLlm) : true
     },
     timeout: options.timeout
+  }),
+  checkupLlm: (body, options = {}) => api.post('/stock/checkup-llm', body, {
+    timeout: options.timeout ?? 120000
   }),
   patternAnalysis: (tsCode, tradeDate, options = {}) => api.get(`/stock/pattern-analysis/${encodeURIComponent(tsCode)}`, {
     params: {
@@ -316,7 +320,23 @@ export const stockApi = {
       force_llm_refresh: Boolean(options.forceLlmRefresh)
     },
     timeout: options.timeout ?? 90000
-  })
+  }),
+  manualWatch: (tradeDate, options = {}) => api.get('/stock/manual-watch', {
+    params: { trade_date: tradeDate },
+    timeout: options.timeout ?? 60000
+  }),
+  manualWatchAdd: (tsCode, tradeDate, options = {}) => api.post(
+    '/stock/manual-watch',
+    { ts_code: tsCode },
+    {
+      params: tradeDate ? { trade_date: tradeDate } : {},
+      timeout: options.timeout ?? 30000
+    }
+  ),
+  manualWatchDelete: (tsCode, options = {}) => api.delete(
+    `/stock/manual-watch/${encodeURIComponent(tsCode)}`,
+    { timeout: options.timeout ?? 30000 }
+  ),
 }
 
 // Decision API

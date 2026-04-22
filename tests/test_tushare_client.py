@@ -494,6 +494,12 @@ class _FallbackStockListPro(_FakePro):
         return pd.DataFrame()
 
 
+class _DailyBasicFailPro(_FallbackStockListPro):
+    def daily_basic(self, ts_code=None, trade_date=None, fields=None):
+        self.daily_basic_calls.append((ts_code, trade_date, fields))
+        raise RuntimeError("HTTPConnectionPool(host='api.waditu.com', port=80): NameResolutionError")
+
+
 class _RadarStockListPro(_FallbackStockListPro):
     def daily(self, ts_code=None, start_date=None, end_date=None, trade_date=None):
         self.daily_calls.append((ts_code, start_date, end_date, trade_date))
@@ -632,6 +638,42 @@ def test_get_expanded_stock_list_falls_back_to_recent_available_daily():
     assert payload["used_mock"] is False
     assert len(payload["rows"]) >= 1
     assert any(row["ts_code"] == "002475.SZ" for row in payload["rows"])
+
+
+def test_cached_pro_daily_basic_returns_none_on_network_failure():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _DailyBasicFailPro()
+    client._daily_basic_api_cache = {}
+    client._log_tushare_api_call = lambda *args, **kwargs: None
+    client._get_cached_tabular_api_payload = lambda *args, **kwargs: None
+    client._cache_tabular_api_payload = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("should not cache failed payload")
+    )
+
+    result = client._cached_pro_daily_basic(
+        trade_date="20260323",
+        fields="ts_code,turnover_rate,volume_ratio",
+    )
+
+    assert result is None
+
+
+def test_get_expanded_stock_list_tolerates_daily_basic_network_failure():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _DailyBasicFailPro()
+    client._resolve_trade_date = lambda d: "20260323"
+    client._stock_basic_industry_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._stock_basic_snapshot_cache = {"fetched_at": 0.0, "mapping": {}}
+    client._daily_basic_api_cache = {}
+
+    payload = client.get_expanded_stock_list_with_meta("20260323", top_gainers=20)
+
+    assert payload["data_trade_date"] == "20260320"
+    assert len(payload["rows"]) >= 1
+    target = next(row for row in payload["rows"] if row["ts_code"] == "002475.SZ")
+    assert target["turnover_rate"] == 0
 
 
 def test_get_expanded_stock_list_overlays_realtime_prices():
@@ -1446,6 +1488,62 @@ def test_get_last_completed_trade_date_uses_today_after_eod_ready_time():
 
     assert client.get_last_completed_trade_date("20260407") == "20260407"
     assert recent_open_dates_calls == []
+
+
+def test_resolve_daily_basic_trade_date_uses_previous_trade_date_before_ready_time():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._now_sh = lambda: datetime(2026, 4, 7, 16, 30, 0, tzinfo=TushareClient.SH_TZ)
+    client._resolve_trade_date = lambda d: "20260407"
+
+    recent_open_dates_calls = []
+
+    def fake_recent_open_dates(trade_date, count=2):
+        recent_open_dates_calls.append((trade_date, count))
+        return ["20260407", "20260403"]
+
+    client._recent_open_dates = fake_recent_open_dates
+
+    assert client._resolve_daily_basic_trade_date("20260407") == "20260403"
+    assert recent_open_dates_calls == [("20260407", 2)]
+
+
+def test_resolve_daily_basic_trade_date_uses_today_after_ready_time():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client._now_sh = lambda: datetime(2026, 4, 7, 17, 1, 0, tzinfo=TushareClient.SH_TZ)
+    client._resolve_trade_date = lambda d: "20260407"
+
+    recent_open_dates_calls = []
+
+    def fake_recent_open_dates(trade_date, count=2):
+        recent_open_dates_calls.append((trade_date, count))
+        return ["20260407", "20260403"]
+
+    client._recent_open_dates = fake_recent_open_dates
+
+    assert client._resolve_daily_basic_trade_date("20260407") == "20260407"
+    assert recent_open_dates_calls == []
+
+
+def test_cached_pro_daily_basic_uses_previous_trade_date_before_ready_time():
+    client = TushareClient.__new__(TushareClient)
+    client.token = "test-token"
+    client.pro = _FakePro()
+    client._now_sh = lambda: datetime(2026, 4, 7, 16, 30, 0, tzinfo=TushareClient.SH_TZ)
+    client._resolve_trade_date = lambda d: "20260407"
+    client._recent_open_dates = lambda trade_date, count=2: ["20260407", "20260403"]
+    client._daily_basic_api_cache = {}
+    client._log_tushare_api_call = lambda *args, **kwargs: None
+    client._get_cached_tabular_api_payload = lambda *args, **kwargs: None
+    client._cache_tabular_api_payload = lambda *args, **kwargs: args[2]
+
+    client._cached_pro_daily_basic(
+        trade_date="20260407",
+        fields="ts_code,turnover_rate,volume_ratio",
+    )
+
+    assert client.pro.daily_basic_calls == [(None, "20260403", "ts_code,turnover_rate,volume_ratio")]
 
 
 def test_resolve_eod_fallback_start_trade_date_uses_previous_trade_date_before_eod_ready():

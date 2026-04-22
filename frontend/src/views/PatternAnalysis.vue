@@ -45,6 +45,24 @@
               <span class="hero-chip hero-chip-muted">{{ analysis.pattern_phase || '待确认' }}</span>
               <span class="hero-chip hero-chip-muted">{{ data.resolved_trade_date || activeTradeDate }}</span>
             </div>
+            <div class="hero-direction-panel">
+              <div class="hero-direction-head">
+                <span class="hero-direction-kicker">基于形态的后续看法（LLM）</span>
+                <el-tag
+                  v-if="analysis.direction_bias"
+                  :type="directionBiasTagType"
+                  effect="dark"
+                  size="small"
+                  class="hero-direction-tag"
+                >
+                  {{ analysis.direction_bias }}
+                </el-tag>
+                <span v-else class="hero-direction-pending">{{ directionBiasPlaceholder }}</span>
+              </div>
+              <p class="hero-direction-copy">
+                {{ analysis.direction_rationale || directionRationalePlaceholder }}
+              </p>
+            </div>
             <div class="hero-headline">{{ analysis.primary_pattern || '未识别明确形态' }}</div>
             <div class="hero-copy">{{ analysis.pattern_rationale || analysis.pattern_summary || '-' }}</div>
             <div class="hero-meta-grid">
@@ -242,6 +260,28 @@ const confidenceTagType = computed(() => {
   if (analysis.value.confidence === '中') return 'warning'
   return 'info'
 })
+const directionBiasTagType = computed(() => {
+  const b = analysis.value.direction_bias
+  if (b === '看多') return 'danger'
+  if (b === '看空') return 'success'
+  return 'info'
+})
+const directionBiasPlaceholder = computed(() => {
+  if (!llmStatus.value?.enabled) return '未配置 LLM'
+  if (llmStatus.value?.success && !analysis.value.direction_bias) return '待模型标注'
+  if (!llmStatus.value?.success && llmStatus.value?.enabled) return '推理未就绪'
+  return '—'
+})
+const directionRationalePlaceholder = computed(() => {
+  if (analysis.value.direction_rationale) return ''
+  if (!llmStatus.value?.enabled) {
+    return '启用并配置 LLM 后，将结合当前 K 线形态与特征快照给出看多/看空倾向及理由。'
+  }
+  if (!llmStatus.value?.success && llmStatus.value?.enabled) {
+    return String(llmStatus.value?.message || '请稍后点击「刷新解读」重试。')
+  }
+  return '模型未返回理由摘要，可点击「刷新解读」重试。'
+})
 const llmStatusText = computed(() => llmStatus.value?.message || '')
 const llmStatusType = computed(() => {
   if (llmStatus.value?.success) return 'success'
@@ -434,19 +474,26 @@ const buildChartOption = () => {
     return 'rgba(245, 158, 11, 0.10)'
   }
 
+  const markLineLabelWithPrice = (label, priceVal) => {
+    const p = formatPrice(priceVal)
+    return p === '-' ? label : `${label} ${p}`
+  }
+
   const markLines = priceLines.map((item) => {
     if (item.start_trade_date && item.end_trade_date && item.start_price !== null && item.end_price !== null) {
+      const w = item.line_type === 'breakout' ? 0.9 : (item.line_type === 'neckline' ? 0.85 : 1.2)
       return [
         {
           coord: [item.start_trade_date, item.start_price],
           name: item.label,
           lineStyle: {
-            width: item.line_type === 'breakout' ? 0.9 : (item.line_type === 'neckline' ? 0.85 : 1.2),
+            width: w,
             type: item.line_type === 'breakout' ? 'dashed' : 'solid',
             color: lineColor(item.line_type),
             opacity: item.line_type === 'breakout' ? 0.62 : 0.9,
           },
           label: { show: false },
+          emphasis: { label: { show: false } },
         },
         {
           coord: [item.end_trade_date, item.end_price],
@@ -462,14 +509,22 @@ const buildChartOption = () => {
             borderRadius: 4,
             padding: [1, 4],
           },
+          emphasis: {
+            label: {
+              formatter: markLineLabelWithPrice(item.label, item.end_price),
+              fontSize: 12,
+            },
+            lineStyle: { width: w + 0.9 },
+          },
         },
       ]
     }
+    const baseW = item.line_type === 'breakout' ? 0.8 : (item.line_type === 'neckline' ? 0.75 : (item.line_type === 'defense' ? 2 : 1))
     return {
       yAxis: item.price,
       name: item.label,
       lineStyle: {
-        width: item.line_type === 'breakout' ? 0.8 : (item.line_type === 'neckline' ? 0.75 : (item.line_type === 'defense' ? 2 : 1)),
+        width: baseW,
         type: item.line_type === 'support' || item.line_type === 'breakout' ? 'dashed' : 'solid',
         color: lineColor(item.line_type),
         opacity: item.line_type === 'breakout' ? 0.58 : 1,
@@ -485,6 +540,13 @@ const buildChartOption = () => {
         backgroundColor: 'rgba(255,255,255,0.86)',
         borderRadius: 4,
         padding: [1, 4],
+      },
+      emphasis: {
+        label: {
+          formatter: markLineLabelWithPrice(item.label, item.price),
+          fontSize: 12,
+        },
+        lineStyle: { width: baseW + 0.9 },
       },
     }
   })
@@ -684,12 +746,27 @@ const buildChartOption = () => {
   const latestPriceLines = []
   const hasTodayCandle = !!(todayCandle && todayCandle.trade_date && categories.includes(todayCandle.trade_date))
   if (!hasTodayCandle && latestPrice != null) {
-    const lineColor = latestChangePct > 0 ? '#ef4444' : (latestChangePct < 0 ? '#10b981' : '#94a3b8')
+    const lpColor = latestChangePct > 0 ? '#ef4444' : (latestChangePct < 0 ? '#10b981' : '#94a3b8')
     latestPriceLines.push({
       yAxis: latestPrice,
       name: '现价',
-      lineStyle: { width: 1, type: 'dashed', color: lineColor, opacity: 0.80 },
+      lineStyle: { width: 1, type: 'dashed', color: lpColor, opacity: 0.80 },
       label: { show: false },
+      emphasis: {
+        label: {
+          show: true,
+          formatter: markLineLabelWithPrice('现价', latestPrice),
+          position: 'end',
+          distance: 8,
+          color: lpColor,
+          fontSize: 12,
+          fontWeight: 700,
+          backgroundColor: 'rgba(255,255,255,0.86)',
+          borderRadius: 4,
+          padding: [1, 4],
+        },
+        lineStyle: { width: 1.6 },
+      },
     })
   }
 
@@ -707,8 +784,8 @@ const buildChartOption = () => {
       link: [{ xAxisIndex: 'all' }],
     },
     grid: [
-      { left: 56, right: 74, top: 26, height: '62%' },
-      { left: 56, right: 74, top: '76%', height: '12%' },
+      { left: 56, right: 120, top: 26, height: '62%' },
+      { left: 56, right: 120, top: '76%', height: '12%' },
     ],
     xAxis: [
       {
@@ -1131,6 +1208,44 @@ function getLocalDate() {
 
 .hero-chip-muted {
   background: rgba(148, 163, 184, 0.18);
+}
+
+.hero-direction-panel {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.hero-direction-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.hero-direction-kicker {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.hero-direction-tag {
+  font-weight: 600;
+}
+
+.hero-direction-pending {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.hero-direction-copy {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.65;
+  color: rgba(248, 250, 252, 0.9);
 }
 
 .hero-headline {

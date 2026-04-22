@@ -11,6 +11,7 @@ from app.core.database import Base
 
 import app.models.account_config  # noqa: F401
 import app.models.holding  # noqa: F401
+import app.models.manual_watch_entry  # noqa: F401
 import app.models.llm_cache_entry  # noqa: F401
 import app.models.llm_call_log  # noqa: F401
 import app.models.notification_event  # noqa: F401

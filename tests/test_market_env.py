@@ -851,6 +851,52 @@ class TestMarketEnv:
             "up_down": 1,
         }
 
+    def test_get_current_env_normalizes_none_market_turnover(self, service, monkeypatch):
+        monkeypatch.setattr(service.client, "now_trade_date", lambda: "2026-03-29")
+        monkeypatch.setattr(service.client, "should_use_market_snapshot", lambda _trade_date: False)
+        monkeypatch.setattr(service.client, "get_last_completed_trade_date", lambda _trade_date: "20260327")
+        monkeypatch.setattr(
+            service.client,
+            "get_index_quote_with_meta",
+            lambda _trade_date: {
+                "rows": [
+                    {"change_pct": 0.5},
+                    {"change_pct": 0.3},
+                    {"change_pct": 0.2},
+                ],
+                "data_trade_date": "20260327",
+            },
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_limit_stats_with_meta",
+            lambda _trade_date: {
+                "stats": {"limit_up_count": 28, "limit_down_count": 9, "broken_board_rate": 18.0},
+                "data_trade_date": "20260327",
+            },
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_market_turnover_with_meta",
+            lambda _trade_date: {
+                "market_turnover": None,
+                "data_trade_date": "20260327",
+            },
+        )
+        monkeypatch.setattr(
+            service.client,
+            "get_up_down_ratio_with_meta",
+            lambda _trade_date: {
+                "up_down_ratio": {"up": 2100, "down": 1700},
+                "data_trade_date": "20260327",
+            },
+        )
+
+        result = service.get_current_env("2026-03-29")
+
+        assert result.trade_date == "2026-03-27"
+        assert result.overall_score >= 0
+
 
 class TestMarketEnvAPI:
     """市场环境 API 测试（模拟 API 响应格式）"""

@@ -1,0 +1,1447 @@
+- generic [ref=e35]:
+  - complementary [ref=e36]:
+    - generic [ref=e38]:
+      - heading "轻舟交易系统" [level=3] [ref=e39]
+      - generic [ref=e40]: 交易工作台
+    - menubar [ref=e41]:
+      - listitem [ref=e42]:
+        - generic [ref=e43]: 交易决策
+        - list [ref=e44]:
+          - menuitem "今日指令" [ref=e45] [cursor=pointer]:
+            - img [ref=e47]
+            - generic [ref=e49]: 今日指令
+          - menuitem "市场环境" [ref=e50] [cursor=pointer]:
+            - img [ref=e52]
+            - generic [ref=e54]: 市场环境
+          - menuitem "板块扫描" [ref=e55] [cursor=pointer]:
+            - img [ref=e57]
+            - generic [ref=e59]: 板块扫描
+          - menuitem "三池分类" [ref=e60] [cursor=pointer]:
+            - img [ref=e62]
+            - generic [ref=e64]: 三池分类
+          - menuitem "买点分析" [ref=e65] [cursor=pointer]:
+            - img [ref=e67]
+            - generic [ref=e69]: 买点分析
+          - menuitem "卖点分析" [ref=e70] [cursor=pointer]:
+            - img [ref=e72]
+            - generic [ref=e74]: 卖点分析
+          - menuitem "账户管理" [ref=e75] [cursor=pointer]:
+            - img [ref=e77]
+            - generic [ref=e81]: 账户管理
+          - menuitem "复盘统计" [ref=e82] [cursor=pointer]:
+            - img [ref=e84]
+            - generic [ref=e86]: 复盘统计
+      - listitem [ref=e87]:
+        - generic [ref=e88]: 系统管理
+        - list [ref=e89]:
+          - menuitem "LLM调用记录" [ref=e90] [cursor=pointer]:
+            - img [ref=e92]
+            - generic [ref=e94]: LLM调用记录
+          - menuitem "系统设置" [ref=e95] [cursor=pointer]:
+            - img [ref=e97]
+            - generic [ref=e99]: 系统设置
+          - menuitem "任务调度" [ref=e100] [cursor=pointer]:
+            - img [ref=e102]
+            - generic [ref=e104]: 任务调度
+          - menuitem "用户管理" [ref=e105] [cursor=pointer]:
+            - img [ref=e107]
+            - generic [ref=e109]: 用户管理
+          - menuitem "交易账户" [ref=e110] [cursor=pointer]:
+            - img [ref=e112]
+            - generic [ref=e114]: 交易账户
+  - generic [ref=e115]:
+    - generic [ref=e116]:
+      - generic [ref=e117]:
+        - generic [ref=e119]: 交易决策
+        - generic [ref=e120]: 三池分类
+      - generic [ref=e121]:
+        - generic [ref=e122]:
+          - generic [ref=e124]: 系统管理员
+          - generic [ref=e126]: 管理员
+          - generic [ref=e128] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e130]
+              - generic [ref=e131]: 默认账户 (DEFAULT-001)
+            - img [ref=e134]
+        - generic [ref=e136]:
+          - button [ref=e137] [cursor=pointer]:
+            - img [ref=e140]
+          - superscript [ref=e1409]: "1"
+        - generic [ref=e145]: 2026-04-16
+        - button "退出登录" [ref=e146] [cursor=pointer]:
+          - generic [ref=e147]: 退出登录
+    - main [ref=e148]:
+      - generic [ref=e448]:
+        - generic [ref=e450]:
+          - generic [ref=e451]:
+            - generic [ref=e452]: 三池分类
+            - generic [ref=e453]: 2026-04-16
+            - generic [ref=e454]: 板块实际日 2026-04-16
+          - generic [ref=e455]:
+            - radiogroup "radio-group" [ref=e456]:
+              - generic [ref=e457]:
+                - radio "稳定模式" [checked] [ref=e458]
+                - generic [ref=e459] [cursor=pointer]: 稳定模式
+              - generic [ref=e460]:
+                - radio "实时雷达" [ref=e461]
+                - generic [ref=e462] [cursor=pointer]: 实时雷达
+            - generic [ref=e463]:
+              - generic [ref=e464]: 候选风格
+              - radiogroup "radio-group" [ref=e465]:
+                - generic [ref=e466]:
+                  - radio "均衡" [checked] [ref=e467]
+                  - generic [ref=e468] [cursor=pointer]: 均衡
+                - generic [ref=e469]:
+                  - radio "偏左侧" [ref=e470]
+                  - generic [ref=e471] [cursor=pointer]: 偏左侧
+                - generic [ref=e472]:
+                  - radio "偏右侧" [ref=e473]
+                  - generic [ref=e474] [cursor=pointer]: 偏右侧
+            - button "刷新" [ref=e475] [cursor=pointer]:
+              - generic [ref=e476]: 刷新
+        - generic [ref=e477]:
+          - generic [ref=e478]:
+            - generic [ref=e479]:
+              - generic [ref=e480]: 数据口径
+              - generic [ref=e481]: 稳定模式优先看最近稳定结论，更适合盘前和盘后判断。
+            - generic [ref=e482]:
+              - article [ref=e483]:
+                - generic [ref=e484]: 模式
+                - strong [ref=e485]: 稳定模式
+              - article [ref=e486]:
+                - generic [ref=e487]: 请求日
+                - strong [ref=e488]: 2026-04-16
+              - article [ref=e489]:
+                - generic [ref=e490]: 候选风格
+                - strong [ref=e491]: 均衡
+              - article [ref=e492]:
+                - generic [ref=e493]: 候选口径
+                - strong [ref=e494]: 当日候选
+              - article [ref=e495]:
+                - generic [ref=e496]: 板块口径
+                - strong [ref=e497]: 当日扫描
+          - generic [ref=e498]:
+            - generic [ref=e499]:
+              - generic [ref=e500]:
+                - generic [ref=e501]: 今日操作栏
+                - generic [ref=e502]: 已有仓位优先，先把该卖、该减、该持有的动作排清楚
+                - generic [ref=e503]: 先处理旧仓，再考虑新开仓 · 动作建议优先看高优先级
+              - generic [ref=e504]:
+                - generic [ref=e505]: 稳定模式
+                - generic [ref=e506]: 候选 均衡
+                - generic [ref=e507]: 进攻
+                - generic [ref=e508]: 主线题材 2025三季报预增
+                - generic [ref=e509]: 允许进攻
+            - generic [ref=e510]:
+              - button "1 先处理持仓 3 只待处理" [ref=e511] [cursor=pointer]:
+                - generic [ref=e512]: "1"
+                - generic [ref=e513]:
+                  - strong [ref=e514]: 先处理持仓
+                  - emphasis [ref=e515]: 3 只待处理
+              - button "2 再看账户可参与 5 只可参与" [ref=e516] [cursor=pointer]:
+                - generic [ref=e517]: "2"
+                - generic [ref=e518]:
+                  - strong [ref=e519]: 再看账户可参与
+                  - emphasis [ref=e520]: 5 只可参与
+              - button "3 最后回观察池 12 只观察票" [ref=e521] [cursor=pointer]:
+                - generic [ref=e522]: "3"
+                - generic [ref=e523]:
+                  - strong [ref=e524]: 最后回观察池
+                  - emphasis [ref=e525]: 12 只观察票
+              - button "去买点分析" [ref=e526] [cursor=pointer]:
+                - generic [ref=e527]: 去买点分析
+              - button "候选诊断 206 只" [ref=e528] [cursor=pointer]:
+                - generic [ref=e529]: 候选诊断 206 只
+              - button "看板块扫描" [ref=e530] [cursor=pointer]:
+                - generic [ref=e531]: 看板块扫描
+          - generic [ref=e532]:
+            - article [ref=e533]:
+              - generic [ref=e534]:
+                - generic [ref=e535]:
+                  - generic [ref=e536]: 今日结论
+                  - generic [ref=e537]:
+                    - generic [ref=e539]: 允许进攻
+                    - generic [ref=e540]: 先处理持仓，再看新机会
+                - generic [ref=e541]:
+                  - generic [ref=e542]: 先做
+                  - strong [ref=e543]: 先处理持仓
+              - generic [ref=e544]: 旧仓优先级最高；先把卖、减、持处理清楚，再决定是否看新票。
+              - generic [ref=e545]:
+                - generic [ref=e546]:
+                  - strong [ref=e547]: 环境
+                  - text: 进攻
+                - generic [ref=e548]:
+                  - strong [ref=e549]: 节奏
+                  - text: 只做主线确认
+                - generic [ref=e550]:
+                  - strong [ref=e551]: 主因
+                  - text: 广度强于接力
+                - generic [ref=e552]:
+                  - strong [ref=e553]: 风险
+                  - text: 低
+              - generic [ref=e554]:
+                - generic [ref=e555]:
+                  - generic [ref=e556]: 市场环境
+                  - strong [ref=e557]: 可以做确认后的主动进攻
+                  - generic [ref=e558]: 广度强于接力，综合分 79.1
+                - generic [ref=e559]:
+                  - generic [ref=e560]: 操作顺序
+                  - generic [ref=e561]:
+                    - button "1 先处理持仓 3 只待处理" [ref=e562] [cursor=pointer]:
+                      - generic [ref=e563]: "1"
+                      - generic [ref=e564]:
+                        - strong [ref=e565]: 先处理持仓
+                        - emphasis [ref=e566]: 3 只待处理
+                    - button "2 再看账户可参与 5 只可参与" [ref=e567] [cursor=pointer]:
+                      - generic [ref=e568]: "2"
+                      - generic [ref=e569]:
+                        - strong [ref=e570]: 再看账户可参与
+                        - emphasis [ref=e571]: 5 只可参与
+                    - button "3 最后回观察池 12 只观察票" [ref=e572] [cursor=pointer]:
+                      - generic [ref=e573]: "3"
+                      - generic [ref=e574]:
+                        - strong [ref=e575]: 最后回观察池
+                        - emphasis [ref=e576]: 12 只观察票
+                  - generic [ref=e577]: 先处理旧仓，再考虑新开仓 · 动作建议优先看高优先级
+            - article [ref=e578]:
+              - generic [ref=e579]:
+                - generic [ref=e580]:
+                  - generic [ref=e581]: 双主线
+                  - generic [ref=e582]: 2025三季报预增 做题材主线，IT设备 做行业承接
+                - button "看板块扫描" [ref=e583] [cursor=pointer]:
+                  - generic [ref=e584]: 看板块扫描
+              - generic [ref=e585]: 联动尚可，资金承接强，持续性较好，抗分化较强，强化中；承接上优先看 IT设备，联动强，资金承接强，延续性待确认，抗分化较强，强化中。
+              - generic [ref=e586]:
+                - button "2025三季报预增 +9.98% 主线题材 主线 B类 只观察 强化中 联动尚可，资金承接强，持续性较好，抗分化较强，强化中" [ref=e587] [cursor=pointer]:
+                  - generic [ref=e588]:
+                    - strong [ref=e590]: 2025三季报预增
+                    - generic [ref=e591]: +9.98%
+                  - generic [ref=e592]:
+                    - generic [ref=e593]: 主线题材
+                    - generic [ref=e594]: 主线
+                    - generic [ref=e595]: B类
+                    - generic [ref=e596]: 只观察
+                    - generic [ref=e597]: 强化中
+                  - generic [ref=e598]: 联动尚可，资金承接强，持续性较好，抗分化较强，强化中
+                - button "算力租赁 +4.20% 主线题材 主线 A类 可执行 强化中 联动强，资金承接强，延续性待确认，抗分化较强，强化中" [ref=e599] [cursor=pointer]:
+                  - generic [ref=e600]:
+                    - strong [ref=e602]: 算力租赁
+                    - generic [ref=e603]: +4.20%
+                  - generic [ref=e604]:
+                    - generic [ref=e605]: 主线题材
+                    - generic [ref=e606]: 主线
+                    - generic [ref=e607]: A类
+                    - generic [ref=e608]: 可执行
+                    - generic [ref=e609]: 强化中
+                  - generic [ref=e610]: 联动强，资金承接强，延续性待确认，抗分化较强，强化中
+                - button "IT设备 +7.67% 承接行业 主线 A类 只观察 强化中 联动强，资金承接强，延续性待确认，抗分化较强，强化中" [ref=e611] [cursor=pointer]:
+                  - generic [ref=e612]:
+                    - strong [ref=e614]: IT设备
+                    - generic [ref=e615]: +7.67%
+                  - generic [ref=e616]:
+                    - generic [ref=e617]: 承接行业
+                    - generic [ref=e618]: 主线
+                    - generic [ref=e619]: A类
+                    - generic [ref=e620]: 只观察
+                    - generic [ref=e621]: 强化中
+                  - generic [ref=e622]: 联动强，资金承接强，延续性待确认，抗分化较强，强化中
+                - button "铅锌 +3.95% 承接行业 主线 A类 可执行 强化中 联动强，资金承接强，延续性待确认，抗分化较强，强化中" [ref=e623] [cursor=pointer]:
+                  - generic [ref=e624]:
+                    - strong [ref=e626]: 铅锌
+                    - generic [ref=e627]: +3.95%
+                  - generic [ref=e628]:
+                    - generic [ref=e629]: 承接行业
+                    - generic [ref=e630]: 主线
+                    - generic [ref=e631]: A类
+                    - generic [ref=e632]: 可执行
+                    - generic [ref=e633]: 强化中
+                  - generic [ref=e634]: 联动强，资金承接强，延续性待确认，抗分化较强，强化中
+            - article [ref=e635]:
+              - generic [ref=e636]: 账户执行概览
+              - generic [ref=e637]:
+                - button "接近执行位 4 优先看这里 点击查看" [ref=e638] [cursor=pointer]:
+                  - generic [ref=e639]: 接近执行位
+                  - strong [ref=e640]: "4"
+                  - generic [ref=e641]: 优先看这里
+                  - text: 点击查看
+                - button "待触发 1 跟计划不急追 点击查看" [ref=e642] [cursor=pointer]:
+                  - generic [ref=e643]: 待触发
+                  - strong [ref=e644]: "1"
+                  - generic [ref=e645]: 跟计划不急追
+                  - text: 点击查看
+                - button "进攻试错 0 仅小仓试错 点击查看" [ref=e646] [cursor=pointer]:
+                  - generic [ref=e647]: 进攻试错
+                  - strong [ref=e648]: "0"
+                  - generic [ref=e649]: 仅小仓试错
+                  - text: 点击查看
+                - button "防守试错 0 防守日极少数 点击查看" [ref=e650] [cursor=pointer]:
+                  - generic [ref=e651]: 防守试错
+                  - strong [ref=e652]: "0"
+                  - generic [ref=e653]: 防守日极少数
+                  - text: 点击查看
+                - button "观察票 12 先盯不先做 点击查看" [ref=e654] [cursor=pointer]:
+                  - generic [ref=e655]: 观察票
+                  - strong [ref=e656]: "12"
+                  - generic [ref=e657]: 先盯不先做
+                  - text: 点击查看
+                - button "持仓处理 3 旧仓优先 点击查看" [ref=e658] [cursor=pointer]:
+                  - generic [ref=e659]: 持仓处理
+                  - strong [ref=e660]: "3"
+                  - generic [ref=e661]: 旧仓优先
+                  - text: 点击查看
+          - generic [ref=e663]:
+            - generic [ref=e664]:
+              - generic [ref=e665]:
+                - generic [ref=e666]: 执行补充
+                - generic [ref=e667]: 今天先盯谁，以及哪些信号该加权或降权
+              - button "去买点分析" [ref=e669] [cursor=pointer]:
+                - generic [ref=e670]: 去买点分析
+            - generic [ref=e671]:
+              - generic [ref=e672]:
+                - generic [ref=e674]:
+                  - generic [ref=e675]: 优先名单
+                  - generic [ref=e676]: 今天先盯这些票
+                - generic [ref=e677]:
+                  - article [ref=e678]:
+                    - generic [ref=e679]: "1"
+                    - generic [ref=e680]:
+                      - generic [ref=e681]:
+                        - generic [ref=e682]:
+                          - strong [ref=e683]: 先处理 杉杉股份
+                          - generic [ref=e684]: 持有 / 低优先 / -1.54%
+                        - generic [ref=e685]: 持仓处理池
+                      - generic [ref=e686]:
+                        - generic [ref=e687]: 重点
+                        - generic [ref=e688]: 守住关键支撑可继续持有
+                      - generic [ref=e689]:
+                        - button "卖点详解" [ref=e690] [cursor=pointer]:
+                          - generic [ref=e691]: 卖点详解
+                        - button "全面体检" [ref=e692] [cursor=pointer]:
+                          - generic [ref=e693]: 全面体检
+                        - button "形态分析" [ref=e694] [cursor=pointer]:
+                          - generic [ref=e695]: 形态分析
+                        - button "定位到持仓处理池" [ref=e696] [cursor=pointer]:
+                          - generic [ref=e697]: 定位到持仓处理池
+                  - article [ref=e698]:
+                    - generic [ref=e699]: "2"
+                    - generic [ref=e700]:
+                      - generic [ref=e701]:
+                        - generic [ref=e702]:
+                          - strong [ref=e703]: 再处理 长海股份
+                          - generic [ref=e704]: 持有 / 低优先 / -0.72%
+                        - generic [ref=e705]: 持仓处理池
+                      - generic [ref=e706]:
+                        - generic [ref=e707]: 重点
+                        - generic [ref=e708]: 守住关键支撑可继续持有
+                      - generic [ref=e709]:
+                        - button "卖点详解" [ref=e710] [cursor=pointer]:
+                          - generic [ref=e711]: 卖点详解
+                        - button "全面体检" [ref=e712] [cursor=pointer]:
+                          - generic [ref=e713]: 全面体检
+                        - button "形态分析" [ref=e714] [cursor=pointer]:
+                          - generic [ref=e715]: 形态分析
+                        - button "定位到持仓处理池" [ref=e716] [cursor=pointer]:
+                          - generic [ref=e717]: 定位到持仓处理池
+                  - article [ref=e718]:
+                    - generic [ref=e719]: "3"
+                    - generic [ref=e720]:
+                      - generic [ref=e721]:
+                        - generic [ref=e722]:
+                          - strong [ref=e723]: 最后看 天亿马
+                          - generic [ref=e724]: 可参与 / 接近执行位 / +7.20%
+                        - generic [ref=e725]: 账户可参与池
+                      - generic [ref=e726]:
+                        - generic [ref=e727]: 重点
+                        - generic [ref=e728]: 当前价已回到确认区 55.92-56.42 附近，优先结合承接与量能确认。
+                      - generic [ref=e729]:
+                        - button "买点详解" [ref=e730] [cursor=pointer]:
+                          - generic [ref=e731]: 买点详解
+                        - button "全面体检" [ref=e732] [cursor=pointer]:
+                          - generic [ref=e733]: 全面体检
+                        - button "形态分析" [ref=e734] [cursor=pointer]:
+                          - generic [ref=e735]: 形态分析
+                        - button "定位到账户可参与池" [ref=e736] [cursor=pointer]:
+                          - generic [ref=e737]: 定位到账户可参与池
+              - generic [ref=e738]:
+                - generic [ref=e740]:
+                  - generic [ref=e741]: 辅助判断
+                  - generic [ref=e742]: 复盘和方向怎么影响今天
+                - generic [ref=e743]:
+                  - generic [ref=e744]:
+                    - generic [ref=e745]: 优先看
+                    - generic [ref=e746]: 最近 买点-观察 / 强势确认 胜率和均值更强，今天在观察池和账户池里遇到同类结构时，可以更优先盯。
+                  - generic [ref=e747]:
+                    - generic [ref=e748]: 先观察
+                    - generic [ref=e749]: 买点-观察 / 强势确认 更适合先当观察对象，先看承接和确认，不要因为进池就直接当执行信号。
+                  - generic [ref=e750]:
+                    - generic [ref=e751]: 暂时少做
+                    - generic [ref=e752]: 买点-可买 / 强势确认 最近表现偏弱，今天即使进池也先降优先级，别因为题材热度就直接提高权重。
+          - generic [ref=e753]:
+            - article [ref=e754]:
+              - generic [ref=e755]:
+                - generic [ref=e756]:
+                  - generic [ref=e757]: 模块 A
+                  - generic [ref=e758]: 账户可参与池
+                  - generic [ref=e759]: 先看今天通过账户准入的票，再决定要不要回买点页确认执行位。
+                - button "查看详细清单" [ref=e760] [cursor=pointer]:
+                  - generic [ref=e761]: 查看详细清单
+              - generic [ref=e762]:
+                - generic [ref=e763]:
+                  - generic [ref=e764]:
+                    - generic [ref=e765]:
+                      - generic [ref=e766]:
+                        - generic [ref=e767]: 标准候选 · 接近执行位
+                        - generic [ref=e768]: 已通过账户准入，且现价已靠近执行区，先看这一组
+                      - generic [ref=e769]: 4 只
+                    - article [ref=e770]:
+                      - generic [ref=e771]:
+                        - generic [ref=e772]:
+                          - generic [ref=e773]: 天亿马
+                          - generic [ref=e774]: 301178.SZ · 算力租赁
+                        - generic [ref=e775]: 标准候选
+                      - generic [ref=e776]:
+                        - generic [ref=e777]: 强
+                        - generic [ref=e778]: 加速
+                        - generic [ref=e779]: 强化中
+                        - generic [ref=e780]: 接近执行位
+                      - generic [ref=e781]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                      - generic [ref=e782]: 当前价已回到确认区 55.92-56.42 附近，优先结合承接与量能确认。
+                      - generic [ref=e783]:
+                        - generic [ref=e784]:
+                          - generic [ref=e785]: 当前动作
+                          - strong [ref=e786]: 突破确认
+                        - generic [ref=e787]:
+                          - generic [ref=e788]: 仓位提示
+                          - strong [ref=e789]: 计划仓 / 待确认
+                      - generic [ref=e790]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                      - generic [ref=e791]: 失效条件：收盘跌破今日涨幅的50%
+                      - generic [ref=e792]:
+                        - button "买点详解" [ref=e793] [cursor=pointer]:
+                          - generic [ref=e794]: 买点详解
+                        - button "全面体检" [ref=e795] [cursor=pointer]:
+                          - generic [ref=e796]: 全面体检
+                        - button "形态分析" [ref=e797] [cursor=pointer]:
+                          - generic [ref=e798]: 形态分析
+                    - article [ref=e799]:
+                      - generic [ref=e800]:
+                        - generic [ref=e801]:
+                          - generic [ref=e802]: 太极股份
+                          - generic [ref=e803]: 002368.SZ · 云计算
+                        - generic [ref=e804]: 标准候选
+                      - generic [ref=e805]:
+                        - generic [ref=e806]: 强
+                        - generic [ref=e807]: 加速
+                        - generic [ref=e808]: 切换中
+                        - generic [ref=e809]: 接近执行位
+                      - generic [ref=e810]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                      - generic [ref=e811]: 当前价已回到确认区 21.09-21.28 附近，优先结合承接与量能确认。
+                      - generic [ref=e812]:
+                        - generic [ref=e813]:
+                          - generic [ref=e814]: 当前动作
+                          - strong [ref=e815]: 突破确认
+                        - generic [ref=e816]:
+                          - generic [ref=e817]: 仓位提示
+                          - strong [ref=e818]: 计划仓 / 待确认
+                      - generic [ref=e819]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                      - generic [ref=e820]: 失效条件：收盘跌破今日涨幅的50%
+                      - generic [ref=e821]:
+                        - button "买点详解" [ref=e822] [cursor=pointer]:
+                          - generic [ref=e823]: 买点详解
+                        - button "全面体检" [ref=e824] [cursor=pointer]:
+                          - generic [ref=e825]: 全面体检
+                        - button "形态分析" [ref=e826] [cursor=pointer]:
+                          - generic [ref=e827]: 形态分析
+                    - article [ref=e828]:
+                      - generic [ref=e829]:
+                        - generic [ref=e830]:
+                          - generic [ref=e831]: 东方材料
+                          - generic [ref=e832]: 603110.SH · 算力租赁
+                        - generic [ref=e833]: 标准候选
+                      - generic [ref=e834]:
+                        - generic [ref=e835]: 强
+                        - generic [ref=e836]: 加速
+                        - generic [ref=e837]: 强化中
+                        - generic [ref=e838]: 接近执行位
+                      - generic [ref=e839]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                      - generic [ref=e840]: 当前价已回到确认区 17.71-17.87 附近，优先结合承接与量能确认。
+                      - generic [ref=e841]:
+                        - generic [ref=e842]:
+                          - generic [ref=e843]: 当前动作
+                          - strong [ref=e844]: 突破确认
+                        - generic [ref=e845]:
+                          - generic [ref=e846]: 仓位提示
+                          - strong [ref=e847]: 计划仓 / 待确认
+                      - generic [ref=e848]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                      - generic [ref=e849]: 失效条件：收盘跌破今日涨幅的50%
+                      - generic [ref=e850]:
+                        - button "买点详解" [ref=e851] [cursor=pointer]:
+                          - generic [ref=e852]: 买点详解
+                        - button "全面体检" [ref=e853] [cursor=pointer]:
+                          - generic [ref=e854]: 全面体检
+                        - button "形态分析" [ref=e855] [cursor=pointer]:
+                          - generic [ref=e856]: 形态分析
+                    - article [ref=e857]:
+                      - generic [ref=e858]:
+                        - generic [ref=e859]:
+                          - generic [ref=e860]: 瑞芯微
+                          - generic [ref=e861]: 603893.SH · 腾讯概念
+                        - generic [ref=e862]: 标准候选
+                      - generic [ref=e863]:
+                        - generic [ref=e864]: 中
+                        - generic [ref=e865]: 分歧
+                        - generic [ref=e866]: 稳定主线
+                        - generic [ref=e867]: 接近执行位
+                      - generic [ref=e868]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                      - generic [ref=e869]: 当前价已回到确认区 171.04-172.42 附近，优先结合承接与量能确认。
+                      - generic [ref=e870]:
+                        - generic [ref=e871]:
+                          - generic [ref=e872]: 当前动作
+                          - strong [ref=e873]: 回踩确认
+                        - generic [ref=e874]:
+                          - generic [ref=e875]: 仓位提示
+                          - strong [ref=e876]: 计划仓 / 待确认
+                      - generic [ref=e877]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                      - generic [ref=e878]: 失效条件：跌破5日均线
+                      - generic [ref=e879]:
+                        - button "买点详解" [ref=e880] [cursor=pointer]:
+                          - generic [ref=e881]: 买点详解
+                        - button "全面体检" [ref=e882] [cursor=pointer]:
+                          - generic [ref=e883]: 全面体检
+                        - button "形态分析" [ref=e884] [cursor=pointer]:
+                          - generic [ref=e885]: 形态分析
+                  - generic [ref=e886]:
+                    - generic [ref=e887]:
+                      - generic [ref=e888]:
+                        - generic [ref=e889]: 标准候选 · 待触发
+                        - generic [ref=e890]: 已经过准入，但现价离执行位还有距离，先按计划跟踪
+                      - generic [ref=e891]: 1 只
+                    - article [ref=e892]:
+                      - generic [ref=e893]:
+                        - generic [ref=e894]:
+                          - generic [ref=e895]: 海南华铁
+                          - generic [ref=e896]: 603300.SH · 算力租赁
+                        - generic [ref=e897]: 标准候选
+                      - generic [ref=e898]:
+                        - generic [ref=e899]: 中
+                        - generic [ref=e900]: 修复
+                        - generic [ref=e901]: 强化中
+                        - generic [ref=e902]: 待回踩
+                      - generic [ref=e903]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                      - generic [ref=e904]: 当前价高于确认区 6.86-6.93 约 2.97%，先回买点页等触发。
+                      - generic [ref=e905]:
+                        - generic [ref=e906]:
+                          - generic [ref=e907]: 当前动作
+                          - strong [ref=e908]: 回踩确认
+                        - generic [ref=e909]:
+                          - generic [ref=e910]: 仓位提示
+                          - strong [ref=e911]: 计划仓 / 待确认
+                      - generic [ref=e912]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                      - generic [ref=e913]: 失效条件：跌破5日均线
+                      - generic [ref=e914]:
+                        - button "买点详解" [ref=e915] [cursor=pointer]:
+                          - generic [ref=e916]: 买点详解
+                        - button "全面体检" [ref=e917] [cursor=pointer]:
+                          - generic [ref=e918]: 全面体检
+                        - button "形态分析" [ref=e919] [cursor=pointer]:
+                          - generic [ref=e920]: 形态分析
+                - generic [ref=e921]:
+                  - article [ref=e922]:
+                    - generic [ref=e923]:
+                      - generic [ref=e924]:
+                        - generic [ref=e925]: 进攻试错
+                        - generic [ref=e926]: 当前没有需要额外放宽的小仓试错票
+                      - generic [ref=e927]: 0 只
+                    - generic [ref=e928]: 今天已有通过账户准入的标准候选，系统没有再额外放出高风险进攻试错。
+                  - article [ref=e929]:
+                    - generic [ref=e930]:
+                      - generic [ref=e931]:
+                        - generic [ref=e932]: 防守试错
+                        - generic [ref=e933]: 防守保留模式今天没有触发
+                      - generic [ref=e934]: 0 只
+                    - generic [ref=e935]: 当前不是防守环境，这一栏通常保持为空，不需要额外关注。
+            - article [ref=e936]:
+              - generic [ref=e937]:
+                - generic [ref=e938]:
+                  - generic [ref=e939]: 模块 B
+                  - generic [ref=e940]: 市场最强观察池
+                  - generic [ref=e941]: 先看市场在围绕哪些方向交易，再决定哪些票值得继续盯。
+                - button "查看详细清单" [ref=e942] [cursor=pointer]:
+                  - generic [ref=e943]: 查看详细清单
+              - generic [ref=e944]:
+                - generic [ref=e945]:
+                  - generic [ref=e946]:
+                    - generic [ref=e947]:
+                      - generic [ref=e948]: 算力租赁
+                      - generic [ref=e949]: 观察中
+                    - generic [ref=e950]: 4 只
+                  - generic [ref=e951]: 算力租赁处于强化中，当前按代理版动态信号保留观察席位。
+                  - generic [ref=e952]:
+                    - generic [ref=e953]:
+                      - strong [ref=e954]: 锦鸡股份
+                      - generic [ref=e955]: 龙头
+                      - emphasis [ref=e956]: 强势确认，强势股，主线，可交易，来源:涨幅前列/涨停入选
+                      - generic [ref=e957]:
+                        - button "买点详解" [ref=e958] [cursor=pointer]:
+                          - generic [ref=e959]: 买点详解
+                        - button "全面体检" [ref=e960] [cursor=pointer]:
+                          - generic [ref=e961]: 全面体检
+                        - button "形态分析" [ref=e962] [cursor=pointer]:
+                          - generic [ref=e963]: 形态分析
+                    - generic [ref=e964]:
+                      - strong [ref=e965]: 宏景科技
+                      - generic [ref=e966]: 龙头
+                      - emphasis [ref=e967]: 强势确认，强势股，主线，可交易，来源:涨幅前列/涨停入选
+                      - generic [ref=e968]:
+                        - button "买点详解" [ref=e969] [cursor=pointer]:
+                          - generic [ref=e970]: 买点详解
+                        - button "全面体检" [ref=e971] [cursor=pointer]:
+                          - generic [ref=e972]: 全面体检
+                        - button "形态分析" [ref=e973] [cursor=pointer]:
+                          - generic [ref=e974]: 形态分析
+                    - generic [ref=e975]:
+                      - strong [ref=e976]: 奥飞数据
+                      - generic [ref=e977]: 中军
+                      - emphasis [ref=e978]: 强势确认，强势股，主线，可交易，来源:涨幅前列
+                      - generic [ref=e979]:
+                        - button "买点详解" [ref=e980] [cursor=pointer]:
+                          - generic [ref=e981]: 买点详解
+                        - button "全面体检" [ref=e982] [cursor=pointer]:
+                          - generic [ref=e983]: 全面体检
+                        - button "形态分析" [ref=e984] [cursor=pointer]:
+                          - generic [ref=e985]: 形态分析
+                    - generic [ref=e986]:
+                      - strong [ref=e987]: 亿田智能
+                      - generic [ref=e988]: 中军
+                      - emphasis [ref=e989]: 强势确认，强势股，主线，可交易，来源:涨幅前列
+                      - generic [ref=e990]:
+                        - button "买点详解" [ref=e991] [cursor=pointer]:
+                          - generic [ref=e992]: 买点详解
+                        - button "全面体检" [ref=e993] [cursor=pointer]:
+                          - generic [ref=e994]: 全面体检
+                        - button "形态分析" [ref=e995] [cursor=pointer]:
+                          - generic [ref=e996]: 形态分析
+                - generic [ref=e997]:
+                  - generic [ref=e998]:
+                    - generic [ref=e999]:
+                      - generic [ref=e1000]: 云计算
+                      - generic [ref=e1001]: 观察中
+                    - generic [ref=e1002]: 2 只
+                  - generic [ref=e1003]: 云计算处于切换中，当前按代理版动态信号保留观察席位。
+                  - generic [ref=e1004]:
+                    - generic [ref=e1005]:
+                      - strong [ref=e1006]: 北信源
+                      - generic [ref=e1007]: 中军
+                      - emphasis [ref=e1008]: 强势确认，强势股，主线，可交易，来源:涨幅前列
+                      - generic [ref=e1009]:
+                        - button "买点详解" [ref=e1010] [cursor=pointer]:
+                          - generic [ref=e1011]: 买点详解
+                        - button "全面体检" [ref=e1012] [cursor=pointer]:
+                          - generic [ref=e1013]: 全面体检
+                        - button "形态分析" [ref=e1014] [cursor=pointer]:
+                          - generic [ref=e1015]: 形态分析
+                    - generic [ref=e1016]:
+                      - strong [ref=e1017]: 荣科科技
+                      - generic [ref=e1018]: 中军
+                      - emphasis [ref=e1019]: 强势确认，强势股，主线，可交易，来源:量比异动/涨幅前列
+                      - generic [ref=e1020]:
+                        - button "买点详解" [ref=e1021] [cursor=pointer]:
+                          - generic [ref=e1022]: 买点详解
+                        - button "全面体检" [ref=e1023] [cursor=pointer]:
+                          - generic [ref=e1024]: 全面体检
+                        - button "形态分析" [ref=e1025] [cursor=pointer]:
+                          - generic [ref=e1026]: 形态分析
+                - generic [ref=e1027]:
+                  - generic [ref=e1028]:
+                    - generic [ref=e1029]:
+                      - generic [ref=e1030]: 液冷服务器
+                      - generic [ref=e1031]: 观察中
+                    - generic [ref=e1032]: 2 只
+                  - generic [ref=e1033]: 个股出现代理版动态强化信号，说明收盘特征偏强，仍需盯盘确认是否为真实盘中回流。
+                  - generic [ref=e1034]:
+                    - generic [ref=e1035]:
+                      - strong [ref=e1036]: 中石科技
+                      - generic [ref=e1037]: 中军
+                      - emphasis [ref=e1038]: 强势确认，强势股，主线，可交易，来源:量比异动/涨幅前列
+                      - generic [ref=e1039]:
+                        - button "买点详解" [ref=e1040] [cursor=pointer]:
+                          - generic [ref=e1041]: 买点详解
+                        - button "全面体检" [ref=e1042] [cursor=pointer]:
+                          - generic [ref=e1043]: 全面体检
+                        - button "形态分析" [ref=e1044] [cursor=pointer]:
+                          - generic [ref=e1045]: 形态分析
+                    - generic [ref=e1046]:
+                      - strong [ref=e1047]: 硕贝德
+                      - generic [ref=e1048]: 中军
+                      - emphasis [ref=e1049]: 强势确认，强势股，主线，可交易，来源:量比异动
+                      - generic [ref=e1050]:
+                        - button "买点详解" [ref=e1051] [cursor=pointer]:
+                          - generic [ref=e1052]: 买点详解
+                        - button "全面体检" [ref=e1053] [cursor=pointer]:
+                          - generic [ref=e1054]: 全面体检
+                        - button "形态分析" [ref=e1055] [cursor=pointer]:
+                          - generic [ref=e1056]: 形态分析
+                - generic [ref=e1057]:
+                  - generic [ref=e1058]:
+                    - generic [ref=e1059]:
+                      - generic [ref=e1060]: 环境保护
+                      - generic [ref=e1061]: 观察中
+                    - generic [ref=e1062]: 1 只
+                  - generic [ref=e1063]: 环境保护处于强化中，当前按代理版动态信号保留观察席位。
+                  - generic [ref=e1065]:
+                    - strong [ref=e1066]: 仕净科技
+                    - generic [ref=e1067]: 中军
+                    - emphasis [ref=e1068]: 强势确认，强势股，次主线，可交易，来源:量比异动/涨幅前列
+                    - generic [ref=e1069]:
+                      - button "买点详解" [ref=e1070] [cursor=pointer]:
+                        - generic [ref=e1071]: 买点详解
+                      - button "全面体检" [ref=e1072] [cursor=pointer]:
+                        - generic [ref=e1073]: 全面体检
+                      - button "形态分析" [ref=e1074] [cursor=pointer]:
+                        - generic [ref=e1075]: 形态分析
+              - generic [ref=e1076]:
+                - generic [ref=e1077]:
+                  - generic [ref=e1078]:
+                    - generic [ref=e1079]: 候选补充
+                    - generic [ref=e1080]: 这些票还在观察候选全集里，适合扩展盯盘范围；点“候选诊断”可以看暂未排前或未进账户池的具体原因。
+                  - button "展开候选（还有 194 只）" [ref=e1081] [cursor=pointer]:
+                    - generic [ref=e1082]: 展开候选（还有 194 只）
+                - generic [ref=e1083]:
+                  - article [ref=e1084]:
+                    - generic [ref=e1085]:
+                      - generic [ref=e1086]:
+                        - strong [ref=e1087]: 鸿富瀚
+                        - text: 301086.SZ
+                      - emphasis [ref=e1088]: +12.31%
+                    - generic [ref=e1089]: 液冷服务器 / 涨幅前列
+                    - generic [ref=e1090]: 强势确认，强势股，主线，可交易，来源:涨幅前列
+                    - generic [ref=e1091]:
+                      - button "买点详解" [ref=e1092] [cursor=pointer]:
+                        - generic [ref=e1093]: 买点详解
+                      - button "全面体检" [ref=e1094] [cursor=pointer]:
+                        - generic [ref=e1095]: 全面体检
+                      - button "形态分析" [ref=e1096] [cursor=pointer]:
+                        - generic [ref=e1097]: 形态分析
+                  - article [ref=e1098]:
+                    - generic [ref=e1099]:
+                      - generic [ref=e1100]:
+                        - strong [ref=e1101]: 崇德科技
+                        - text: 301548.SZ
+                      - emphasis [ref=e1102]: +12.18%
+                    - generic [ref=e1103]: 机械基件 / 涨幅前列
+                    - generic [ref=e1104]: 强势确认，强势股，次主线，可交易，来源:涨幅前列
+                    - generic [ref=e1105]:
+                      - button "买点详解" [ref=e1106] [cursor=pointer]:
+                        - generic [ref=e1107]: 买点详解
+                      - button "全面体检" [ref=e1108] [cursor=pointer]:
+                        - generic [ref=e1109]: 全面体检
+                      - button "形态分析" [ref=e1110] [cursor=pointer]:
+                        - generic [ref=e1111]: 形态分析
+                  - article [ref=e1112]:
+                    - generic [ref=e1113]:
+                      - generic [ref=e1114]:
+                        - strong [ref=e1115]: 申昊科技
+                        - text: 300853.SZ
+                      - emphasis [ref=e1116]: +11.88%
+                    - generic [ref=e1117]: 东数西算(算力) / 量比异动/涨幅前列
+                    - generic [ref=e1118]: 强势确认，强势股，主线，可交易，来源:量比异动/涨幅前列
+                    - generic [ref=e1119]:
+                      - button "买点详解" [ref=e1120] [cursor=pointer]:
+                        - generic [ref=e1121]: 买点详解
+                      - button "全面体检" [ref=e1122] [cursor=pointer]:
+                        - generic [ref=e1123]: 全面体检
+                      - button "形态分析" [ref=e1124] [cursor=pointer]:
+                        - generic [ref=e1125]: 形态分析
+                  - article [ref=e1126]:
+                    - generic [ref=e1127]:
+                      - generic [ref=e1128]:
+                        - strong [ref=e1129]: 中威电子
+                        - text: 300270.SZ
+                      - emphasis [ref=e1130]: +11.71%
+                    - generic [ref=e1131]: 东数西算(算力) / 量比异动/涨幅前列
+                    - generic [ref=e1132]: 强势确认，强势股，主线，可交易，来源:量比异动/涨幅前列
+                    - generic [ref=e1133]:
+                      - button "买点详解" [ref=e1134] [cursor=pointer]:
+                        - generic [ref=e1135]: 买点详解
+                      - button "全面体检" [ref=e1136] [cursor=pointer]:
+                        - generic [ref=e1137]: 全面体检
+                      - button "形态分析" [ref=e1138] [cursor=pointer]:
+                        - generic [ref=e1139]: 形态分析
+                  - article [ref=e1140]:
+                    - generic [ref=e1141]:
+                      - generic [ref=e1142]:
+                        - strong [ref=e1143]: 永贵电器
+                        - text: 300351.SZ
+                      - emphasis [ref=e1144]: +11.56%
+                    - generic [ref=e1145]: 液冷服务器 / 量比异动/涨幅前列
+                    - generic [ref=e1146]: 强势确认，强势股，主线，可交易，来源:量比异动/涨幅前列
+                    - generic [ref=e1147]:
+                      - button "买点详解" [ref=e1148] [cursor=pointer]:
+                        - generic [ref=e1149]: 买点详解
+                      - button "全面体检" [ref=e1150] [cursor=pointer]:
+                        - generic [ref=e1151]: 全面体检
+                      - button "形态分析" [ref=e1152] [cursor=pointer]:
+                        - generic [ref=e1153]: 形态分析
+                  - article [ref=e1154]:
+                    - generic [ref=e1155]:
+                      - generic [ref=e1156]:
+                        - strong [ref=e1157]: 爱迪特
+                        - text: 301580.SZ
+                      - emphasis [ref=e1158]: +10.33%
+                    - generic [ref=e1159]: 阿里巴巴概念 / 涨幅前列
+                    - generic [ref=e1160]: 强势确认，强势股，主线，可交易，来源:涨幅前列
+                    - generic [ref=e1161]:
+                      - button "买点详解" [ref=e1162] [cursor=pointer]:
+                        - generic [ref=e1163]: 买点详解
+                      - button "全面体检" [ref=e1164] [cursor=pointer]:
+                        - generic [ref=e1165]: 全面体检
+                      - button "形态分析" [ref=e1166] [cursor=pointer]:
+                        - generic [ref=e1167]: 形态分析
+          - generic [ref=e1168]:
+            - generic [ref=e1171]:
+              - generic [ref=e1172]: 详细清单
+              - generic [ref=e1173]: 展开看每只票的完整判断和条件
+            - generic [ref=e1175]:
+              - tablist [ref=e1179]:
+                - tab "市场最强观察池 12" [ref=e1181]:
+                  - generic [ref=e1182]:
+                    - text: 市场最强观察池
+                    - emphasis [ref=e1183]: "12"
+                - tab "账户可参与池 5" [active] [selected] [ref=e1184] [cursor=pointer]:
+                  - generic [ref=e1185]:
+                    - text: 账户可参与池
+                    - emphasis [ref=e1186]: "5"
+                - tab "持仓处理池 3" [ref=e1187]:
+                  - generic [ref=e1188]:
+                    - text: 持仓处理池
+                    - emphasis [ref=e1189]: "3"
+              - tabpanel "账户可参与池 5" [ref=e1410]:
+                - generic [ref=e1411]:
+                  - generic [ref=e1412]:
+                    - generic [ref=e1413]:
+                      - generic [ref=e1414]: 账户可参与交叉分析
+                      - generic [ref=e1415]: 买点页已有 4 只可买，优先看 太极股份
+                      - generic [ref=e1416]: 可买信号仍需同时满足触发、确认、仓位和失效条件。
+                    - generic [ref=e1419]: 买点同步中
+                  - generic [ref=e1420]:
+                    - generic [ref=e1421]: 可买优先
+                    - generic [ref=e1422]: 标准候选优先
+                    - generic [ref=e1423]: 同方向不重复下单
+                  - generic [ref=e1424]:
+                    - article [ref=e1425]:
+                      - generic [ref=e1426]:
+                        - generic [ref=e1427]: "1"
+                        - generic [ref=e1428]:
+                          - strong [ref=e1429]: 太极股份
+                          - generic [ref=e1430]: 002368.SZ · 云计算
+                        - generic [ref=e1432]: 可执行
+                      - generic [ref=e1433]: 回踩承接型，可执行
+                      - generic [ref=e1434]:
+                        - generic [ref=e1435]:
+                          - text: 账户分
+                          - strong [ref=e1436]: "103.0"
+                        - generic [ref=e1437]:
+                          - text: 买点
+                          - strong [ref=e1438]: 可买
+                        - generic [ref=e1439]:
+                          - text: 触发价
+                          - strong [ref=e1440]: "21.18"
+                        - generic [ref=e1441]:
+                          - text: 距触发
+                          - strong [ref=e1442]: +0.81%
+                      - generic [ref=e1443]: 首选原因：标准候选优先于试错票；买点语境是突破后回踩；流动性比较分已计入成交额与换手。
+                      - generic [ref=e1444]:
+                        - generic [ref=e1445]: 收盘跌破今日最低价，视为突破失败；次日开盘跌破今日收盘价3%以上；跌破支撑位2%以上无法收回
+                        - button "买点详解" [ref=e1446] [cursor=pointer]:
+                          - generic [ref=e1447]: 买点详解
+                        - button "全面体检" [ref=e1448] [cursor=pointer]:
+                          - generic [ref=e1449]: 全面体检
+                        - button "形态分析" [ref=e1450] [cursor=pointer]:
+                          - generic [ref=e1451]: 形态分析
+                    - article [ref=e1452]:
+                      - generic [ref=e1453]:
+                        - generic [ref=e1454]: "2"
+                        - generic [ref=e1455]:
+                          - strong [ref=e1456]: 东方材料
+                          - generic [ref=e1457]: 603110.SH · 算力租赁
+                        - generic [ref=e1459]: 可执行
+                      - generic [ref=e1460]: 回踩承接型，可执行
+                      - generic [ref=e1461]:
+                        - generic [ref=e1462]:
+                          - text: 账户分
+                          - strong [ref=e1463]: "103.0"
+                        - generic [ref=e1464]:
+                          - text: 买点
+                          - strong [ref=e1465]: 可买
+                        - generic [ref=e1466]:
+                          - text: 触发价
+                          - strong [ref=e1467]: "17.79"
+                        - generic [ref=e1468]:
+                          - text: 距触发
+                          - strong [ref=e1469]: +1.08%
+                      - generic [ref=e1470]: 排序原因：标准候选优先于试错票；买点语境是突破后回踩；算力租赁方向已有多只入围，避免同方向重复下单；流动性比较分已计入成交额与换手。
+                      - generic [ref=e1471]:
+                        - generic [ref=e1472]: 收盘跌破今日最低价，视为突破失败；次日开盘跌破今日收盘价3%以上；跌破支撑位2%以上无法收回
+                        - button "买点详解" [ref=e1473] [cursor=pointer]:
+                          - generic [ref=e1474]: 买点详解
+                        - button "全面体检" [ref=e1475] [cursor=pointer]:
+                          - generic [ref=e1476]: 全面体检
+                        - button "形态分析" [ref=e1477] [cursor=pointer]:
+                          - generic [ref=e1478]: 形态分析
+                    - article [ref=e1479]:
+                      - generic [ref=e1480]:
+                        - generic [ref=e1481]: "3"
+                        - generic [ref=e1482]:
+                          - strong [ref=e1483]: 天亿马
+                          - generic [ref=e1484]: 301178.SZ · 算力租赁
+                        - generic [ref=e1486]: 可执行
+                      - generic [ref=e1487]: 回踩承接型，可执行
+                      - generic [ref=e1488]:
+                        - generic [ref=e1489]:
+                          - text: 账户分
+                          - strong [ref=e1490]: "103.0"
+                        - generic [ref=e1491]:
+                          - text: 买点
+                          - strong [ref=e1492]: 可买
+                        - generic [ref=e1493]:
+                          - text: 触发价
+                          - strong [ref=e1494]: "56.17"
+                        - generic [ref=e1495]:
+                          - text: 距触发
+                          - strong [ref=e1496]: +0.29%
+                      - generic [ref=e1497]: 排序原因：标准候选优先于试错票；买点语境是突破后回踩；算力租赁方向已有多只入围，避免同方向重复下单；流动性比较分已计入成交额与换手。
+                      - generic [ref=e1498]:
+                        - generic [ref=e1499]: 收盘跌破今日最低价，视为突破失败；次日开盘跌破今日收盘价3%以上；跌破支撑位2%以上无法收回
+                        - button "买点详解" [ref=e1500] [cursor=pointer]:
+                          - generic [ref=e1501]: 买点详解
+                        - button "全面体检" [ref=e1502] [cursor=pointer]:
+                          - generic [ref=e1503]: 全面体检
+                        - button "形态分析" [ref=e1504] [cursor=pointer]:
+                          - generic [ref=e1505]: 形态分析
+                    - article [ref=e1506]:
+                      - generic [ref=e1507]:
+                        - generic [ref=e1508]: "4"
+                        - generic [ref=e1509]:
+                          - strong [ref=e1510]: 瑞芯微
+                          - generic [ref=e1511]: 603893.SH · 腾讯概念
+                        - generic [ref=e1513]: 可执行
+                      - generic [ref=e1514]: 回踩承接型，可执行
+                      - generic [ref=e1515]:
+                        - generic [ref=e1516]:
+                          - text: 账户分
+                          - strong [ref=e1517]: "102.0"
+                        - generic [ref=e1518]:
+                          - text: 买点
+                          - strong [ref=e1519]: 可买
+                        - generic [ref=e1520]:
+                          - text: 触发价
+                          - strong [ref=e1521]: "170.48"
+                        - generic [ref=e1522]:
+                          - text: 距触发
+                          - strong [ref=e1523]: "-0.29%"
+                      - generic [ref=e1524]: 排序原因：标准候选优先于试错票；买点语境是回踩承接；流动性比较分已计入成交额与换手。
+                      - generic [ref=e1525]:
+                        - generic [ref=e1526]: 收盘跌破今日最低价，视为突破失败；次日开盘跌破今日收盘价3%以上；跌破支撑位2%以上无法收回
+                        - button "买点详解" [ref=e1527] [cursor=pointer]:
+                          - generic [ref=e1528]: 买点详解
+                        - button "全面体检" [ref=e1529] [cursor=pointer]:
+                          - generic [ref=e1530]: 全面体检
+                        - button "形态分析" [ref=e1531] [cursor=pointer]:
+                          - generic [ref=e1532]: 形态分析
+                    - article [ref=e1533]:
+                      - generic [ref=e1534]:
+                        - generic [ref=e1535]: "5"
+                        - generic [ref=e1536]:
+                          - strong [ref=e1537]: 海南华铁
+                          - generic [ref=e1538]: 603300.SH · 算力租赁
+                        - generic [ref=e1540]: 等待回踩
+                      - generic [ref=e1541]: 买点页暂未同步到这只票，先按三池进池原因跟踪，不直接执行。
+                      - generic [ref=e1542]:
+                        - generic [ref=e1543]:
+                          - text: 账户分
+                          - strong [ref=e1544]: "104.0"
+                        - generic [ref=e1545]:
+                          - text: 买点
+                          - strong [ref=e1546]: 未同步
+                        - generic [ref=e1547]:
+                          - text: 触发价
+                          - strong [ref=e1548]: "-"
+                        - generic [ref=e1549]:
+                          - text: 距触发
+                          - strong [ref=e1550]: "-"
+                      - generic [ref=e1551]: 排序原因：标准候选优先于试错票；算力租赁方向已有多只入围，避免同方向重复下单；流动性比较分已计入成交额与换手。
+                      - generic [ref=e1552]:
+                        - generic [ref=e1553]: 跌破5日均线
+                        - button "买点详解" [ref=e1554] [cursor=pointer]:
+                          - generic [ref=e1555]: 买点详解
+                        - button "全面体检" [ref=e1556] [cursor=pointer]:
+                          - generic [ref=e1557]: 全面体检
+                        - button "形态分析" [ref=e1558] [cursor=pointer]:
+                          - generic [ref=e1559]: 形态分析
+                - generic [ref=e1560]:
+                  - generic [ref=e1561]:
+                    - generic [ref=e1562]:
+                      - generic [ref=e1563]:
+                        - generic [ref=e1564]: 标准候选 · 接近执行位
+                        - generic [ref=e1565]: 这批票既通过账户准入，当前价也已经靠近执行区，优先看这一组。
+                      - generic [ref=e1566]: 4 只
+                    - generic [ref=e1567]:
+                      - article [ref=e1568]:
+                        - generic [ref=e1569]:
+                          - generic [ref=e1570]:
+                            - generic [ref=e1571]: 天亿马
+                            - generic [ref=e1572]: 301178.SZ
+                          - generic [ref=e1573]:
+                            - generic [ref=e1575]: 强势确认
+                            - generic [ref=e1577]: 强化中
+                            - generic [ref=e1579]: 中军
+                            - generic [ref=e1581]: 复盘加分
+                            - generic [ref=e1583]: 通过准入
+                            - generic [ref=e1585]: 接近执行位
+                        - generic [ref=e1586]:
+                          - generic [ref=e1587]: 算力租赁
+                          - generic [ref=e1588]: 量比异动
+                        - generic [ref=e1589]: 主线样本：中军，用于代表这条线的结构和跟踪价值。
+                        - generic [ref=e1590]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                        - generic [ref=e1591]: 当前价已回到确认区 55.92-56.42 附近，优先结合承接与量能确认。
+                        - generic [ref=e1592]: 硬过滤 5/5 通过
+                        - generic [ref=e1593]:
+                          - generic [ref=e1594]:
+                            - generic [ref=e1595]: 最新价
+                            - strong [ref=e1596]: "56.01"
+                            - generic [ref=e1597]: +7.20%
+                            - generic [ref=e1598]: 日线回退 2026-04-16
+                          - generic [ref=e1599]:
+                            - generic [ref=e1600]:
+                              - text: 市场分
+                              - strong [ref=e1601]: "100.0"
+                            - generic [ref=e1602]:
+                              - text: 执行分
+                              - strong [ref=e1603]: "100.0"
+                            - generic [ref=e1604]:
+                              - text: 账户分
+                              - strong [ref=e1605]: "103.0"
+                            - generic [ref=e1606]:
+                              - text: 距执行位
+                              - strong [ref=e1607]: +0.28%
+                        - generic [ref=e1608]:
+                          - generic [ref=e1609]:
+                            - generic [ref=e1610]: 强弱
+                            - strong [ref=e1611]: 强
+                          - generic [ref=e1612]:
+                            - generic [ref=e1613]: 连续性
+                            - strong [ref=e1614]: 可持续
+                          - generic [ref=e1615]:
+                            - generic [ref=e1616]: 交易性
+                            - strong [ref=e1617]: 可交易
+                        - generic [ref=e1618]:
+                          - generic [ref=e1619]: 五项画像
+                          - generic [ref=e1620]:
+                            - generic [ref=e1621]: A类主线
+                            - generic [ref=e1622]: 中军
+                            - generic [ref=e1623]: 前排
+                            - generic [ref=e1624]: 趋势大阳强
+                            - generic [ref=e1625]: 加速
+                            - generic [ref=e1626]: 有突破点
+                        - generic [ref=e1627]:
+                          - generic [ref=e1628]:
+                            - generic [ref=e1629]: 进池原因
+                            - generic [ref=e1630]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                          - generic [ref=e1631]:
+                            - generic [ref=e1632]: 未进其他池
+                            - generic [ref=e1633]: 若同票也出现在观察池，仍以账户执行清单的条件说明为准。
+                        - generic [ref=e1634]:
+                          - generic [ref=e1635]: 执行清单
+                          - generic [ref=e1636]:
+                            - generic [ref=e1637]:
+                              - generic [ref=e1638]:
+                                - generic [ref=e1639]: "1"
+                                - generic [ref=e1640]:
+                                  - generic [ref=e1641]: 为什么能进池
+                                  - generic [ref=e1642]: 先看账户和结构是否匹配
+                              - generic [ref=e1644]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                            - generic [ref=e1645]:
+                              - generic [ref=e1646]:
+                                - generic [ref=e1647]: "2"
+                                - generic [ref=e1648]:
+                                  - generic [ref=e1649]: 仓位提示
+                                  - generic [ref=e1650]: 执行前先按提示控制仓位
+                              - generic [ref=e1652]: 当前价已回到确认区 55.92-56.42 附近，优先结合承接与量能确认。
+                        - generic [ref=e1653]:
+                          - generic [ref=e1654]: 强势确认，强势股，主线，可交易，来源:量比异动
+                          - generic [ref=e1655]:
+                            - generic [ref=e1656]: 回买点页确认
+                            - button "买点详解" [ref=e1657] [cursor=pointer]:
+                              - generic [ref=e1658]: 买点详解
+                            - button "全面体检" [ref=e1659] [cursor=pointer]:
+                              - generic [ref=e1660]: 全面体检
+                            - button "形态分析" [ref=e1661] [cursor=pointer]:
+                              - generic [ref=e1662]: 形态分析
+                      - article [ref=e1663]:
+                        - generic [ref=e1664]:
+                          - generic [ref=e1665]:
+                            - generic [ref=e1666]: 太极股份
+                            - generic [ref=e1667]: 002368.SZ
+                          - generic [ref=e1668]:
+                            - generic [ref=e1670]: 强势确认
+                            - generic [ref=e1672]: 切换中
+                            - generic [ref=e1674]: 中军
+                            - generic [ref=e1676]: 复盘加分
+                            - generic [ref=e1678]: 通过准入
+                            - generic [ref=e1680]: 接近执行位
+                        - generic [ref=e1681]:
+                          - generic [ref=e1682]: 云计算
+                          - generic [ref=e1683]: 量比异动
+                        - generic [ref=e1684]: 主线样本：中军，用于代表这条线的结构和跟踪价值。
+                        - generic [ref=e1685]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                        - generic [ref=e1686]: 当前价已回到确认区 21.09-21.28 附近，优先结合承接与量能确认。
+                        - generic [ref=e1687]: 硬过滤 5/5 通过
+                        - generic [ref=e1688]:
+                          - generic [ref=e1689]:
+                            - generic [ref=e1690]: 最新价
+                            - strong [ref=e1691]: "21.01"
+                            - generic [ref=e1692]: +6.43%
+                            - generic [ref=e1693]: 日线回退 2026-04-16
+                          - generic [ref=e1694]:
+                            - generic [ref=e1695]:
+                              - text: 市场分
+                              - strong [ref=e1696]: "100.0"
+                            - generic [ref=e1697]:
+                              - text: 执行分
+                              - strong [ref=e1698]: "100.0"
+                            - generic [ref=e1699]:
+                              - text: 账户分
+                              - strong [ref=e1700]: "103.0"
+                            - generic [ref=e1701]:
+                              - text: 距执行位
+                              - strong [ref=e1702]: +0.83%
+                        - generic [ref=e1703]:
+                          - generic [ref=e1704]:
+                            - generic [ref=e1705]: 强弱
+                            - strong [ref=e1706]: 强
+                          - generic [ref=e1707]:
+                            - generic [ref=e1708]: 连续性
+                            - strong [ref=e1709]: 可持续
+                          - generic [ref=e1710]:
+                            - generic [ref=e1711]: 交易性
+                            - strong [ref=e1712]: 可交易
+                        - generic [ref=e1713]:
+                          - generic [ref=e1714]: 五项画像
+                          - generic [ref=e1715]:
+                            - generic [ref=e1716]: A类主线
+                            - generic [ref=e1717]: 中军
+                            - generic [ref=e1718]: 中军
+                            - generic [ref=e1719]: 趋势大阳强
+                            - generic [ref=e1720]: 加速
+                            - generic [ref=e1721]: 有突破点
+                        - generic [ref=e1722]:
+                          - generic [ref=e1723]:
+                            - generic [ref=e1724]: 进池原因
+                            - generic [ref=e1725]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                          - generic [ref=e1726]:
+                            - generic [ref=e1727]: 未进其他池
+                            - generic [ref=e1728]: 若同票也出现在观察池，仍以账户执行清单的条件说明为准。
+                        - generic [ref=e1729]:
+                          - generic [ref=e1730]: 执行清单
+                          - generic [ref=e1731]:
+                            - generic [ref=e1732]:
+                              - generic [ref=e1733]:
+                                - generic [ref=e1734]: "1"
+                                - generic [ref=e1735]:
+                                  - generic [ref=e1736]: 为什么能进池
+                                  - generic [ref=e1737]: 先看账户和结构是否匹配
+                              - generic [ref=e1739]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                            - generic [ref=e1740]:
+                              - generic [ref=e1741]:
+                                - generic [ref=e1742]: "2"
+                                - generic [ref=e1743]:
+                                  - generic [ref=e1744]: 仓位提示
+                                  - generic [ref=e1745]: 执行前先按提示控制仓位
+                              - generic [ref=e1747]: 当前价已回到确认区 21.09-21.28 附近，优先结合承接与量能确认。
+                        - generic [ref=e1748]:
+                          - generic [ref=e1749]: 强势确认，强势股，主线，可交易，来源:量比异动
+                          - generic [ref=e1750]:
+                            - generic [ref=e1751]: 回买点页确认
+                            - button "买点详解" [ref=e1752] [cursor=pointer]:
+                              - generic [ref=e1753]: 买点详解
+                            - button "全面体检" [ref=e1754] [cursor=pointer]:
+                              - generic [ref=e1755]: 全面体检
+                            - button "形态分析" [ref=e1756] [cursor=pointer]:
+                              - generic [ref=e1757]: 形态分析
+                      - article [ref=e1758]:
+                        - generic [ref=e1759]:
+                          - generic [ref=e1760]:
+                            - generic [ref=e1761]: 东方材料
+                            - generic [ref=e1762]: 603110.SH
+                          - generic [ref=e1763]:
+                            - generic [ref=e1765]: 强势确认
+                            - generic [ref=e1767]: 强化中
+                            - generic [ref=e1769]: 中军
+                            - generic [ref=e1771]: 复盘加分
+                            - generic [ref=e1773]: 通过准入
+                            - generic [ref=e1775]: 接近执行位
+                        - generic [ref=e1776]:
+                          - generic [ref=e1777]: 算力租赁
+                          - generic [ref=e1778]: 量比异动
+                        - generic [ref=e1779]: 主线样本：中军，用于代表这条线的结构和跟踪价值。
+                        - generic [ref=e1780]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                        - generic [ref=e1781]: 当前价已回到确认区 17.71-17.87 附近，优先结合承接与量能确认。
+                        - generic [ref=e1782]: 硬过滤 5/5 通过
+                        - generic [ref=e1783]:
+                          - generic [ref=e1784]:
+                            - generic [ref=e1785]: 最新价
+                            - strong [ref=e1786]: "17.60"
+                            - generic [ref=e1787]: +6.09%
+                            - generic [ref=e1788]: 日线回退 2026-04-16
+                          - generic [ref=e1789]:
+                            - generic [ref=e1790]:
+                              - text: 市场分
+                              - strong [ref=e1791]: "100.0"
+                            - generic [ref=e1792]:
+                              - text: 执行分
+                              - strong [ref=e1793]: "100.0"
+                            - generic [ref=e1794]:
+                              - text: 账户分
+                              - strong [ref=e1795]: "103.0"
+                            - generic [ref=e1796]:
+                              - text: 距执行位
+                              - strong [ref=e1797]: +1.07%
+                        - generic [ref=e1798]:
+                          - generic [ref=e1799]:
+                            - generic [ref=e1800]: 强弱
+                            - strong [ref=e1801]: 强
+                          - generic [ref=e1802]:
+                            - generic [ref=e1803]: 连续性
+                            - strong [ref=e1804]: 可持续
+                          - generic [ref=e1805]:
+                            - generic [ref=e1806]: 交易性
+                            - strong [ref=e1807]: 可交易
+                        - generic [ref=e1808]:
+                          - generic [ref=e1809]: 五项画像
+                          - generic [ref=e1810]:
+                            - generic [ref=e1811]: A类主线
+                            - generic [ref=e1812]: 中军
+                            - generic [ref=e1813]: 中军
+                            - generic [ref=e1814]: 趋势大阳强
+                            - generic [ref=e1815]: 加速
+                            - generic [ref=e1816]: 有突破点
+                        - generic [ref=e1817]:
+                          - generic [ref=e1818]:
+                            - generic [ref=e1819]: 进池原因
+                            - generic [ref=e1820]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                          - generic [ref=e1821]:
+                            - generic [ref=e1822]: 未进其他池
+                            - generic [ref=e1823]: 若同票也出现在观察池，仍以账户执行清单的条件说明为准。
+                        - generic [ref=e1824]:
+                          - generic [ref=e1825]: 执行清单
+                          - generic [ref=e1826]:
+                            - generic [ref=e1827]:
+                              - generic [ref=e1828]:
+                                - generic [ref=e1829]: "1"
+                                - generic [ref=e1830]:
+                                  - generic [ref=e1831]: 为什么能进池
+                                  - generic [ref=e1832]: 先看账户和结构是否匹配
+                              - generic [ref=e1834]: 交易性为可交易，且存在突破确认机会，可纳入账户可参与池。
+                            - generic [ref=e1835]:
+                              - generic [ref=e1836]:
+                                - generic [ref=e1837]: "2"
+                                - generic [ref=e1838]:
+                                  - generic [ref=e1839]: 仓位提示
+                                  - generic [ref=e1840]: 执行前先按提示控制仓位
+                              - generic [ref=e1842]: 当前价已回到确认区 17.71-17.87 附近，优先结合承接与量能确认。
+                        - generic [ref=e1843]:
+                          - generic [ref=e1844]: 强势确认，强势股，主线，可交易，来源:量比异动
+                          - generic [ref=e1845]:
+                            - generic [ref=e1846]: 回买点页确认
+                            - button "买点详解" [ref=e1847] [cursor=pointer]:
+                              - generic [ref=e1848]: 买点详解
+                            - button "全面体检" [ref=e1849] [cursor=pointer]:
+                              - generic [ref=e1850]: 全面体检
+                            - button "形态分析" [ref=e1851] [cursor=pointer]:
+                              - generic [ref=e1852]: 形态分析
+                      - article [ref=e1853]:
+                        - generic [ref=e1854]:
+                          - generic [ref=e1855]:
+                            - generic [ref=e1856]: 瑞芯微
+                            - generic [ref=e1857]: 603893.SH
+                          - generic [ref=e1858]:
+                            - generic [ref=e1860]: 趋势回踩
+                            - generic [ref=e1862]: 中军
+                            - generic [ref=e1864]: 复盘中性
+                            - generic [ref=e1866]: 通过准入
+                            - generic [ref=e1868]: 接近执行位
+                        - generic [ref=e1869]:
+                          - generic [ref=e1870]: 腾讯概念
+                          - generic [ref=e1871]: 主线回踩补充
+                        - generic [ref=e1872]: 主线样本：中军，用于代表这条线的结构和跟踪价值。
+                        - generic [ref=e1873]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                        - generic [ref=e1874]: 当前价已回到确认区 171.04-172.42 附近，优先结合承接与量能确认。
+                        - generic [ref=e1875]: 硬过滤 5/5 通过
+                        - generic [ref=e1876]:
+                          - generic [ref=e1877]:
+                            - generic [ref=e1878]: 最新价
+                            - strong [ref=e1879]: "170.98"
+                            - generic [ref=e1880]: +0.29%
+                            - generic [ref=e1881]: 日线回退 2026-04-16
+                          - generic [ref=e1882]:
+                            - generic [ref=e1883]:
+                              - text: 市场分
+                              - strong [ref=e1884]: "96.0"
+                            - generic [ref=e1885]:
+                              - text: 执行分
+                              - strong [ref=e1886]: "98.4"
+                            - generic [ref=e1887]:
+                              - text: 账户分
+                              - strong [ref=e1888]: "102.0"
+                            - generic [ref=e1889]:
+                              - text: 距执行位
+                              - strong [ref=e1890]: +0.44%
+                        - generic [ref=e1891]:
+                          - generic [ref=e1892]:
+                            - generic [ref=e1893]: 强弱
+                            - strong [ref=e1894]: 中
+                          - generic [ref=e1895]:
+                            - generic [ref=e1896]: 连续性
+                            - strong [ref=e1897]: 可持续
+                          - generic [ref=e1898]:
+                            - generic [ref=e1899]: 交易性
+                            - strong [ref=e1900]: 谨慎
+                        - generic [ref=e1901]:
+                          - generic [ref=e1902]: 五项画像
+                          - generic [ref=e1903]:
+                            - generic [ref=e1904]: A类主线
+                            - generic [ref=e1905]: 中军
+                            - generic [ref=e1906]: 中军
+                            - generic [ref=e1907]: 只是跟涨
+                            - generic [ref=e1908]: 分歧
+                            - generic [ref=e1909]: 有回踩确认点
+                        - generic [ref=e1910]:
+                          - generic [ref=e1911]:
+                            - generic [ref=e1912]: 进池原因
+                            - generic [ref=e1913]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                          - generic [ref=e1914]:
+                            - generic [ref=e1915]: 未进其他池
+                            - generic [ref=e1916]: 若同票也出现在观察池，仍以账户执行清单的条件说明为准。
+                        - generic [ref=e1917]:
+                          - generic [ref=e1918]: 执行清单
+                          - generic [ref=e1919]:
+                            - generic [ref=e1920]:
+                              - generic [ref=e1921]:
+                                - generic [ref=e1922]: "1"
+                                - generic [ref=e1923]:
+                                  - generic [ref=e1924]: 为什么能进池
+                                  - generic [ref=e1925]: 先看账户和结构是否匹配
+                              - generic [ref=e1927]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                            - generic [ref=e1928]:
+                              - generic [ref=e1929]:
+                                - generic [ref=e1930]: "2"
+                                - generic [ref=e1931]:
+                                  - generic [ref=e1932]: 仓位提示
+                                  - generic [ref=e1933]: 执行前先按提示控制仓位
+                              - generic [ref=e1935]: 当前价已回到确认区 171.04-172.42 附近，优先结合承接与量能确认。
+                        - generic [ref=e1936]:
+                          - generic [ref=e1937]: 趋势回踩，中性，主线，谨慎，来源:主线回踩补充
+                          - generic [ref=e1938]:
+                            - generic [ref=e1939]: 回买点页确认
+                            - button "买点详解" [ref=e1940] [cursor=pointer]:
+                              - generic [ref=e1941]: 买点详解
+                            - button "全面体检" [ref=e1942] [cursor=pointer]:
+                              - generic [ref=e1943]: 全面体检
+                            - button "形态分析" [ref=e1944] [cursor=pointer]:
+                              - generic [ref=e1945]: 形态分析
+                  - generic [ref=e1946]:
+                    - generic [ref=e1947]:
+                      - generic [ref=e1948]:
+                        - generic [ref=e1949]: 标准候选 · 待触发
+                        - generic [ref=e1950]: 这批票已通过账户准入，但现价离执行位还有距离，先跟计划，不要当成当前立刻可买。
+                      - generic [ref=e1951]: 1 只
+                    - article [ref=e1953]:
+                      - generic [ref=e1954]:
+                        - generic [ref=e1955]:
+                          - generic [ref=e1956]: 海南华铁
+                          - generic [ref=e1957]: 603300.SH
+                        - generic [ref=e1958]:
+                          - generic [ref=e1960]: 趋势回踩
+                          - generic [ref=e1962]: 强化中
+                          - generic [ref=e1964]: 中军
+                          - generic [ref=e1966]: 复盘中性
+                          - generic [ref=e1968]: 通过准入
+                          - generic [ref=e1970]: 待回踩
+                      - generic [ref=e1971]:
+                        - generic [ref=e1972]: 算力租赁
+                        - generic [ref=e1973]: 量比异动
+                      - generic [ref=e1974]: 主线样本：中军，用于代表这条线的结构和跟踪价值。
+                      - generic [ref=e1975]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                      - generic [ref=e1976]: 当前价高于确认区 6.86-6.93 约 2.97%，先回买点页等触发。
+                      - generic [ref=e1977]: 硬过滤 5/5 通过
+                      - generic [ref=e1978]:
+                        - generic [ref=e1979]:
+                          - generic [ref=e1980]: 最新价
+                          - strong [ref=e1981]: "7.10"
+                          - generic [ref=e1982]: +4.87%
+                          - generic [ref=e1983]: 日线回退 2026-04-16
+                        - generic [ref=e1984]:
+                          - generic [ref=e1985]:
+                            - text: 市场分
+                            - strong [ref=e1986]: "100.0"
+                          - generic [ref=e1987]:
+                            - text: 执行分
+                            - strong [ref=e1988]: "100.0"
+                          - generic [ref=e1989]:
+                            - text: 账户分
+                            - strong [ref=e1990]: "104.0"
+                          - generic [ref=e1991]:
+                            - text: 距执行位
+                            - strong [ref=e1992]: "-2.97%"
+                      - generic [ref=e1993]:
+                        - generic [ref=e1994]:
+                          - generic [ref=e1995]: 强弱
+                          - strong [ref=e1996]: 中
+                        - generic [ref=e1997]:
+                          - generic [ref=e1998]: 连续性
+                          - strong [ref=e1999]: 可持续
+                        - generic [ref=e2000]:
+                          - generic [ref=e2001]: 交易性
+                          - strong [ref=e2002]: 谨慎
+                      - generic [ref=e2003]:
+                        - generic [ref=e2004]: 五项画像
+                        - generic [ref=e2005]:
+                          - generic [ref=e2006]: A类主线
+                          - generic [ref=e2007]: 中军
+                          - generic [ref=e2008]: 中军
+                          - generic [ref=e2009]: 分歧转强
+                          - generic [ref=e2010]: 修复
+                          - generic [ref=e2011]: 有回踩确认点
+                      - generic [ref=e2012]:
+                        - generic [ref=e2013]:
+                          - generic [ref=e2014]: 进池原因
+                          - generic [ref=e2015]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                        - generic [ref=e2016]:
+                          - generic [ref=e2017]: 未进其他池
+                          - generic [ref=e2018]: 若同票也出现在观察池，仍以账户执行清单的条件说明为准。
+                      - generic [ref=e2019]:
+                        - generic [ref=e2020]: 执行清单
+                        - generic [ref=e2021]:
+                          - generic [ref=e2022]:
+                            - generic [ref=e2023]:
+                              - generic [ref=e2024]: "1"
+                              - generic [ref=e2025]:
+                                - generic [ref=e2026]: 为什么能进池
+                                - generic [ref=e2027]: 先看账户和结构是否匹配
+                            - generic [ref=e2029]: 趋势回踩确认位较舒服，可纳入账户可参与池。
+                          - generic [ref=e2030]:
+                            - generic [ref=e2031]:
+                              - generic [ref=e2032]: "2"
+                              - generic [ref=e2033]:
+                                - generic [ref=e2034]: 仓位提示
+                                - generic [ref=e2035]: 执行前先按提示控制仓位
+                            - generic [ref=e2037]: 当前价高于确认区 6.86-6.93 约 2.97%，先回买点页等触发。
+                      - generic [ref=e2038]:
+                        - generic [ref=e2039]: 趋势回踩，中性，主线，谨慎，来源:量比异动
+                        - generic [ref=e2040]:
+                          - generic [ref=e2041]: 回买点页确认
+                          - button "买点详解" [ref=e2042] [cursor=pointer]:
+                            - generic [ref=e2043]: 买点详解
+                          - button "全面体检" [ref=e2044] [cursor=pointer]:
+                            - generic [ref=e2045]: 全面体检
+                          - button "形态分析" [ref=e2046] [cursor=pointer]:
+                            - generic [ref=e2047]: 形态分析
