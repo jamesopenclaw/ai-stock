@@ -1978,6 +1978,11 @@ class StockFilterService:
     def _should_skip_stock(self, stock: StockInput) -> bool:
         """在评分前先去掉明显无效的候选。"""
         source = stock.candidate_source_tag or ""
+        # 自选手动跟踪：用户显式维护，不因三池流动性/价格门槛提前丢弃；仅排除无效 K 线。
+        if "手动跟踪" in source:
+            if stock.close <= 0 or stock.high <= 0 or stock.low <= 0:
+                return True
+            return False
         if "持仓补齐" in source:
             return False
 
@@ -2028,6 +2033,15 @@ class StockFilterService:
             code = normalize_ts_code(stock.ts_code)
             source = str(stock.candidate_source_tag or "")
             if "持仓补齐" in source or code in holding_codes:
+                self._attach_hard_filter_debug(
+                    stock,
+                    {key: (True, None) for key in self.HARD_FILTER_RULE_LABELS},
+                )
+                filtered.append(stock)
+                continue
+
+            # 自选手动跟踪：不套用「自动三池」硬过滤，避免列表在 DB 有记录时前端被滤成空。
+            if "手动跟踪" in source:
                 self._attach_hard_filter_debug(
                     stock,
                     {key: (True, None) for key in self.HARD_FILTER_RULE_LABELS},

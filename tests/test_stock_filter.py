@@ -3514,6 +3514,74 @@ class TestStockFilterEdgeCases:
         # 极端下跌应被识别（可能是弱势或中等）
         assert scored.stock_strength_tag in [StockStrengthTag.WEAK, StockStrengthTag.MEDIUM]
 
+    def test_manual_watch_not_skipped_when_below_liquidity_floor(self, service):
+        """手动跟踪不因三池成交额门槛被提前丢弃（build_manual_watch_view 依赖）。"""
+        stock = StockInput(
+            ts_code="000001.SZ",
+            stock_name="低流动性",
+            sector_name="测",
+            close=5.0,
+            change_pct=0.0,
+            turnover_rate=0.1,
+            amount=100.0,
+            high=5.0,
+            low=5.0,
+            open=5.0,
+            pre_close=5.0,
+            candidate_source_tag="手动跟踪",
+        )
+        assert service._should_skip_stock(stock) is False
+
+    def test_manual_watch_always_retained_in_hard_filters(self, service):
+        """手动跟踪绕开自动三池硬过滤，避免自选 API 有库无单。"""
+        account = AccountInput(
+            total_asset=100000,
+            available_cash=40000,
+            total_position_ratio=0.3,
+            holding_count=1,
+            today_new_buy_count=0,
+            today_sell_count=0,
+        )
+        out = StockOutput(
+            ts_code="000001.SZ",
+            stock_name="自选",
+            sector_name="测",
+            change_pct=1.0,
+            stock_strength_tag=StockStrengthTag.MEDIUM,
+            stock_continuity_tag=StockContinuityTag.SUSTAINABLE,
+            stock_tradeability_tag=StockTradeabilityTag.TRADABLE,
+            stock_core_tag=StockCoreTag.FOLLOW,
+            stock_pool_tag=StockPoolTag.MARKET_WATCH,
+            candidate_source_tag="手动跟踪",
+        )
+        raw = StockInput(
+            ts_code="000001.SZ",
+            stock_name="自选",
+            sector_name="测",
+            close=10.0,
+            change_pct=1.0,
+            turnover_rate=1.0,
+            amount=1.0e8,
+            high=10.0,
+            low=10.0,
+            open=10.0,
+            pre_close=9.9,
+            candidate_source_tag="手动跟踪",
+        )
+        from app.services.stock_filter import normalize_ts_code
+
+        raw_map = {normalize_ts_code(raw.ts_code): raw}
+        filtered = service._apply_hard_filters(
+            [out],
+            raw_map,
+            market_env=MagicMock(),
+            account=account,
+            holdings=[],
+            sector_map={},
+        )
+        assert len(filtered) == 1
+        assert filtered[0].ts_code == "000001.SZ"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
