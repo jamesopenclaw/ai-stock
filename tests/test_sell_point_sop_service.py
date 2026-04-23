@@ -318,6 +318,138 @@ async def test_sell_point_sop_service_returns_clear_plan_for_weak_loser(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_sell_point_sop_softens_clear_when_pattern_is_still_bullish(monkeypatch):
+    market_env = MarketEnvOutput(
+        trade_date="2026-04-23",
+        market_env_tag=MarketEnvTag.NEUTRAL,
+        breakout_allowed=False,
+        risk_level=RiskLevel.MEDIUM,
+        market_comment="中性环境",
+        index_score=54,
+        sentiment_score=55,
+        overall_score=55,
+    )
+    target_input = SimpleNamespace(
+        ts_code="603139.SH",
+        stock_name="康惠股份",
+        sector_name="中成药",
+        close=35.77,
+        open=35.9,
+        high=36.1,
+        low=35.42,
+        pre_close=35.66,
+        change_pct=0.31,
+        turnover_rate=5.1,
+        amount=120000,
+        vol_ratio=1.1,
+        quote_time=None,
+        data_source="daily",
+    )
+    holding = _sample_holding(
+        ts_code="603139.SH",
+        stock_name="康惠股份",
+        cost_price=28.22,
+        market_price=35.77,
+        pnl_pct=26.75,
+        holding_market_value=10731.0,
+        holding_reason="进攻仓，趋势延续",
+    )
+    context = SimpleNamespace(
+        trade_date="2026-04-23",
+        resolved_stock_trade_date="2026-04-23",
+        market_env=market_env,
+        sector_scan=SimpleNamespace(),
+        stocks=[target_input],
+        holdings_list=[holding.model_dump()],
+        holdings=[holding],
+        account=SimpleNamespace(
+            total_asset=100000,
+            available_cash=45000,
+            total_position_ratio=0.55,
+            holding_count=3,
+            today_new_buy_count=0,
+        ),
+    )
+    scored = _sample_scored_stock()
+    scored.ts_code = "603139.SH"
+    scored.stock_name = "康惠股份"
+    scored.close = 35.77
+    scored.open = 35.9
+    scored.high = 36.1
+    scored.low = 35.42
+    scored.change_pct = 0.31
+    scored.structure_state_tag = StructureStateTag.START
+
+    sell_point = SellPointOutput(
+        ts_code="603139.SH",
+        stock_name="康惠股份",
+        market_price=35.77,
+        cost_price=28.22,
+        pnl_pct=26.75,
+        holding_qty=300,
+        holding_days=8,
+        can_sell_today=True,
+        quote_time=None,
+        data_source="daily",
+        sell_signal_tag=SellSignalTag.SELL,
+        sell_point_type=SellPointType.STOP_PROFIT,
+        sell_trigger_cond="冲高后不能续强时止盈",
+        sell_reason="利润较厚，先考虑兑现",
+        sell_priority=SellPriority.HIGH,
+        sell_comment="先保护利润",
+    )
+
+    async def fake_build_context(*args, **kwargs):
+        return context
+
+    monkeypatch.setattr(
+        "app.services.sell_point_sop.decision_context_service.build_context",
+        fake_build_context,
+    )
+    monkeypatch.setattr(
+        "app.services.sell_point_sop.decision_context_service.build_single_stock_input",
+        lambda *args, **kwargs: target_input,
+    )
+    monkeypatch.setattr(
+        "app.services.sell_point_sop.stock_filter_service.filter_with_context",
+        lambda *args, **kwargs: [scored],
+    )
+    monkeypatch.setattr(
+        sell_point_sop_service,
+        "_load_history_payload",
+        lambda *args, **kwargs: (_history_rows(), "2026-04-23"),
+    )
+    monkeypatch.setattr(
+        sell_point_sop_service,
+        "_build_pattern_context",
+        lambda *args, **kwargs: SimpleNamespace(
+            primary_pattern="上升趋势延续",
+            defense_level=30.07,
+            breakout_level=36.3,
+            bullish_bias=True,
+            structure_intact=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.sell_point_sop.sell_point_service.analyze",
+        lambda *args, **kwargs: SellPointResponse(
+            trade_date="2026-04-23",
+            hold_positions=[],
+            reduce_positions=[],
+            sell_positions=[sell_point],
+            total_count=1,
+        ),
+    )
+
+    result = await sell_point_sop_service.analyze("603139.SH", "2026-04-23")
+
+    assert result.daily_judgement.sell_point_level == "C"
+    assert result.intraday_judgement.conclusion == "减"
+    assert "上升趋势延续" in result.intraday_judgement.note
+    assert result.execution.action == "减"
+
+
+@pytest.mark.asyncio
 async def test_sell_point_sop_prefers_realtime_single_stock_input_for_intraday(monkeypatch):
     market_env = MarketEnvOutput(
         trade_date="2026-03-23",

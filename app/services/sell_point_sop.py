@@ -15,6 +15,7 @@ from app.models.schemas import (
     IntradayFeatureSet,
     MarketEnvTag,
     SellPointOutput,
+    SellPointType,
     SellPointSopAccountContext,
     SellPointSopBasicInfo,
     SellPointSopDailyJudgement,
@@ -28,6 +29,7 @@ from app.models.schemas import (
 )
 from app.services.account_adapter import AccountAdapterService
 from app.services.decision_context import decision_context_service
+from app.services.pattern_analysis import pattern_analysis_service
 from app.services.sell_point import sell_point_service
 from app.services.stock_checkup import stock_checkup_service
 from app.services.stock_filter import stock_filter_service
@@ -51,8 +53,27 @@ class SellPlanAnchor:
     levels: SellDailyLevels
 
 
+@dataclass
+class SellPatternContext:
+    primary_pattern: str = ""
+    defense_level: Optional[float] = None
+    breakout_level: Optional[float] = None
+    bullish_bias: bool = False
+    structure_intact: bool = False
+
+
 class SellPointSopService:
     """按卖点 SOP 输出单只持仓的结构化处理建议。"""
+
+    BULLISH_HOLD_PATTERNS = {
+        "平台突破临界",
+        "回踩确认",
+        "旗形中继",
+        "上升趋势延续",
+        "双底修复",
+        "V形修复",
+        "圆弧底修复",
+    }
 
     def _load_history_payload(
         self,
@@ -186,6 +207,11 @@ class SellPointSopService:
             normalized_code,
             trade_date,
         )
+        pattern_context = self._build_pattern_context(
+            target_input,
+            target_scored,
+            history_rows,
+        )
         levels = self._build_daily_levels(target_input, history_rows)
         account_context = self._build_account_context(
             context.account,
@@ -200,6 +226,7 @@ class SellPointSopService:
             target_sell_point,
             stable_market_env,
             levels,
+            pattern_context=pattern_context,
         )
         intraday_judgement = self._build_intraday_judgement(
             target_input,
@@ -207,6 +234,7 @@ class SellPointSopService:
             target_sell_point,
             daily_judgement.sell_point_level,
             levels,
+            pattern_context=pattern_context,
         )
         order_plan = self._build_order_plan(
             target_input,
@@ -218,6 +246,7 @@ class SellPointSopService:
             intraday_judgement,
             levels,
             history_rows,
+            pattern_context=pattern_context,
         )
         execution = self._build_execution(
             target_holding,
@@ -343,6 +372,7 @@ class SellPointSopService:
         sell_point: SellPointOutput,
         market_env,
         levels: SellDailyLevels,
+        pattern_context: Optional[SellPatternContext] = None,
     ) -> SellPointSopDailyJudgement:
         price = float(target_input.close or holding.market_price or 0)
         change_pct = float(target_input.change_pct or 0)
@@ -383,6 +413,10 @@ class SellPointSopService:
             reason_bits.append("市场偏防守，卖点容错要求更高")
         if below_ma10:
             reason_bits.append("已经触及10日线下方，结构保护优先")
+        if level == "D" and self._should_soften_clear_signal(sell_point, holding, pattern_context):
+            level = "C"
+            signals.append("形态主结构仍未失效")
+            reason_bits.append(self._pattern_soften_reason(pattern_context))
 
         return SellPointSopDailyJudgement(
             current_stage=stage,
@@ -398,6 +432,7 @@ class SellPointSopService:
         sell_point: SellPointOutput,
         daily_level: str,
         levels: SellDailyLevels,
+        pattern_context: Optional[SellPatternContext] = None,
     ) -> SellPointSopIntradayJudgement:
         realtime = str(target_input.data_source or "").startswith("realtime_")
         price = float(target_input.close or holding.market_price or 0)
@@ -422,12 +457,20 @@ class SellPointSopService:
                 conclusion = "减"
             elif sell_point.sell_signal_tag == SellSignalTag.REDUCE:
                 conclusion = "减"
+            note = "当前不是实时分时口径，具体卖法要结合盘中承接和回流再确认。"
+            if self._should_soften_clear_signal(sell_point, holding, pattern_context):
+                note = (
+                    "当前不是实时分时口径，具体卖法要结合盘中承接和回流再确认；"
+                    f"{self._pattern_soften_reason(pattern_context)}"
+                )
+                if conclusion == "清":
+                    conclusion = "减"
             return SellPointSopIntradayJudgement(
                 price_vs_avg_line="均价线关系 [需确认]",
                 intraday_structure=f"{structure} [需确认]",
                 volume_quality=volume_quality,
                 conclusion=conclusion,
-                note="当前不是实时分时口径，具体卖法要结合盘中承接和回流再确认。",
+                note=note,
             )
 
         if structure == "跌破关键低点":
@@ -440,13 +483,21 @@ class SellPointSopService:
             conclusion = "拿"
         else:
             conclusion = "减" if sell_point.sell_signal_tag == SellSignalTag.REDUCE else "拿"
+        note = "已结合实时分时结构与均价线关系，具体执行仍建议配合盘口观察。"
+        if (
+            conclusion == "清"
+            and structure != "跌破关键低点"
+            and self._should_soften_clear_signal(sell_point, holding, pattern_context)
+        ):
+            conclusion = "减"
+            note = f"分时还没到明确失效，先按减仓防守处理；{self._pattern_soften_reason(pattern_context)}"
 
         return SellPointSopIntradayJudgement(
             price_vs_avg_line=self._resolve_price_vs_avg_line(target_input, price),
             intraday_structure=structure,
             volume_quality=volume_quality,
             conclusion=conclusion,
-            note="已结合实时分时结构与均价线关系，具体执行仍建议配合盘口观察。",
+            note=note,
         )
 
     def _build_order_plan(
@@ -460,6 +511,7 @@ class SellPointSopService:
         intraday_judgement: SellPointSopIntradayJudgement,
         levels: SellDailyLevels,
         history_rows: List[Dict],
+        pattern_context: Optional[SellPatternContext] = None,
     ) -> SellPointSopOrderPlan:
         live_holding_price = self._round_price(getattr(holding, "market_price", None))
         live_price = float(live_holding_price or target_input.close or 0)
@@ -471,6 +523,7 @@ class SellPointSopService:
             intraday_judgement,
             sell_point,
             holding,
+            pattern_context=pattern_context,
         )
         proactive_ref = self._select_proactive_ref(
             live_price,
@@ -863,11 +916,16 @@ class SellPointSopService:
         intraday_judgement: SellPointSopIntradayJudgement,
         sell_point: SellPointOutput,
         holding: AccountPosition,
+        pattern_context: Optional[SellPatternContext] = None,
     ) -> str:
         role = account_context.role
         pnl_status = account_context.pnl_status
         strength_tag = getattr(getattr(target_scored, "stock_strength_tag", None), "value", "")
         core_tag = getattr(getattr(target_scored, "stock_core_tag", None), "value", "")
+
+        if self._should_soften_clear_signal(sell_point, holding, pattern_context):
+            if intraday_judgement.conclusion == "减" or daily_judgement.sell_point_level == "C":
+                return "observation_exit"
 
         if (
             role == "待处理仓"
@@ -1087,6 +1145,76 @@ class SellPointSopService:
         if value is None:
             return "[需确认]"
         return f"{value:.2f}"
+
+    def _build_pattern_context(
+        self,
+        target_input,
+        target_scored: Optional[StockOutput],
+        history_rows: List[Dict],
+    ) -> SellPatternContext:
+        if target_scored is None or not history_rows:
+            return SellPatternContext()
+        try:
+            feature_snapshot = pattern_analysis_service._build_feature_snapshot(target_input, history_rows)
+            candidates = pattern_analysis_service._build_pattern_candidates(
+                feature_snapshot,
+                target_input,
+                target_scored,
+                history_rows,
+            )
+            result = pattern_analysis_service._build_rule_result(
+                feature_snapshot,
+                candidates,
+                target_input,
+                target_scored,
+                history_rows,
+            )
+        except Exception as exc:
+            logger.debug(f"卖点 SOP 构建形态上下文失败: {exc}")
+            return SellPatternContext()
+
+        primary_pattern = str(getattr(result, "primary_pattern", "") or "")
+        defense_level = self._round_price(getattr(result, "defense_level", None))
+        breakout_level = self._round_price(getattr(result, "breakout_level", None))
+        latest_price = self._round_price(getattr(target_input, "close", None))
+        bullish_bias = primary_pattern in self.BULLISH_HOLD_PATTERNS
+        structure_intact = bullish_bias and (
+            defense_level is None
+            or (latest_price is not None and latest_price >= defense_level * 0.995)
+        )
+        return SellPatternContext(
+            primary_pattern=primary_pattern,
+            defense_level=defense_level,
+            breakout_level=breakout_level,
+            bullish_bias=bullish_bias,
+            structure_intact=structure_intact,
+        )
+
+    def _should_soften_clear_signal(
+        self,
+        sell_point: SellPointOutput,
+        holding: AccountPosition,
+        pattern_context: Optional[SellPatternContext],
+    ) -> bool:
+        if pattern_context is None or not pattern_context.structure_intact:
+            return False
+        if sell_point.sell_signal_tag != SellSignalTag.SELL:
+            return False
+        if (holding.pnl_pct or 0) <= 0:
+            return False
+        if sell_point.sell_point_type in {SellPointType.STOP_LOSS, SellPointType.INVALID_EXIT}:
+            return False
+        return True
+
+    def _pattern_soften_reason(self, pattern_context: Optional[SellPatternContext]) -> str:
+        if pattern_context is None or not pattern_context.primary_pattern:
+            return "形态主结构还没明确走坏，先按保护利润处理。"
+        if pattern_context.defense_level is not None:
+            return (
+                f"形态分析仍为{pattern_context.primary_pattern}，且未有效跌破 "
+                f"{pattern_context.defense_level:.2f} 的防守位，先按保护利润处理。"
+            )
+        return f"形态分析仍为{pattern_context.primary_pattern}，主结构还没明确走坏，先按保护利润处理。"
 
     def _round_price(self, value: Optional[float]) -> Optional[float]:
         if value is None:
