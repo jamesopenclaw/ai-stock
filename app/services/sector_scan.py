@@ -464,7 +464,7 @@ class SectorScanService:
                 None,
             ):
                 effective_trade_date = self.client._resolve_trade_date(compact_trade_date)
-                df_up = self.client.pro.limit_list_d(
+                df_up = self.client._call_pro_limit_list_d(
                     trade_date=effective_trade_date,
                     limit_type="U",
                 )
@@ -877,7 +877,7 @@ class SectorScanService:
                 effective_trade_date = self.client._resolve_trade_date(
                     compact_trade_date,
                 )
-                df_up = self.client.pro.limit_list_d(
+                df_up = self.client._call_pro_limit_list_d(
                     trade_date=effective_trade_date,
                     limit_type="U",
                 )

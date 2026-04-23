@@ -52,6 +52,7 @@ const stockApi = {
   detail: vi.fn(),
   buyAnalysis: vi.fn(),
   sellAnalysis: vi.fn(),
+  manualWatch: vi.fn(),
 }
 
 const taskApi = {
@@ -140,6 +141,8 @@ beforeEach(() => {
   stockApi.detail.mockReset()
   stockApi.buyAnalysis.mockReset()
   stockApi.sellAnalysis.mockReset()
+  stockApi.manualWatch.mockReset()
+  stockApi.manualWatch.mockResolvedValue({ data: { code: 200, data: { items: [] } } })
   taskApi.trigger.mockReset()
   taskApi.status.mockReset()
   authState.accessToken = ''

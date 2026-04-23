@@ -135,6 +135,7 @@ class TushareClient:
         self._daily_api_cache = {}
         self._daily_basic_api_cache = {}
         self._index_daily_api_cache = {}
+        self._limit_list_d_api_cache = {}
         self._realtime_quote_cache = {}
 
     def _now_sh(self) -> datetime:
@@ -696,14 +697,32 @@ class TushareClient:
         trade_date: str,
         limit_type: str,
     ):
+        """
+        拉取涨跌停列表；按 (交易日, 涨/跌类型) 做内存缓存，降低 limit_list_d 日配额消耗。
+
+        Tushare 该接口常见额度为 1 万次/天，板块扫描、题材聚合、扩展候选池等多处会复用同一日数据，
+        缓存可将同进程内的重复调用合并为一次远端请求。
+        """
+        td = str(trade_date).replace("-", "").strip()[:8]
+        lt = str(limit_type or "").strip() or "U"
+        cache_key = f"{td}:{lt}"
+        cached = self._get_cached_tabular_api_payload("_limit_list_d_api_cache", cache_key)
+        if cached is not None:
+            return cached
         self._log_tushare_api_call(
             "pro.limit_list_d",
-            trade_date=trade_date,
-            extra={"limit_type": limit_type},
+            trade_date=td,
+            extra={"limit_type": lt},
         )
-        return self.pro.limit_list_d(
-            trade_date=trade_date,
-            limit_type=limit_type,
+        df = self.pro.limit_list_d(
+            trade_date=td,
+            limit_type=lt,
+        )
+        return self._cache_tabular_api_payload(
+            "_limit_list_d_api_cache",
+            cache_key,
+            df,
+            trade_date=td,
         )
 
     def _call_pro_ths_index(self, **kwargs):
